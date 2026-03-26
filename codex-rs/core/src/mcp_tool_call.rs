@@ -390,6 +390,7 @@ async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &T
         .config
         .memories
         .no_memories_if_mcp_or_web_search
+        || turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory
     {
         return;
     }

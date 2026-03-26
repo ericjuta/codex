@@ -2043,11 +2043,13 @@ impl Session {
             state.set_pending_session_start_source(Some(session_start_source));
         }
 
-        memories::start_memories_startup_task(
-            &sess,
-            Arc::clone(&config),
-            &session_configuration.session_source,
-        );
+        if config.memories.backend == crate::config::types::MemoryBackend::Native {
+            memories::start_memories_startup_task(
+                &sess,
+                Arc::clone(&config),
+                &session_configuration.session_source,
+            );
+        }
 
         Ok(sess)
     }
@@ -3509,7 +3511,9 @@ impl Session {
         }
         // Add developer instructions for memories.
         if turn_context.features.enabled(Feature::MemoryTool)
-            && turn_context.config.memories.use_memories
+            && (turn_context.config.memories.use_memories
+                || turn_context.config.memories.backend
+                    == crate::config::types::MemoryBackend::Agentmemory)
         {
             let memory_prompt_opt = match turn_context.config.memories.backend {
                 crate::config::types::MemoryBackend::Agentmemory => {
@@ -5108,7 +5112,9 @@ mod handlers {
             state.session_configuration.session_source.clone()
         };
 
-        crate::memories::start_memories_startup_task(sess, Arc::clone(config), &session_source);
+        if config.memories.backend == crate::config::types::MemoryBackend::Native {
+            crate::memories::start_memories_startup_task(sess, Arc::clone(config), &session_source);
+        }
 
         sess.send_event_raw(Event {
             id: sub_id.clone(),
