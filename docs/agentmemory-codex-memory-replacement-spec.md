@@ -725,6 +725,244 @@ replacement rather than toward permanent coexistence.
 - Add richer protocol and app-server visibility if needed.
 - Reassess whether any remaining native memory logic should survive.
 
+## Execution plan
+
+This section turns the replacement architecture into a low-rebase execution
+plan.
+
+The key rule is:
+
+- keep invasive edits concentrated in a few upstream-hot orchestration files,
+- keep most new logic in fork-owned modules,
+- gate native behavior off before deleting it.
+
+### Allowed write boundaries
+
+The preferred fork seam is:
+
+- small edits in:
+  - `codex-rs/core/src/codex.rs`
+  - `codex-rs/core/src/hook_runtime.rs`
+  - `codex-rs/hooks/src/engine/config.rs`
+  - `codex-rs/hooks/src/engine/discovery.rs`
+  - hook event/schema files only when required for new public events
+- most new implementation in new fork-owned modules, for example:
+  - `codex-rs/core/src/agentmemory/`
+  - `codex-rs/hooks/src/agentmemory/` or equivalent hook-translation module
+
+### Intentionally untouched until cutover
+
+Do not broadly rewrite these early:
+
+- `codex-rs/core/src/memories/*`
+- `codex-rs/core/templates/memories/*`
+- native memory artifact generation logic
+- broad protocol/app-server surfaces unrelated to memory provenance
+
+Early phases should gate or bypass these paths, not delete or refactor them.
+
+### Branch order
+
+Use a short stack of focused branches / PRs.
+
+#### PR 1: backend selector and fork seam
+
+Goal:
+
+- introduce a clear memory backend selector,
+- add the new `agentmemory` adapter module skeleton,
+- make no user-visible behavior change yet.
+
+Write scope:
+
+- config wiring,
+- new adapter modules,
+- minimal callsite plumbing only where needed.
+
+Must not do:
+
+- no native memory deletion,
+- no protocol changes,
+- no hook expansion yet.
+
+Merge gate:
+
+- no behavior regression with native memory still active by default,
+- docs updated to describe the seam.
+
+#### PR 2: startup injection replacement
+
+Goal:
+
+- route startup memory injection through the `agentmemory` adapter,
+- make bounded retrieval the new startup path,
+- stop depending on native memory artifact loading for startup context.
+
+Write scope:
+
+- `codex-rs/core/src/codex.rs`
+- adapter module
+- minimal config/docs updates
+
+Must not do:
+
+- do not delete native memories yet,
+- do not add broad protocol changes,
+- do not expand hook coverage in the same PR.
+
+Merge gate:
+
+- startup context is sourced from `agentmemory`,
+- token budget and retrieval mode are explicit and tested,
+- no static `MEMORY.md`-style reinjection layer is recreated on top.
+
+#### PR 3: public hook event expansion
+
+Goal:
+
+- expand Codex hooks to cover the full useful `agentmemory` hook set:
+  - `SessionStart`
+  - `UserPromptSubmit`
+  - `PreToolUse`
+  - `PostToolUse`
+  - `PostToolUseFailure`
+  - `PreCompact`
+  - `SubagentStart`
+  - `SubagentStop`
+  - `Notification`
+  - `TaskCompleted`
+  - `Stop`
+  - `SessionEnd`
+
+Write scope:
+
+- hook config/schema/discovery/runtime files,
+- TUI/app-server visibility only where hook runs need surfacing.
+
+Must not do:
+
+- do not mix in native memory deletion,
+- do not mix in citation replacement.
+
+Merge gate:
+
+- each event has runtime dispatch,
+- each event is documented,
+- hook run visibility remains coherent.
+
+#### PR 4: tool coverage broadening
+
+Goal:
+
+- broaden `PreToolUse` and `PostToolUse` beyond the shell-centric path,
+- ensure file tools, command tools, and other high-signal tool classes are
+  observed consistently for `agentmemory`.
+
+Write scope:
+
+- `codex-rs/core/src/hook_runtime.rs`
+- tool handler payload plumbing
+- hook translation layer
+
+Must not do:
+
+- do not mix in memory command replacement,
+- do not delete native memory paths yet.
+
+Merge gate:
+
+- high-signal tool classes emit useful observation payloads,
+- no regression in existing shell-hook flows.
+
+#### PR 5: memory ops and provenance replacement
+
+Goal:
+
+- replace or redefine `UpdateMemories` and `DropMemories`,
+- decide and implement provenance behavior,
+- define the replacement for native `polluted` semantics.
+
+Write scope:
+
+- memory command handlers,
+- provenance/citation integration,
+- minimal protocol additions if absolutely required.
+
+Must not do:
+
+- do not combine this with broad deletion of native memory code.
+
+Merge gate:
+
+- user-facing memory refresh/clear actions still exist or are intentionally
+  documented as removed,
+- provenance behavior is explicit,
+- no ambiguity remains about memory invalidation rules.
+
+#### PR 6: hard cutover
+
+Goal:
+
+- disable native memory generation and consolidation in normal runtime paths,
+- make `agentmemory` the only authoritative memory backend,
+- quarantine or deprecate native memory artifacts.
+
+Write scope:
+
+- backend selection defaults,
+- final cutover gating,
+- cleanup of callsites that can still route to native memory.
+
+Must not do:
+
+- do not do broad code deletion unless the fork is already stable after cutover,
+- do not remove debug/rollback switches until at least one successful rebase
+  cycle after cutover.
+
+Merge gate:
+
+- one memory authority in runtime,
+- no split-brain injection,
+- no accidental native fallback in standard flows.
+
+#### PR 7: post-cutover cleanup
+
+Goal:
+
+- remove dead native-memory paths only after the hard cutover has stabilized.
+
+Write scope:
+
+- native memory code and docs that are no longer reachable,
+- migration notes if existing users need them.
+
+Merge gate:
+
+- cleanup produces less rebase churn than it creates,
+- rollback path is no longer needed.
+
+### Rebase policy
+
+- Rebase frequently; do not let this stack drift for long.
+- Rebase before opening each PR and after any upstream changes touching:
+  - `codex-rs/core/src/codex.rs`
+  - `codex-rs/core/src/hook_runtime.rs`
+  - hook engine config/discovery/schema/runtime files
+- Prefer new modules over editing existing modules repeatedly.
+- If a behavior can live in the adapter, keep it out of upstream-hot files.
+- Do not delete upstream code early; disabling is cheaper to rebase than
+  removal.
+
+### Success metrics by PR
+
+- PR 1: seam exists with no behavior regression.
+- PR 2: startup injection is `agentmemory`-backed and token-bounded.
+- PR 3: hook surface matches the intended `agentmemory` event model.
+- PR 4: observation capture is rich across the important tool classes.
+- PR 5: memory ops and provenance no longer depend on native memory internals.
+- PR 6: runtime has one authoritative memory backend.
+- PR 7: dead code removal does not increase future rebase cost materially.
+
 ## Do not do
 
 - Do not run Codex native memory injection and `agentmemory` injection as
