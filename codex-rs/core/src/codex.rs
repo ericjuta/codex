@@ -3510,10 +3510,22 @@ impl Session {
         // Add developer instructions for memories.
         if turn_context.features.enabled(Feature::MemoryTool)
             && turn_context.config.memories.use_memories
-            && let Some(memory_prompt) =
-                build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
         {
-            developer_sections.push(memory_prompt);
+            let memory_prompt_opt = match turn_context.config.memories.backend {
+                crate::config::types::MemoryBackend::Agentmemory => {
+                    let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+                    // Provide a default explicit token budget for the startup query context
+                    adapter
+                        .build_startup_developer_instructions(&turn_context.config.codex_home, 2000)
+                        .await
+                }
+                crate::config::types::MemoryBackend::Native => {
+                    build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
+                }
+            };
+            if let Some(memory_prompt) = memory_prompt_opt {
+                developer_sections.push(memory_prompt);
+            }
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if let Some(collab_instructions) =
