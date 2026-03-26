@@ -210,6 +210,7 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
             payload,
         }),
         Some(crate::tools::registry::PreToolUsePayload {
+tool_name: "exec_command".to_string(),
             command: "printf exec command".to_string(),
         })
     );
@@ -237,8 +238,8 @@ async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
     );
 }
 
-#[test]
-fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_shot_commands() {
+#[tokio::test]
+async fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_shot_commands() {
     let payload = ToolPayload::Function {
         arguments: serde_json::json!({ "cmd": "echo three", "tty": false }).to_string(),
     };
@@ -258,17 +259,29 @@ fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_shot_co
         ]),
     };
 
+    let (session, turn) = make_session_and_context().await;
+    let invocation = ToolInvocation {
+        session: session.into(),
+        turn: turn.into(),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+        call_id: "call-43".to_string(),
+        tool_name: "exec_command".to_string(),
+        tool_namespace: None,
+        payload,
+    };
+
     assert_eq!(
-        UnifiedExecHandler.post_tool_use_payload("call-43", &payload, &output),
+        UnifiedExecHandler.post_tool_use_payload(&invocation, &output),
         Some(crate::tools::registry::PostToolUsePayload {
+tool_name: "exec_command".to_string(),
             command: "echo three".to_string(),
             tool_response: serde_json::json!("three"),
         })
     );
 }
 
-#[test]
-fn exec_command_post_tool_use_payload_skips_interactive_exec() {
+#[tokio::test]
+async fn exec_command_post_tool_use_payload_skips_interactive_exec() {
     let payload = ToolPayload::Function {
         arguments: serde_json::json!({ "cmd": "echo three", "tty": true }).to_string(),
     };
@@ -288,14 +301,25 @@ fn exec_command_post_tool_use_payload_skips_interactive_exec() {
         ]),
     };
 
+    let (session, turn) = make_session_and_context().await;
+    let invocation = ToolInvocation {
+        session: session.into(),
+        turn: turn.into(),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+        call_id: "call-44".to_string(),
+        tool_name: "exec_command".to_string(),
+        tool_namespace: None,
+        payload,
+    };
+
     assert_eq!(
-        UnifiedExecHandler.post_tool_use_payload("call-44", &payload, &output),
+        UnifiedExecHandler.post_tool_use_payload(&invocation, &output),
         None
     );
 }
 
-#[test]
-fn exec_command_post_tool_use_payload_skips_running_sessions() {
+#[tokio::test]
+async fn exec_command_post_tool_use_payload_skips_running_sessions() {
     let payload = ToolPayload::Function {
         arguments: serde_json::json!({ "cmd": "echo three", "tty": false }).to_string(),
     };
@@ -315,8 +339,19 @@ fn exec_command_post_tool_use_payload_skips_running_sessions() {
         ]),
     };
 
+    let (session, turn) = make_session_and_context().await;
+    let invocation = ToolInvocation {
+        session: session.into(),
+        turn: turn.into(),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+        call_id: "call-45".to_string(),
+        tool_name: "exec_command".to_string(),
+        tool_namespace: None,
+        payload,
+    };
+
     assert_eq!(
-        UnifiedExecHandler.post_tool_use_payload("call-45", &payload, &output),
+        UnifiedExecHandler.post_tool_use_payload(&invocation, &output),
         None
     );
 }

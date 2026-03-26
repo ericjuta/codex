@@ -57,17 +57,24 @@ pub trait ToolHandler: Send + Sync {
         false
     }
 
-    fn pre_tool_use_payload(&self, _invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
-        None
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        Some(PreToolUsePayload {
+            tool_name: invocation.tool_name.clone(),
+            command: invocation.payload.log_payload().into_owned(),
+        })
     }
 
     fn post_tool_use_payload(
         &self,
-        _call_id: &str,
-        _payload: &ToolPayload,
-        _result: &dyn ToolOutput,
+        invocation: &ToolInvocation,
+        result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
-        None
+        let tool_response = result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
+        Some(PostToolUsePayload {
+            tool_name: invocation.tool_name.clone(),
+            command: invocation.payload.log_payload().into_owned(),
+            tool_response,
+        })
     }
 
     /// Perform the actual [ToolInvocation] and returns a [ToolOutput] containing
@@ -99,14 +106,15 @@ impl AnyToolResult {
         result.code_mode_result(&payload)
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreToolUsePayload {
+    pub(crate) tool_name: String,
     pub(crate) command: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PostToolUsePayload {
+    pub(crate) tool_name: String,
     pub(crate) command: String,
     pub(crate) tool_response: Value,
 }
@@ -121,8 +129,7 @@ trait AnyToolHandler: Send + Sync {
 
     fn post_tool_use_payload(
         &self,
-        call_id: &str,
-        payload: &ToolPayload,
+        invocation: &ToolInvocation,
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload>;
 
@@ -151,11 +158,10 @@ where
 
     fn post_tool_use_payload(
         &self,
-        call_id: &str,
-        payload: &ToolPayload,
+        invocation: &ToolInvocation,
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
-        ToolHandler::post_tool_use_payload(self, call_id, payload, result)
+        ToolHandler::post_tool_use_payload(self, invocation, result)
     }
 
     async fn handle_any(
@@ -299,6 +305,7 @@ impl ToolRegistry {
             && let Some(reason) = run_pre_tool_use_hooks(
                 &invocation.session,
                 &invocation.turn,
+                pre_tool_use_payload.tool_name.clone(),
                 invocation.call_id.clone(),
                 pre_tool_use_payload.command.clone(),
             )
@@ -356,8 +363,7 @@ impl ToolRegistry {
             let guard = response_cell.lock().await;
             guard.as_ref().and_then(|result| {
                 handler.post_tool_use_payload(
-                    &result.call_id,
-                    &result.payload,
+                    &invocation,
                     result.result.as_ref(),
                 )
             })
@@ -369,6 +375,7 @@ impl ToolRegistry {
                 run_post_tool_use_hooks(
                     &invocation.session,
                     &invocation.turn,
+                    post_tool_use_payload.tool_name.clone(),
                     invocation.call_id.clone(),
                     post_tool_use_payload.command,
                     post_tool_use_payload.tool_response,

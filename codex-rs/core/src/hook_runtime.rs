@@ -117,6 +117,7 @@ pub(crate) async fn run_pending_session_start_hooks(
 pub(crate) async fn run_pre_tool_use_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    tool_name: String,
     tool_use_id: String,
     command: String,
 ) -> Option<String> {
@@ -127,7 +128,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        tool_name: "Bash".to_string(),
+        tool_name,
         tool_use_id,
         command,
     };
@@ -147,6 +148,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
 pub(crate) async fn run_post_tool_use_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    tool_name: String,
     tool_use_id: String,
     command: String,
     tool_response: Value,
@@ -158,7 +160,7 @@ pub(crate) async fn run_post_tool_use_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        tool_name: "Bash".to_string(),
+        tool_name,
         tool_use_id,
         command,
         tool_response,
