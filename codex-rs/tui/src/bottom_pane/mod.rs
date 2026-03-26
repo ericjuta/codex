@@ -302,6 +302,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_agentmemory_enabled(&mut self, enabled: bool) {
+        self.composer.set_agentmemory_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub fn set_collaboration_mode_indicator(
         &mut self,
         indicator: Option<CollaborationModeIndicator>,

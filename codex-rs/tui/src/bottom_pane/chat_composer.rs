@@ -409,6 +409,7 @@ pub(crate) struct ChatComposer {
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
     windows_degraded_sandbox_active: bool,
+    agentmemory_enabled: bool,
     status_line_value: Option<Line<'static>>,
     status_line_enabled: bool,
     // Agent label injected into the footer's contextual row when multi-agent mode is active.
@@ -448,6 +449,7 @@ impl ChatComposer {
             realtime_conversation_enabled: self.realtime_conversation_enabled,
             audio_device_selection_enabled: self.audio_device_selection_enabled,
             allow_elevate_sandbox: self.windows_degraded_sandbox_active,
+            agentmemory_enabled: self.agentmemory_enabled,
         }
     }
 
@@ -533,6 +535,7 @@ impl ChatComposer {
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
             windows_degraded_sandbox_active: false,
+            agentmemory_enabled: false,
             status_line_value: None,
             status_line_enabled: false,
             active_agent_label: None,
@@ -661,6 +664,10 @@ impl ChatComposer {
     #[cfg(target_os = "windows")]
     pub fn set_windows_degraded_sandbox_active(&mut self, enabled: bool) {
         self.windows_degraded_sandbox_active = enabled;
+    }
+
+    pub fn set_agentmemory_enabled(&mut self, enabled: bool) {
+        self.agentmemory_enabled = enabled;
     }
     fn layout_areas(&self, area: Rect) -> [Rect; 4] {
         let footer_props = self.footer_props();
@@ -3500,6 +3507,7 @@ impl ChatComposer {
                             realtime_conversation_enabled,
                             audio_device_selection_enabled,
                             windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
+                            agentmemory_enabled: self.agentmemory_enabled,
                         },
                     );
                     command_popup.on_composer_text_change(first_line.to_string());

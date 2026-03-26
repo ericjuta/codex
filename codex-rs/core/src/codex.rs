@@ -5064,6 +5064,29 @@ mod handlers {
     }
 
     pub async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
+        if config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
+            let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+            if let Err(e) = adapter.drop_memories().await {
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: format!("Agentmemory clear failed: {e}"),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                })
+                .await;
+                return;
+            }
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Warning(WarningEvent {
+                    message: "Cleared Agentmemory contents.".to_string(),
+                }),
+            })
+            .await;
+            return;
+        }
+
         let mut errors = Vec::new();
 
         if let Some(state_db) = sess.services.state_db.as_deref() {
@@ -5111,6 +5134,29 @@ mod handlers {
             let state = sess.state.lock().await;
             state.session_configuration.session_source.clone()
         };
+
+        if config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
+            let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+            if let Err(e) = adapter.update_memories().await {
+                sess.send_event_raw(Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: format!("Agentmemory sync failed: {e}"),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                })
+                .await;
+                return;
+            }
+            sess.send_event_raw(Event {
+                id: sub_id.clone(),
+                msg: EventMsg::Warning(WarningEvent {
+                    message: "Agentmemory sync triggered.".to_string(),
+                }),
+            })
+            .await;
+            return;
+        }
 
         if config.memories.backend == crate::config::types::MemoryBackend::Native {
             crate::memories::start_memories_startup_task(sess, Arc::clone(config), &session_source);

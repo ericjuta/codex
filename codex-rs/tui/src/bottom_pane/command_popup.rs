@@ -44,6 +44,7 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) realtime_conversation_enabled: bool,
     pub(crate) audio_device_selection_enabled: bool,
     pub(crate) windows_degraded_sandbox_active: bool,
+    pub(crate) agentmemory_enabled: bool,
 }
 
 impl From<CommandPopupFlags> for slash_commands::BuiltinCommandFlags {
@@ -57,6 +58,7 @@ impl From<CommandPopupFlags> for slash_commands::BuiltinCommandFlags {
             realtime_conversation_enabled: value.realtime_conversation_enabled,
             audio_device_selection_enabled: value.audio_device_selection_enabled,
             allow_elevate_sandbox: value.windows_degraded_sandbox_active,
+            agentmemory_enabled: value.agentmemory_enabled,
         }
     }
 }

@@ -20,6 +20,7 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) realtime_conversation_enabled: bool,
     pub(crate) audio_device_selection_enabled: bool,
     pub(crate) allow_elevate_sandbox: bool,
+    pub(crate) agentmemory_enabled: bool,
 }
 
 /// Return the built-ins that should be visible/usable for the current input.
@@ -37,6 +38,7 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
         .filter(|(_, cmd)| flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
         .filter(|(_, cmd)| flags.audio_device_selection_enabled || *cmd != SlashCommand::Settings)
+        .filter(|(_, cmd)| !flags.agentmemory_enabled || !matches!(*cmd, SlashCommand::MemoryDrop | SlashCommand::MemoryUpdate))
         .collect()
 }
 

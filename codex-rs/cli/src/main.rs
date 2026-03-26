@@ -1095,6 +1095,13 @@ async fn run_debug_clear_memories_command(
     let config =
         Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
 
+    if config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory {
+        let adapter = codex_core::agentmemory::AgentmemoryAdapter::new();
+        adapter.drop_memories().await.map_err(anyhow::Error::msg)?;
+        println!("Cleared Agentmemory store.");
+        return Ok(());
+    }
+
     let state_path = state_db_path(config.sqlite_home.as_path());
     let mut cleared_state_db = false;
     if tokio::fs::try_exists(&state_path).await? {

@@ -44,4 +44,16 @@ impl AgentmemoryAdapter {
         // The payload will typically be a hook request (e.g. `PostToolUseRequest`).
         // This is a stub for future PRs.
     }
+
+    /// Asynchronously triggers a memory refresh/update operation in `agentmemory`.
+    pub async fn update_memories(&self) -> Result<(), String> {
+        // TODO: Call agentmemory's sync/refresh endpoint.
+        Ok(())
+    }
+
+    /// Asynchronously drops/clears the memory store in `agentmemory`.
+    pub async fn drop_memories(&self) -> Result<(), String> {
+        // TODO: Call agentmemory's clear/drop endpoint.
+        Ok(())
+    }
 }

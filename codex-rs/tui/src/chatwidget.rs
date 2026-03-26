@@ -3833,6 +3833,9 @@ impl ChatWidget {
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
+        widget.bottom_pane.set_agentmemory_enabled(
+            widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory
+        );
         widget
             .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
@@ -4037,6 +4040,9 @@ impl ChatWidget {
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
+        widget.bottom_pane.set_agentmemory_enabled(
+            widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory
+        );
         widget
             .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
@@ -4232,6 +4238,9 @@ impl ChatWidget {
         widget.prefetch_rate_limits();
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
+        );
+        widget.bottom_pane.set_agentmemory_enabled(
+            widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory
         );
         widget
             .bottom_pane
