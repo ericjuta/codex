@@ -1,0 +1,99 @@
+--- codex-rs/core/src/agentmemory/mod.rs
++++ codex-rs/core/src/agentmemory/mod.rs
+@@ -4,6 +4,7 @@
+ //! as a replacement for Codex's native memory engine.
+ 
+ use std::path::Path;
++use std::sync::OnceLock;
+ use serde_json::json;
+ 
+ /// A placeholder adapter struct for agentmemory integration.
+@@ -11,6 +12,16 @@
+ pub struct AgentmemoryAdapter {
+     // Configuration and state will be added here in subsequent PRs.
+ }
++
++/// A shared, pooled HTTP client for agentmemory interactions.
++/// Reusing the client allows connection pooling (keep-alive) for high throughput.
++static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
++
++fn get_client() -> &'static reqwest::Client {
++    CLIENT.get_or_init(|| {
++        reqwest::Client::builder().build().unwrap_or_default()
++    })
++}
+ 
+ impl AgentmemoryAdapter {
+     pub fn new() -> Self {
+@@ -32,7 +43,7 @@
+         _codex_home: &Path,
+         _token_budget: usize,
+     ) -> Option<String> {
+-        let client = reqwest::Client::new();
++        let client = get_client();
+         let url = format!("{}/agentmemory/profile", self.api_base());
+         let profile_result = client.get(&url).send().await;
+         
+@@ -53,35 +64,54 @@
+         Some(instructions)
+     }
+ 
++    /// Transforms Codex's internal hook payloads into Claude-parity structures 
++    /// expected by the `agentmemory` REST API. This provides a central, malleable
++    /// place to adjust mapping logic in the future without touching the hooks engine.
++    fn format_claude_parity_payload(&self, event_name: &str, mut payload: serde_json::Value) -> serde_json::Value {
++        // TODO: As agentmemory evolves, perform explicit property mapping here.
++        // For example, mapping Codex `turn_id` to Claude `message_id` or extracting specific nested fields.
++        
++        json!({
++            "event": event_name,
++            "payload": payload,
++        })
++    }
++
+     /// Asynchronously captures and stores lifecycle events in `agentmemory`.
+     ///
+     /// This method allows Codex hooks (like `SessionStart`, `PostToolUse`) to
+     /// be transmitted without blocking the hot path of the shell or model output.
+     pub async fn capture_event(&self, event_name: &str, payload_json: serde_json::Value) {
+         let url = format!("{}/agentmemory/observe", self.api_base());
+-        let client = reqwest::Client::new();
+-        let body = json!({
+-            "event": event_name,
+-            "payload": payload_json,
+-        });
+-        let _ = client.post(&url).json(&body).send().await;
++        let client = get_client();
++        
++        let body = self.format_claude_parity_payload(event_name, payload_json);
++        
++        if let Err(e) = client.post(&url).json(&body).send().await {
++            // Log a warning instead of failing silently. This won't crash the session,
++            // but will alert developers that memory observation is degraded.
++            tracing::warn!(
++                "Agentmemory observation failed: could not send {} event to {}: {}",
++                event_name, url, e
++            );
++        }
+     }
+ 
+     /// Asynchronously triggers a memory refresh/update operation in `agentmemory`.
+     pub async fn update_memories(&self) -> Result<(), String> {
+         let url = format!("{}/agentmemory/consolidate", self.api_base());
+-        let client = reqwest::Client::new();
++        let client = get_client();
+         let res = client.post(&url).send().await.map_err(|e| e.to_string())?;
+         if !res.status().is_success() {
+             return Err(format!("Consolidate failed with status {}", res.status()));
+         }
+         Ok(())
+     }
+ 
+     /// Asynchronously drops/clears the memory store in `agentmemory`.
+     pub async fn drop_memories(&self) -> Result<(), String> {
+         let url = format!("{}/agentmemory/forget", self.api_base());
+-        let client = reqwest::Client::new();
++        let client = get_client();
+         let res = client.post(&url).json(&json!({"all": true})).send().await.map_err(|e| e.to_string())?;
+         if !res.status().is_success() {
+             return Err(format!("Forget failed with status {}", res.status()));

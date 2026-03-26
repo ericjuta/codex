@@ -6008,7 +6008,7 @@ pub(crate) async fn run_turn(
                         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
                         let payload = stop_request.clone();
                         tokio::spawn(async move {
-                            adapter.capture_event("Stop", payload).await;
+                            adapter.capture_event("Stop", serde_json::to_value(&payload).unwrap_or_default()).await;
                         });
                     }
 

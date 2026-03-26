@@ -18,7 +18,7 @@ use crate::engine::output_parser;
 use crate::schema::NullableString;
 use crate::schema::StopCommandInput;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct StopRequest {
     pub session_id: ThreadId,
     pub turn_id: String,

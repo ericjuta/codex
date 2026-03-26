@@ -16,7 +16,7 @@ use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::PreToolUseCommandInput;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PreToolUseRequest {
     pub session_id: ThreadId,
     pub turn_id: String,
