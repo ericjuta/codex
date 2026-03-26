@@ -34,4 +34,14 @@ impl AgentmemoryAdapter {
                 .to_string(),
         )
     }
+
+    /// Asynchronously captures and stores lifecycle events in `agentmemory`.
+    ///
+    /// This method allows Codex hooks (like `SessionStart`, `PostToolUse`) to
+    /// be transmitted without blocking the hot path of the shell or model output.
+    pub async fn capture_event<P: Send + 'static>(&self, _event_name: &str, _payload: P) {
+        // TODO: Transmit the event to agentmemory's ingestion endpoint.
+        // The payload will typically be a hook request (e.g. `PostToolUseRequest`).
+        // This is a stub for future PRs.
+    }
 }

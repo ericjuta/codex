@@ -301,19 +301,20 @@ impl ToolRegistry {
             return Err(FunctionCallError::Fatal(message));
         }
 
-        if let Some(pre_tool_use_payload) = handler.pre_tool_use_payload(&invocation)
+        let pre_tool_use_payload = handler.pre_tool_use_payload(&invocation);
+        if let Some(ref payload) = pre_tool_use_payload
             && let Some(reason) = run_pre_tool_use_hooks(
                 &invocation.session,
                 &invocation.turn,
-                pre_tool_use_payload.tool_name.clone(),
+                payload.tool_name.clone(),
                 invocation.call_id.clone(),
-                pre_tool_use_payload.command.clone(),
+                payload.command.clone(),
             )
             .await
         {
             return Err(FunctionCallError::RespondToModel(format!(
                 "Command blocked by PreToolUse hook: {reason}. Command: {}",
-                pre_tool_use_payload.command
+                payload.command
             )));
         }
 
@@ -383,6 +384,18 @@ impl ToolRegistry {
                 .await,
             )
         } else {
+            if !success {
+                if let Some(ref payload) = pre_tool_use_payload {
+                    crate::hook_runtime::run_post_tool_use_failure_hooks(
+                        &invocation.session,
+                        &invocation.turn,
+                        payload.tool_name.clone(),
+                        invocation.call_id.clone(),
+                        payload.command.clone(),
+                    )
+                    .await;
+                }
+            }
             None
         };
         // Deprecated: this is the legacy AfterToolUse hook. Prefer the new PostToolUse

@@ -5951,6 +5951,15 @@ pub(crate) async fn run_turn(
                         stop_hook_active,
                         last_assistant_message: last_agent_message.clone(),
                     };
+
+                    if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
+                        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+                        let payload = stop_request.clone();
+                        tokio::spawn(async move {
+                            adapter.capture_event("Stop", payload).await;
+                        });
+                    }
+
                     for run in sess.hooks().preview_stop(&stop_request) {
                         sess.send_event(
                             &turn_context,

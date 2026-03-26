@@ -1,0 +1,37 @@
+--- codex-rs/core/src/hook_runtime.rs
++++ codex-rs/core/src/hook_runtime.rs
+@@ -194,6 +194,29 @@
+     outcome
+ }
+ 
++pub(crate) async fn run_post_tool_use_failure_hooks(
++    sess: &Arc<Session>,
++    turn_context: &Arc<TurnContext>,
++    tool_name: String,
++    tool_use_id: String,
++    command: String,
++) {
++    let request = codex_hooks::PostToolUseRequest {
++        session_id: sess.conversation_id,
++        turn_id: turn_context.sub_id.clone(),
++        cwd: turn_context.cwd.to_path_buf(),
++        transcript_path: sess.hook_transcript_path().await,
++        model: turn_context.model_info.slug.clone(),
++        permission_mode: hook_permission_mode(turn_context),
++        tool_name,
++        tool_use_id,
++        command,
++        tool_response: serde_json::json!({ "error": "tool failed" }), // TODO: capture actual error
++    };
++
++    if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
++        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
++        let payload = request.clone();
++        tokio::spawn(async move {
++            adapter.capture_event("PostToolUseFailure", payload).await;
++        });
++    }
++}
++
+ pub(crate) async fn run_user_prompt_submit_hooks(
+     sess: &Arc<Session>,
