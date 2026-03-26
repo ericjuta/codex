@@ -9641,7 +9641,14 @@ fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'st
     match event_name {
         codex_protocol::protocol::HookEventName::PreToolUse => "PreToolUse",
         codex_protocol::protocol::HookEventName::PostToolUse => "PostToolUse",
+        codex_protocol::protocol::HookEventName::PostToolUseFailure => "PostToolUseFailure",
+        codex_protocol::protocol::HookEventName::PreCompact => "PreCompact",
         codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
+        codex_protocol::protocol::HookEventName::SessionEnd => "SessionEnd",
+        codex_protocol::protocol::HookEventName::SubagentStart => "SubagentStart",
+        codex_protocol::protocol::HookEventName::SubagentStop => "SubagentStop",
+        codex_protocol::protocol::HookEventName::Notification => "Notification",
+        codex_protocol::protocol::HookEventName::TaskCompleted => "TaskCompleted",
         codex_protocol::protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
         codex_protocol::protocol::HookEventName::Stop => "Stop",
     }

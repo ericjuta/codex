@@ -33,7 +33,14 @@ pub(crate) fn select_handlers(
         .filter(|handler| match event_name {
             HookEventName::PreToolUse
             | HookEventName::PostToolUse
-            | HookEventName::SessionStart => {
+            | HookEventName::PostToolUseFailure
+            | HookEventName::PreCompact
+            | HookEventName::SessionStart
+            | HookEventName::SessionEnd
+            | HookEventName::SubagentStart
+            | HookEventName::SubagentStop
+            | HookEventName::Notification
+            | HookEventName::TaskCompleted => {
                 matches_matcher(handler.matcher.as_deref(), matcher_input)
             }
             HookEventName::UserPromptSubmit | HookEventName::Stop => true,
@@ -107,9 +114,16 @@ pub(crate) fn completed_summary(
 
 fn scope_for_event(event_name: HookEventName) -> HookScope {
     match event_name {
-        HookEventName::SessionStart => HookScope::Thread,
+        HookEventName::SessionStart 
+        | HookEventName::SessionEnd 
+        | HookEventName::PreCompact 
+        | HookEventName::TaskCompleted => HookScope::Thread,
         HookEventName::PreToolUse
         | HookEventName::PostToolUse
+        | HookEventName::PostToolUseFailure
+        | HookEventName::SubagentStart
+        | HookEventName::SubagentStop
+        | HookEventName::Notification
         | HookEventName::UserPromptSubmit
         | HookEventName::Stop => HookScope::Turn,
     }

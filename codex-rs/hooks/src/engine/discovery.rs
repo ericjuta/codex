@@ -74,9 +74,16 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
         let super::config::HookEvents {
             pre_tool_use,
             post_tool_use,
+            post_tool_use_failure,
+            pre_compact,
             session_start,
+            subagent_start,
+            subagent_stop,
+            notification,
+            task_completed,
             user_prompt_submit,
             stop,
+            session_end,
         } = parsed.hooks;
 
         for (event_name, groups) in [
@@ -89,14 +96,42 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
                 post_tool_use,
             ),
             (
+                codex_protocol::protocol::HookEventName::PostToolUseFailure,
+                post_tool_use_failure,
+            ),
+            (
+                codex_protocol::protocol::HookEventName::PreCompact,
+                pre_compact,
+            ),
+            (
                 codex_protocol::protocol::HookEventName::SessionStart,
                 session_start,
+            ),
+            (
+                codex_protocol::protocol::HookEventName::SubagentStart,
+                subagent_start,
+            ),
+            (
+                codex_protocol::protocol::HookEventName::SubagentStop,
+                subagent_stop,
+            ),
+            (
+                codex_protocol::protocol::HookEventName::Notification,
+                notification,
+            ),
+            (
+                codex_protocol::protocol::HookEventName::TaskCompleted,
+                task_completed,
             ),
             (
                 codex_protocol::protocol::HookEventName::UserPromptSubmit,
                 user_prompt_submit,
             ),
             (codex_protocol::protocol::HookEventName::Stop, stop),
+            (
+                codex_protocol::protocol::HookEventName::SessionEnd,
+                session_end,
+            ),
         ] {
             append_matcher_groups(
                 &mut handlers,
