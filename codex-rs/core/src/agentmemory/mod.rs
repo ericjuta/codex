@@ -41,22 +41,34 @@ impl AgentmemoryAdapter {
     /// uses hybrid search semantics rather than loading large static artifacts.
     pub async fn build_startup_developer_instructions(
         &self,
-        _codex_home: &Path,
-        _token_budget: usize,
+        codex_home: &Path,
+        token_budget: usize,
     ) -> Option<String> {
         let client = get_client();
-        let url = format!("{}/agentmemory/profile", self.api_base());
-        let profile_result = client.get(&url).send().await;
+        let url = format!("{}/agentmemory/context", self.api_base());
+        let project = std::env::current_dir()
+            .unwrap_or_else(|_| codex_home.to_path_buf())
+            .to_string_lossy()
+            .into_owned();
+
+        let request_body = json!({
+            "sessionId": "startup", // We don't have a session ID at this exact moment easily accessible, but "startup" excludes it safely.
+            "project": project,
+            "budget": token_budget
+        });
+
+        let context_result = client.post(&url).json(&request_body).send().await;
         
         let mut instructions = "Use the `AgentMemory` tools to search and retrieve relevant memory.\n\
              Your context is bounded; use targeted queries to expand details as needed.".to_string();
 
-        if let Ok(res) = profile_result {
-            if let Ok(text) = res.text().await {
-                if !text.is_empty() {
-                    instructions.push_str("\n\n<agentmemory_profile>\n");
-                    instructions.push_str(&text);
-                    instructions.push_str("\n</agentmemory_profile>");
+        if let Ok(res) = context_result {
+            if let Ok(json_res) = res.json::<serde_json::Value>().await {
+                if let Some(context_str) = json_res.get("context").and_then(|v| v.as_str()) {
+                    if !context_str.is_empty() {
+                        instructions.push_str("\n\n");
+                        instructions.push_str(context_str);
+                    }
                 }
             }
         }
@@ -68,12 +80,15 @@ impl AgentmemoryAdapter {
     /// expected by the `agentmemory` REST API. This provides a central, malleable
     /// place to adjust mapping logic in the future without touching the hooks engine.
     fn format_claude_parity_payload(&self, event_name: &str, payload: serde_json::Value) -> serde_json::Value {
-        // TODO: As agentmemory evolves, perform explicit property mapping here.
-        // For example, mapping Codex `turn_id` to Claude `message_id` or extracting specific nested fields.
+        let session_id = payload.get("session_id").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+        
+        let timestamp = chrono::Utc::now().to_rfc3339();
         
         json!({
-            "event": event_name,
-            "payload": payload,
+            "sessionId": session_id,
+            "hookType": event_name,
+            "timestamp": timestamp,
+            "data": payload,
         })
     }
 
@@ -117,5 +132,27 @@ impl AgentmemoryAdapter {
             return Err(format!("Forget failed with status {}", res.status()));
         }
         Ok(())
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_format_claude_parity_payload() {
+        let adapter = AgentmemoryAdapter::new();
+        let raw_payload = json!({
+            "session_id": "1234",
+            "turn_id": "turn-5",
+            "command": "echo hello"
+        });
+        
+        let formatted = adapter.format_claude_parity_payload("PreToolUse", raw_payload.clone());
+        
+        assert_eq!(formatted["sessionId"], "1234");
+        assert_eq!(formatted["hookType"], "PreToolUse");
+        assert!(formatted.get("timestamp").is_some());
+        assert_eq!(formatted["data"], raw_payload);
     }
 }

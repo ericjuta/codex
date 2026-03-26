@@ -1,0 +1,43 @@
+--- codex-rs/core/src/agentmemory/mod.rs
++++ codex-rs/core/src/agentmemory/mod.rs
+@@ -118,3 +118,48 @@
+         Ok(())
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use serde_json::json;
++
++    #[test]
++    fn test_api_base_default() {
++        // Ensure env var is not set
++        std::env::remove_var("III_REST_PORT");
++        let adapter = AgentmemoryAdapter::new();
++        assert_eq!(adapter.api_base(), "http://localhost:3111");
++    }
++
++    #[test]
++    fn test_api_base_custom_port() {
++        std::env::set_var("III_REST_PORT", "4000");
++        let adapter = AgentmemoryAdapter::new();
++        assert_eq!(adapter.api_base(), "http://localhost:4000");
++        std::env::remove_var("III_REST_PORT");
++    }
++
++    #[test]
++    fn test_format_claude_parity_payload() {
++        let adapter = AgentmemoryAdapter::new();
++        let raw_payload = json!({
++            "session_id": "1234",
++            "turn_id": "turn-5",
++            "command": "echo hello"
++        });
++        
++        let formatted = adapter.format_claude_parity_payload("PreToolUse", raw_payload.clone());
++        
++        assert_eq!(formatted["event"], "PreToolUse");
++        assert_eq!(formatted["payload"], raw_payload);
++    }
++}

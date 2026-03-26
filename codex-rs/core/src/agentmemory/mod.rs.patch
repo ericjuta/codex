@@ -1,0 +1,27 @@
+--- codex-rs/core/src/agentmemory/mod.rs
++++ codex-rs/core/src/agentmemory/mod.rs
+@@ -118,22 +118,21 @@
+         Ok(())
+     }
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+     use serde_json::json;
+ 
+     #[test]
+     fn test_format_claude_parity_payload() {
+         let adapter = AgentmemoryAdapter::new();
+         let raw_payload = json!({
+             "session_id": "1234",
+             "turn_id": "turn-5",
+             "command": "echo hello"
+         });
+         
+         let formatted = adapter.format_claude_parity_payload("PreToolUse", raw_payload.clone());
+         
+         assert_eq!(formatted["event"], "PreToolUse");
+         assert_eq!(formatted["payload"], raw_payload);
+     }
+ }

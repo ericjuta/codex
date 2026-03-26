@@ -206,6 +206,7 @@ pub(crate) async fn run_post_tool_use_failure_hooks(
     tool_name: String,
     tool_use_id: String,
     command: String,
+    error_message: String,
 ) {
     let request = PostToolUseRequest {
         session_id: sess.conversation_id,
@@ -217,7 +218,7 @@ pub(crate) async fn run_post_tool_use_failure_hooks(
         tool_name,
         tool_use_id,
         command,
-        tool_response: serde_json::json!({ "error": "tool failed" }),
+        tool_response: serde_json::json!({ "error": error_message }),
     };
 
     if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {

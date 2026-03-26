@@ -392,6 +392,7 @@ impl ToolRegistry {
                         payload.tool_name.clone(),
                         invocation.call_id.clone(),
                         payload.command.clone(),
+                        output_preview.clone(),
                     )
                     .await;
                 }
