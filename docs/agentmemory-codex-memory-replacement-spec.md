@@ -963,6 +963,187 @@ Merge gate:
 - PR 6: runtime has one authoritative memory backend.
 - PR 7: dead code removal does not increase future rebase cost materially.
 
+### Handoff prompts by PR
+
+These are intended as copy-paste prompts for future sessions, child agents, or
+parallel worker swarms. Each prompt is deliberately scoped to one PR-sized
+slice.
+
+#### PR 1 handoff prompt
+
+```text
+Implement PR 1 from docs/agentmemory-codex-memory-replacement-spec.md.
+
+Goal:
+- introduce a clear memory backend selector
+- add the new agentmemory adapter seam
+- make no user-visible behavior change yet
+
+Constraints:
+- keep invasive edits concentrated
+- do not delete or broadly rewrite codex-rs/core/src/memories/*
+- do not change protocol shapes
+- do not expand hooks yet
+
+Write scope:
+- config wiring
+- new fork-owned adapter modules
+- minimal callsite plumbing only where needed
+
+Acceptance:
+- native memory remains default and behaviorally unchanged
+- the seam exists and is documented
+- code is structured so later PRs can route through the adapter without large rewrites
+```
+
+#### PR 2 handoff prompt
+
+```text
+Implement PR 2 from docs/agentmemory-codex-memory-replacement-spec.md.
+
+Goal:
+- replace startup memory prompt generation with agentmemory-backed retrieval
+- make startup context bounded, relevance-ranked, and token-budgeted
+
+Constraints:
+- do not recreate static MEMORY.md-style loading on top of agentmemory
+- do not expand hooks in this PR
+- do not delete native memory code yet
+
+Write scope:
+- codex-rs/core/src/codex.rs
+- agentmemory adapter module
+- small config/docs updates if required
+
+Acceptance:
+- startup injection is sourced through the adapter
+- retrieval mode and token budget are explicit
+- native memory still exists only as a gated fallback path, not the main path
+```
+
+#### PR 3 handoff prompt
+
+```text
+Implement PR 3 from docs/agentmemory-codex-memory-replacement-spec.md.
+
+Goal:
+- expand Codex public hooks to support the full useful agentmemory event model
+
+Target events:
+- SessionStart
+- UserPromptSubmit
+- PreToolUse
+- PostToolUse
+- PostToolUseFailure
+- PreCompact
+- SubagentStart
+- SubagentStop
+- Notification
+- TaskCompleted
+- Stop
+- SessionEnd
+
+Constraints:
+- keep handler semantics coherent
+- do not mix in native memory deletion
+- do not mix in provenance/citation replacement
+
+Acceptance:
+- each target event is represented in config/discovery/runtime
+- documentation and hook-run visibility are updated
+- new events do not regress existing hook behavior
+```
+
+#### PR 4 handoff prompt
+
+```text
+Implement PR 4 from docs/agentmemory-codex-memory-replacement-spec.md.
+
+Goal:
+- broaden PreToolUse and PostToolUse beyond the shell-centric path
+- ensure high-signal tool classes produce useful agentmemory observations
+
+Constraints:
+- prioritize file tools, command tools, and other high-signal tool classes
+- do not mix in memory command replacement
+- do not cut over the backend here
+
+Acceptance:
+- important tool classes emit observation payloads consistently
+- shell-hook behavior still works
+- capture quality is materially closer to the Claude-side agentmemory model
+```
+
+#### PR 5 handoff prompt
+
+```text
+Implement PR 5 from docs/agentmemory-codex-memory-replacement-spec.md.
+
+Goal:
+- replace or redefine UpdateMemories and DropMemories
+- decide and implement provenance behavior
+- define the replacement for native polluted semantics
+
+Constraints:
+- keep protocol churn minimal unless required
+- make user-facing behavior explicit
+- do not delete native memory paths in this PR
+
+Acceptance:
+- memory refresh/clear actions still exist or are intentionally removed with docs
+- provenance behavior is explicit
+- invalidation rules are no longer ambiguous
+```
+
+#### PR 6 handoff prompt
+
+```text
+Implement PR 6 from docs/agentmemory-codex-memory-replacement-spec.md.
+
+Goal:
+- make agentmemory the only authoritative runtime memory backend
+- disable native memory generation and consolidation in normal runtime paths
+
+Constraints:
+- do not do broad dead-code deletion yet
+- keep rollback/debug switches until cutover is validated
+
+Acceptance:
+- one memory authority remains in runtime
+- no split-brain injection is possible in standard flows
+- native paths are gated off rather than accidentally still active
+```
+
+#### PR 7 handoff prompt
+
+```text
+Implement PR 7 from docs/agentmemory-codex-memory-replacement-spec.md.
+
+Goal:
+- perform post-cutover cleanup only after the hard replacement is stable
+
+Constraints:
+- prefer cleanup that reduces future rebase cost
+- do not remove rollback/debug tooling prematurely
+
+Acceptance:
+- dead native-memory paths are removed only when safe
+- cleanup does not create more rebase drag than it removes
+```
+
+#### Cross-PR reviewer prompt
+
+```text
+Review the current PR against docs/agentmemory-codex-memory-replacement-spec.md.
+
+Focus:
+- does this PR stay within its assigned write boundary
+- does it reduce or increase future rebase drag
+- does it preserve the hard-replacement target
+- does it accidentally introduce split-brain behavior
+- does it move the system toward maximum-performance agentmemory usage rather than a degraded fallback
+```
+
 ## Do not do
 
 - Do not run Codex native memory injection and `agentmemory` injection as
