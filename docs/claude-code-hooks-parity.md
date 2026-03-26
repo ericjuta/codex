@@ -17,6 +17,40 @@ This does not require byte-for-byte compatibility in one step. It does require:
 - honoring documented decision-control fields when they are accepted by schema,
 - documenting any intentional deltas that remain.
 
+## Read order
+
+If you are implementing against this doc, read the current source in this order:
+
+1. `docs/claude-code-hooks-parity.md`
+2. `codex-rs/hooks/src/engine/config.rs`
+3. `codex-rs/hooks/src/engine/discovery.rs`
+4. `codex-rs/hooks/src/schema.rs`
+5. `codex-rs/hooks/src/engine/output_parser.rs`
+6. `codex-rs/core/src/hook_runtime.rs`
+7. `codex-rs/core/src/codex.rs`
+8. `codex-rs/core/src/tools/registry.rs`
+
+This order moves from public contract to discovery, then schema, then parser,
+then runtime wiring, then legacy behavior.
+
+## Current source snapshot
+
+This doc is based on the current implementation shape in this checkout:
+
+- public `hooks.json` event groups are defined in
+  `codex-rs/hooks/src/engine/config.rs`,
+- handler discovery and unsupported-handler warnings live in
+  `codex-rs/hooks/src/engine/discovery.rs`,
+- public wire schema lives in `codex-rs/hooks/src/schema.rs`,
+- output acceptance and rejection behavior lives in
+  `codex-rs/hooks/src/engine/output_parser.rs`,
+- runtime dispatch for start, prompt-submit, pre-tool, and post-tool hooks
+  lives in `codex-rs/core/src/hook_runtime.rs`,
+- `Stop` hook wiring lives in `codex-rs/core/src/codex.rs`,
+- deprecated legacy `AfterToolUse` dispatch still exists in
+  `codex-rs/core/src/tools/registry.rs`,
+- no repository-local `hooks.json` files are checked into this tree today.
+
 ## Current Codex surface
 
 Today Codex exposes five public `hooks.json` event groups:
@@ -128,7 +162,33 @@ than the runtime actually honors.
 - **No hidden UI drift**: hook additions must be visible in the TUI and
   app-server surfaces anywhere hook runs are rendered today.
 
+## Do not do
+
+- Do not add a new public event without input schema, runtime dispatch,
+  hook-run reporting, and docs in the same lane.
+- Do not keep wire fields in public schema as if they are live when the parser
+  still rejects them.
+- Do not use deprecated `AfterAgent` or legacy `AfterToolUse` internals as
+  the long-term public parity path.
+- Do not widen event coverage while leaving handler type and execution mode
+  reporting misleading in run summaries.
+- Do not make hook support TUI-only; app-server and protocol surfaces must stay
+  aligned.
+
 ## Implementation plan
+
+### Branch and PR order
+
+Prefer this implementation order:
+
+1. contract cleanup for the existing five events,
+2. runtime event expansion on the command-hook engine,
+3. handler-type and execution-mode expansion,
+4. advanced decision-control support,
+5. pre/post tool-class parity work,
+6. final doc consolidation and examples.
+
+Do not mix all six into one change. Keep each lane reviewable.
 
 ### Phase 1: make the current public surface coherent
 
@@ -248,6 +308,17 @@ Acceptance:
   dispatch,
 - decide whether legacy notification hooks remain supported long term or are
   explicitly deprecated in docs.
+
+## Acceptance gates for any implementation PR
+
+Every parity PR should satisfy all of these before merge:
+
+- docs updated for the newly supported behavior,
+- generated hook schema fixtures updated if the public schema changed,
+- focused tests added or updated for discovery, parser, and runtime behavior,
+- hook run summaries still render correctly in TUI and app-server surfaces,
+- unsupported behavior is either removed from schema or clearly documented as
+  unsupported.
 
 ## Open decisions
 
