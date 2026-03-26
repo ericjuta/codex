@@ -164,6 +164,39 @@ The local `agentmemory` checkout is currently dirty. This matters only as a
 reminder not to treat the local repo state as release-tagged truth; the source
 shape is still adequate for architectural comparison.
 
+### Current env alignment
+
+The live worker configuration is not sourced from
+`~/Projects/agentmemory/.env`. In this checkout, `docker-compose.yml` points
+the worker at:
+
+- `\${HOME}/.agentmemory/.env`
+
+Current externally loaded env alignment, verified in redacted form:
+
+- `GEMINI_API_KEY` is present,
+- `GEMINI_MODEL` is present,
+- `GEMINI_EMBEDDING_MODEL` is present,
+- `GEMINI_EMBEDDING_DIMENSIONS` is present,
+- `GRAPH_EXTRACTION_ENABLED` is present,
+- `CONSOLIDATION_ENABLED` is present.
+
+Implications:
+
+- the current live environment already aligns with Gemini-first provider
+  selection,
+- embedding auto-detection should resolve to Gemini unless explicitly
+  overridden,
+- graph extraction and consolidation are already enabled in the current
+  external env,
+- the current external env does not explicitly pin `EMBEDDING_PROVIDER`,
+  `TOKEN_BUDGET`, `BM25_WEIGHT`, `VECTOR_WEIGHT`, or
+  `FALLBACK_PROVIDERS`, so those currently rely on code defaults rather than
+  explicit ops policy.
+
+For a maximum-performance steady state, that last point should be treated as a
+configuration gap, not as the desired final setup.
+
 ## Codex native memory: what it is
 
 Codex native memory is a core-managed memory pipeline, not just a retrieval
