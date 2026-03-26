@@ -63,6 +63,12 @@ The target end state is:
 - Codex-native memory generation and consolidation are disabled,
 - Codex retains or rebuilds only the product-level semantics that still add
   value,
+- the fork uses the full \`agentmemory\` retrieval stack in steady state:
+  BM25 + vector + graph,
+- embeddings are enabled by default in steady state; BM25-only mode is a
+  fallback, not the target architecture,
+- lifecycle capture uses the widest useful hook surface rather than the minimum
+  viable subset,
 - the fork presents one coherent memory system to users,
 - the resulting system is a functional superset of both:
   - \`agentmemory\` capture and retrieval strengths,
@@ -70,6 +76,30 @@ The target end state is:
 
 In other words, the desired architecture is a Venn-diagram merge with one
 authoritative engine, not permanent coexistence of two competing memory stacks.
+
+## Maximum-performance policy
+
+The intended end state should maximize \`agentmemory\`, not merely adopt it.
+
+That means:
+
+- use hybrid retrieval as the primary retrieval path,
+- enable embeddings by default in the intended production configuration,
+- preserve graph retrieval and relation-aware retrieval as first-class
+  capabilities,
+- use progressive disclosure and token budgets instead of large static memory
+  injections wherever possible,
+- implement enough hook coverage that the observation stream is rich rather
+  than sparse,
+- treat BM25-only mode as an acceptable degraded mode, not as the target.
+
+Provider policy:
+
+- support all current \`agentmemory\` embedding providers,
+- keep Gemini embeddings available as a first-class provider,
+- prefer the best available embedding backend for the environment rather than
+  hardcoding a low-capability default in the architecture,
+- avoid designing the replacement around a no-embeddings baseline.
 
 ## Scope
 
@@ -479,7 +509,8 @@ Costs:
 - must replace or remove `UpdateMemories` and `DropMemories`,
 - must decide what to do about native memory citations,
 - must replace or drop `polluted`/thread memory-mode semantics,
-- must extend Codex hooks enough to make capture quality acceptable.
+- must extend Codex hooks enough to make capture quality fully competitive with
+  the `agentmemory` model rather than merely acceptable.
 
 Risk:
 
@@ -553,6 +584,20 @@ The right claim is narrower:
 - and that architecture is likely better long-term than Codex native memory for
   large memory corpora.
 
+### Performance-oriented token policy
+
+The intended architecture should optimize for query-time token efficiency, not
+artifact compatibility.
+
+That means:
+
+- prefer top-K retrieval over broad handbook injection,
+- keep startup context bounded and relevance-ranked,
+- expand details only on demand,
+- avoid recreating a large static `MEMORY.md`-style injection layer on top of
+  `agentmemory`,
+- measure steady-state tokens/query as a first-class success metric.
+
 ## Recommendation
 
 Target hard replacement as the end state.
@@ -593,17 +638,33 @@ replacement rather than toward permanent coexistence.
 - Replace startup memory prompt generation with `agentmemory` retrieval.
 - Add equivalent user-facing operations for refresh and clear.
 - Decide whether these call into `agentmemory` REST/MCP or a local adapter.
+- Route startup injection through the bounded `agentmemory` retrieval path
+  rather than recreating Codex-native memory artifact loading.
+- Make token budget, retrieval mode, and expansion behavior explicit parts of
+  the adapter contract.
 
 ### Phase 3: hook expansion
 
-- Extend Codex hook coverage enough to support useful `agentmemory` capture.
-- Minimum likely useful additions:
-  - `SessionEnd`
+- Extend Codex hook coverage to support the full useful `agentmemory`
+  observation model, not just a minimum subset.
+- Target the full current `agentmemory` hook set:
+  - `SessionStart`
+  - `UserPromptSubmit`
+  - `PreToolUse`
+  - `PostToolUse`
   - `PostToolUseFailure`
+  - `PreCompact`
   - `SubagentStart`
   - `SubagentStop`
   - `Notification`
-  - `PreCompact`
+  - `TaskCompleted`
+  - `Stop`
+  - `SessionEnd`
+- Broaden `PreToolUse` and `PostToolUse` beyond the current shell-centric
+  path so file tools, command tools, and other high-signal tool classes are
+  observed consistently.
+- Do not treat hook expansion as optional polish; it is core to achieving the
+  high-performance end state.
 
 ### Phase 4: native memory deprecation
 
@@ -619,6 +680,10 @@ replacement rather than toward permanent coexistence.
 - Verify that there is only one authoritative memory source in the runtime.
 - Remove any remaining code paths that can accidentally re-enable split-brain
   behavior.
+- Verify that embeddings, graph retrieval, and progressive disclosure are
+  active in the intended steady-state configuration.
+- Verify that the system is not silently falling back to a lower-capability
+  retrieval mode in normal operation.
 
 ### Phase 6: optional advanced alignment
 
@@ -652,6 +717,10 @@ The replacement is successful only if all of these are true:
   intentionally removed with docs,
 - hook/event coverage is sufficient to produce materially useful observations,
 - token usage stays bounded as the corpus grows,
+- the intended steady state uses embeddings and hybrid retrieval rather than a
+  degraded BM25-only baseline,
+- Gemini or another high-quality embedding provider remains available as a
+  first-class configuration path,
 - the fork has a clear provenance story for memory-derived output,
 - there is no ambiguity about which memory system is active,
 - the resulting user-facing behavior is a practical superset of the two source
