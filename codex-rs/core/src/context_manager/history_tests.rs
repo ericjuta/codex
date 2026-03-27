@@ -1509,6 +1509,38 @@ fn normalize_adds_missing_output_for_tool_search_call() {
     );
 }
 
+#[test]
+fn normalize_adds_missing_output_for_custom_tool_call() {
+    let items = vec![ResponseItem::CustomToolCall {
+        id: None,
+        status: None,
+        call_id: "custom-call-x".to_string(),
+        name: "custom_tool".to_string(),
+        input: "{}".to_string(),
+    }];
+    let mut h = create_history_with_items(items);
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(
+        h.raw_items(),
+        vec![
+            ResponseItem::CustomToolCall {
+                id: None,
+                status: None,
+                call_id: "custom-call-x".to_string(),
+                name: "custom_tool".to_string(),
+                input: "{}".to_string(),
+            },
+            ResponseItem::CustomToolCallOutput {
+                call_id: "custom-call-x".to_string(),
+                name: None,
+                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+            },
+        ]
+    );
+}
+
 #[cfg(debug_assertions)]
 #[test]
 #[should_panic]

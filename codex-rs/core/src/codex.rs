@@ -5343,6 +5343,15 @@ mod handlers {
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        if sess.get_config().await.memories.backend
+            == crate::config::types::MemoryBackend::Agentmemory
+        {
+            let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+            let session_id = sess.conversation_id.to_string();
+            if let Err(e) = adapter.end_session(session_id.as_str()).await {
+                warn!("Agentmemory session end failed for {session_id}: {e}");
+            }
+        }
         let _ = sess.conversation.shutdown().await;
         sess.services
             .unified_exec_manager
@@ -6004,11 +6013,18 @@ pub(crate) async fn run_turn(
                         last_assistant_message: last_agent_message.clone(),
                     };
 
-                    if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
+                    if turn_context.config.memories.backend
+                        == crate::config::types::MemoryBackend::Agentmemory
+                    {
                         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
                         let payload = stop_request.clone();
                         tokio::spawn(async move {
-                            adapter.capture_event("Stop", serde_json::to_value(&payload).unwrap_or_default()).await;
+                            adapter
+                                .capture_event(
+                                    "Stop",
+                                    serde_json::to_value(&payload).unwrap_or_default(),
+                                )
+                                .await;
                         });
                     }
 

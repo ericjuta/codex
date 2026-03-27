@@ -105,8 +105,21 @@ pub(crate) async fn run_pending_session_start_hooks(
     if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
         let payload = request.clone();
+        let session_id = request.session_id.to_string();
+        let cwd = request.cwd.clone();
         tokio::spawn(async move {
-            adapter.capture_event("SessionStart", serde_json::to_value(&payload).unwrap_or_default()).await;
+            if let Err(e) = adapter
+                .start_session(session_id.as_str(), cwd.as_path(), cwd.as_path())
+                .await
+            {
+                tracing::warn!("Agentmemory session start failed for {session_id}: {e}");
+            }
+            adapter
+                .capture_event(
+                    "SessionStart",
+                    serde_json::to_value(&payload).unwrap_or_default(),
+                )
+                .await;
         });
     }
 
@@ -146,7 +159,12 @@ pub(crate) async fn run_pre_tool_use_hooks(
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
         let payload = request.clone();
         tokio::spawn(async move {
-            adapter.capture_event("PreToolUse", serde_json::to_value(&payload).unwrap_or_default()).await;
+            adapter
+                .capture_event(
+                    "PreToolUse",
+                    serde_json::to_value(&payload).unwrap_or_default(),
+                )
+                .await;
         });
     }
 
@@ -188,7 +206,12 @@ pub(crate) async fn run_post_tool_use_hooks(
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
         let payload = request.clone();
         tokio::spawn(async move {
-            adapter.capture_event("PostToolUse", serde_json::to_value(&payload).unwrap_or_default()).await;
+            adapter
+                .capture_event(
+                    "PostToolUse",
+                    serde_json::to_value(&payload).unwrap_or_default(),
+                )
+                .await;
         });
     }
 
@@ -225,7 +248,12 @@ pub(crate) async fn run_post_tool_use_failure_hooks(
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
         let payload = request.clone();
         tokio::spawn(async move {
-            adapter.capture_event("PostToolUseFailure", serde_json::to_value(&payload).unwrap_or_default()).await;
+            adapter
+                .capture_event(
+                    "PostToolUseFailure",
+                    serde_json::to_value(&payload).unwrap_or_default(),
+                )
+                .await;
         });
     }
 }
@@ -249,7 +277,12 @@ pub(crate) async fn run_user_prompt_submit_hooks(
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
         let payload = request.clone();
         tokio::spawn(async move {
-            adapter.capture_event("UserPromptSubmit", serde_json::to_value(&payload).unwrap_or_default()).await;
+            adapter
+                .capture_event(
+                    "UserPromptSubmit",
+                    serde_json::to_value(&payload).unwrap_or_default(),
+                )
+                .await;
         });
     }
 
