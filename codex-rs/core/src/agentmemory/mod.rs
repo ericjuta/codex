@@ -83,6 +83,75 @@ impl AgentmemoryAdapter {
         Some(instructions)
     }
 
+    /// Attempts to parse a tool command string as JSON to recover structured
+    /// arguments. Falls back to the original string value on parse failure.
+    fn parse_structured_tool_input(raw: &serde_json::Value) -> serde_json::Value {
+        if let Some(s) = raw.as_str() {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(s) {
+                if parsed.is_object() {
+                    return parsed;
+                }
+            }
+        }
+        raw.clone()
+    }
+
+    /// Extracts file paths and search terms from structured tool arguments
+    /// so that Agentmemory observations mention the relevant paths and queries.
+    fn extract_file_enrichment(
+        tool_input: &serde_json::Value,
+    ) -> (Vec<String>, Vec<String>) {
+        let mut files: Vec<String> = Vec::new();
+        let mut search_terms: Vec<String> = Vec::new();
+
+        if let Some(obj) = tool_input.as_object() {
+            // File path fields
+            for key in &["file_path", "path", "dir_path"] {
+                if let Some(v) = obj.get(*key).and_then(|v| v.as_str()) {
+                    if !v.is_empty() {
+                        files.push(v.to_string());
+                    }
+                }
+            }
+            // Array of paths
+            if let Some(arr) = obj.get("paths").and_then(|v| v.as_array()) {
+                for item in arr {
+                    if let Some(s) = item.as_str() {
+                        if !s.is_empty() {
+                            files.push(s.to_string());
+                        }
+                    }
+                }
+            }
+            // Search / pattern fields
+            for key in &["query", "pattern", "glob"] {
+                if let Some(v) = obj.get(*key).and_then(|v| v.as_str()) {
+                    if !v.is_empty() {
+                        search_terms.push(v.to_string());
+                    }
+                }
+            }
+        }
+
+        (files, search_terms)
+    }
+
+    /// Maximum length for assistant text stored in observations.
+    const ASSISTANT_TEXT_MAX_BYTES: usize = 4096;
+
+    /// Truncates text to a safe size for observation storage.
+    fn truncate_text(text: &str, max_bytes: usize) -> &str {
+        if text.len() <= max_bytes {
+            return text;
+        }
+        // Find a char boundary at or before max_bytes
+        let mut end = max_bytes;
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        &text[..end]
+    }
+
     /// Transforms Codex hook payloads into the canonical Agentmemory hook schema.
     fn format_agentmemory_payload(
         &self,
@@ -102,10 +171,13 @@ impl AgentmemoryAdapter {
             .unwrap_or_else(|| ".".to_string());
         let timestamp = chrono::Utc::now().to_rfc3339();
 
-        let tool_input = payload_map
+        // Parse structured tool input from the command string when possible.
+        let raw_tool_input = payload_map
             .get("command")
             .cloned()
             .unwrap_or(serde_json::Value::Null);
+        let tool_input = Self::parse_structured_tool_input(&raw_tool_input);
+
         let tool_output = payload_map
             .get("tool_response")
             .cloned()
@@ -115,6 +187,9 @@ impl AgentmemoryAdapter {
             .and_then(|value| value.get("error"))
             .cloned()
             .unwrap_or_else(|| tool_output.clone());
+
+        // Extract file paths and search terms for enrichment.
+        let (files, search_terms) = Self::extract_file_enrichment(&tool_input);
 
         let (hook_type, data) = match event_name {
             "SessionStart" => (
@@ -139,9 +214,8 @@ impl AgentmemoryAdapter {
                     "prompt": payload_map.get("prompt").cloned().unwrap_or(serde_json::Value::Null),
                 }),
             ),
-            "PreToolUse" => (
-                "pre_tool_use",
-                json!({
+            "PreToolUse" => {
+                let mut data = json!({
                     "session_id": session_id,
                     "turn_id": payload_map.get("turn_id").cloned().unwrap_or(serde_json::Value::Null),
                     "cwd": cwd,
@@ -150,11 +224,17 @@ impl AgentmemoryAdapter {
                     "tool_name": payload_map.get("tool_name").cloned().unwrap_or(serde_json::Value::Null),
                     "tool_use_id": payload_map.get("tool_use_id").cloned().unwrap_or(serde_json::Value::Null),
                     "tool_input": tool_input,
-                }),
-            ),
-            "PostToolUse" => (
-                "post_tool_use",
-                json!({
+                });
+                if !files.is_empty() {
+                    data["files"] = json!(files);
+                }
+                if !search_terms.is_empty() {
+                    data["search_terms"] = json!(search_terms);
+                }
+                ("pre_tool_use", data)
+            }
+            "PostToolUse" => {
+                let mut data = json!({
                     "session_id": session_id,
                     "turn_id": payload_map.get("turn_id").cloned().unwrap_or(serde_json::Value::Null),
                     "cwd": cwd,
@@ -164,11 +244,18 @@ impl AgentmemoryAdapter {
                     "tool_use_id": payload_map.get("tool_use_id").cloned().unwrap_or(serde_json::Value::Null),
                     "tool_input": tool_input,
                     "tool_output": tool_output,
-                }),
-            ),
-            "PostToolUseFailure" => (
-                "post_tool_failure",
-                json!({
+                });
+                // File-aware enrichment: surface paths and search terms.
+                if !files.is_empty() {
+                    data["files"] = json!(files);
+                }
+                if !search_terms.is_empty() {
+                    data["search_terms"] = json!(search_terms);
+                }
+                ("post_tool_use", data)
+            }
+            "PostToolUseFailure" => {
+                let mut data = json!({
                     "session_id": session_id,
                     "turn_id": payload_map.get("turn_id").cloned().unwrap_or(serde_json::Value::Null),
                     "cwd": cwd,
@@ -178,8 +265,15 @@ impl AgentmemoryAdapter {
                     "tool_use_id": payload_map.get("tool_use_id").cloned().unwrap_or(serde_json::Value::Null),
                     "tool_input": tool_input,
                     "error": error,
-                }),
-            ),
+                });
+                if !files.is_empty() {
+                    data["files"] = json!(files);
+                }
+                if !search_terms.is_empty() {
+                    data["search_terms"] = json!(search_terms);
+                }
+                ("post_tool_failure", data)
+            }
             "Stop" => (
                 "stop",
                 json!({
@@ -191,6 +285,25 @@ impl AgentmemoryAdapter {
                     "last_assistant_message": payload_map.get("last_assistant_message").cloned().unwrap_or(serde_json::Value::Null),
                 }),
             ),
+            "AssistantResult" => {
+                let assistant_text = payload_map
+                    .get("assistant_text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let truncated =
+                    Self::truncate_text(assistant_text, Self::ASSISTANT_TEXT_MAX_BYTES);
+                (
+                    "assistant_result",
+                    json!({
+                        "session_id": session_id,
+                        "turn_id": payload_map.get("turn_id").cloned().unwrap_or(serde_json::Value::Null),
+                        "cwd": cwd,
+                        "model": payload_map.get("model").cloned().unwrap_or(serde_json::Value::Null),
+                        "assistant_text": truncated,
+                        "is_final": payload_map.get("is_final").cloned().unwrap_or(json!(true)),
+                    }),
+                )
+            }
             _ => (event_name, serde_json::Value::Object(payload_map.clone())),
         };
 
@@ -382,6 +495,169 @@ mod tests {
         assert_eq!(formatted["data"]["tool_name"], "shell_command");
         assert_eq!(formatted["data"]["tool_input"], "printf hi");
         assert_eq!(formatted["data"]["tool_output"]["output"], "hi");
+    }
+
+    #[test]
+    fn test_pre_tool_use_includes_structured_args_and_enrichment() {
+        let adapter = AgentmemoryAdapter::new();
+        let raw_payload = json!({
+            "session_id": "s1",
+            "turn_id": "t1",
+            "cwd": "/proj",
+            "tool_name": "grep",
+            "tool_use_id": "tu-0",
+            "command": r#"{"path":"/proj/src","pattern":"fn main","glob":"*.rs"}"#,
+        });
+
+        let formatted = adapter.format_agentmemory_payload("PreToolUse", raw_payload);
+
+        assert_eq!(formatted["hookType"], "pre_tool_use");
+        assert_eq!(formatted["data"]["tool_input"]["path"], "/proj/src");
+        assert_eq!(formatted["data"]["tool_input"]["pattern"], "fn main");
+        assert_eq!(formatted["data"]["files"][0], "/proj/src");
+        assert_eq!(formatted["data"]["search_terms"][0], "fn main");
+        assert_eq!(formatted["data"]["search_terms"][1], "*.rs");
+    }
+
+    #[test]
+    fn test_structured_tool_input_parsed_from_json_command() {
+        let adapter = AgentmemoryAdapter::new();
+        let raw_payload = json!({
+            "session_id": "s1",
+            "turn_id": "t1",
+            "cwd": "/proj",
+            "tool_name": "read_file",
+            "tool_use_id": "tu-1",
+            "command": r#"{"file_path":"/proj/src/main.rs","offset":1,"limit":50}"#,
+            "tool_response": { "text": "fn main() {}" }
+        });
+
+        let formatted = adapter.format_agentmemory_payload("PostToolUse", raw_payload);
+
+        // tool_input should be the parsed object, not the raw string.
+        assert_eq!(formatted["data"]["tool_input"]["file_path"], "/proj/src/main.rs");
+        assert_eq!(formatted["data"]["tool_input"]["offset"], 1);
+        // File enrichment should surface the path.
+        assert_eq!(formatted["data"]["files"][0], "/proj/src/main.rs");
+    }
+
+    #[test]
+    fn test_non_json_command_preserved_as_string() {
+        let adapter = AgentmemoryAdapter::new();
+        let raw_payload = json!({
+            "session_id": "s1",
+            "turn_id": "t1",
+            "cwd": "/proj",
+            "tool_name": "shell",
+            "tool_use_id": "tu-2",
+            "command": "ls -la /tmp",
+            "tool_response": { "output": "total 0" }
+        });
+
+        let formatted = adapter.format_agentmemory_payload("PostToolUse", raw_payload);
+        assert_eq!(formatted["data"]["tool_input"], "ls -la /tmp");
+        // No file enrichment for plain commands.
+        assert!(formatted["data"].get("files").is_none());
+    }
+
+    #[test]
+    fn test_file_enrichment_extracts_paths_and_search_terms() {
+        let adapter = AgentmemoryAdapter::new();
+        let raw_payload = json!({
+            "session_id": "s1",
+            "turn_id": "t1",
+            "cwd": "/proj",
+            "tool_name": "grep",
+            "tool_use_id": "tu-3",
+            "command": r#"{"path":"/proj/src","pattern":"TODO","glob":"*.rs"}"#,
+            "tool_response": { "matches": [] }
+        });
+
+        let formatted = adapter.format_agentmemory_payload("PostToolUse", raw_payload);
+
+        assert_eq!(formatted["data"]["files"][0], "/proj/src");
+        assert_eq!(formatted["data"]["search_terms"][0], "TODO");
+        assert_eq!(formatted["data"]["search_terms"][1], "*.rs");
+    }
+
+    #[test]
+    fn test_file_enrichment_on_failure_event() {
+        let adapter = AgentmemoryAdapter::new();
+        let raw_payload = json!({
+            "session_id": "s1",
+            "turn_id": "t1",
+            "cwd": "/proj",
+            "tool_name": "read_file",
+            "tool_use_id": "tu-4",
+            "command": r#"{"file_path":"/proj/missing.rs"}"#,
+            "tool_response": { "error": "file not found" }
+        });
+
+        let formatted = adapter.format_agentmemory_payload("PostToolUseFailure", raw_payload);
+
+        assert_eq!(formatted["hookType"], "post_tool_failure");
+        assert_eq!(formatted["data"]["files"][0], "/proj/missing.rs");
+        assert_eq!(formatted["data"]["error"], "file not found");
+    }
+
+    #[test]
+    fn test_assistant_result_payload_shape() {
+        let adapter = AgentmemoryAdapter::new();
+        let raw_payload = json!({
+            "session_id": "s1",
+            "turn_id": "t1",
+            "cwd": "/proj",
+            "model": "claude-opus-4-6",
+            "assistant_text": "The build succeeded with no warnings.",
+            "is_final": true,
+        });
+
+        let formatted = adapter.format_agentmemory_payload("AssistantResult", raw_payload);
+
+        assert_eq!(formatted["hookType"], "assistant_result");
+        assert_eq!(formatted["sessionId"], "s1");
+        assert_eq!(formatted["data"]["assistant_text"], "The build succeeded with no warnings.");
+        assert_eq!(formatted["data"]["is_final"], true);
+        assert_eq!(formatted["data"]["turn_id"], "t1");
+        assert_eq!(formatted["data"]["model"], "claude-opus-4-6");
+    }
+
+    #[test]
+    fn test_assistant_result_truncates_long_text() {
+        let adapter = AgentmemoryAdapter::new();
+        let long_text = "x".repeat(8000);
+        let raw_payload = json!({
+            "session_id": "s1",
+            "turn_id": "t1",
+            "cwd": "/proj",
+            "model": "test",
+            "assistant_text": long_text,
+        });
+
+        let formatted = adapter.format_agentmemory_payload("AssistantResult", raw_payload);
+        let stored_text = formatted["data"]["assistant_text"].as_str().unwrap();
+        assert!(stored_text.len() <= AgentmemoryAdapter::ASSISTANT_TEXT_MAX_BYTES);
+    }
+
+    #[test]
+    fn test_paths_array_enrichment() {
+        let adapter = AgentmemoryAdapter::new();
+        let raw_payload = json!({
+            "session_id": "s1",
+            "turn_id": "t1",
+            "cwd": "/proj",
+            "tool_name": "multi_edit",
+            "tool_use_id": "tu-5",
+            "command": r#"{"paths":["/proj/a.rs","/proj/b.rs"]}"#,
+            "tool_response": { "ok": true }
+        });
+
+        let formatted = adapter.format_agentmemory_payload("PostToolUse", raw_payload);
+
+        let files = formatted["data"]["files"].as_array().unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0], "/proj/a.rs");
+        assert_eq!(files[1], "/proj/b.rs");
     }
 
     #[test]

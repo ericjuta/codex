@@ -6017,14 +6017,40 @@ pub(crate) async fn run_turn(
                         == crate::config::types::MemoryBackend::Agentmemory
                     {
                         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
-                        let payload = stop_request.clone();
+                        let stop_payload =
+                            serde_json::to_value(&stop_request).unwrap_or_default();
+
+                        // Emit an assistant_result observation when the turn
+                        // produced a meaningful assistant conclusion. This
+                        // ensures sessions with little tool usage still create
+                        // useful memory records.
+                        let assistant_result_payload =
+                            if let Some(ref text) = last_agent_message {
+                                if !text.trim().is_empty() {
+                                    Some(serde_json::json!({
+                                        "session_id": sess.conversation_id.to_string(),
+                                        "turn_id": turn_context.sub_id.clone(),
+                                        "cwd": turn_context.cwd.to_string_lossy().to_string(),
+                                        "model": turn_context.model_info.slug.clone(),
+                                        "assistant_text": text,
+                                        "is_final": true,
+                                    }))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
                         tokio::spawn(async move {
                             adapter
-                                .capture_event(
-                                    "Stop",
-                                    serde_json::to_value(&payload).unwrap_or_default(),
-                                )
+                                .capture_event("Stop", stop_payload)
                                 .await;
+                            if let Some(ar_payload) = assistant_result_payload {
+                                adapter
+                                    .capture_event("AssistantResult", ar_payload)
+                                    .await;
+                            }
                         });
                     }
 

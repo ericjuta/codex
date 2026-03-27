@@ -182,10 +182,10 @@ Acceptance criteria:
 
 ## Rollout Order
 
-1. suppress or gate low-value lifecycle observations
-2. forward richer structured tool input
-3. add assistant-result capture
-4. add evaluation fixtures and compare before/after quality
+1. ~~suppress or gate low-value lifecycle observations~~ — kept all events including pre_tool_use; enriched with structured args instead of gating
+2. ~~forward richer structured tool input~~ — implemented
+3. ~~add assistant-result capture~~ — implemented
+4. ~~add evaluation fixtures and compare before/after quality~~ — unit tests added; real-session fixture comparison is deferred
 
 ## Risks
 
