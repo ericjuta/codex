@@ -1,5 +1,8 @@
 # agentmemory replacement spec for Codex native memory
 
+**Status: Implemented**
+The integration of `agentmemory` has been completed across the Codex codebase. The native memory backend has been bypassed when the `agentmemory` backend is configured, and all lifecycle events, high-signal tool payloads, and memory operations (Update, Drop) have been routed to the `agentmemory` adapter.
+
 This document evaluates whether a forked Codex should disable the current
 first-party memory system and replace it with
 `~/Projects/agentmemory` as the primary memory engine.
