@@ -7283,23 +7283,13 @@ async fn slash_clear_is_disabled_while_task_running() {
 }
 
 #[tokio::test]
-async fn slash_memory_drop_reports_stubbed_feature() {
+async fn slash_memory_drop_submits_core_op() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
     chat.dispatch_command(SlashCommand::MemoryDrop);
 
-    let event = rx.try_recv().expect("expected unsupported-feature error");
-    match event {
-        AppEvent::InsertHistoryCell(cell) => {
-            let rendered = lines_to_single_string(&cell.display_lines(80));
-            assert!(rendered.contains("Memory maintenance: Not available in app-server TUI yet."));
-        }
-        other => panic!("expected InsertHistoryCell error, got {other:?}"),
-    }
-    assert!(
-        op_rx.try_recv().is_err(),
-        "expected no memory op to be sent"
-    );
+    assert_matches!(next_submit_op(&mut op_rx), Op::DropMemories);
+    assert!(rx.try_recv().is_err(), "expected no stub message");
 }
 
 #[tokio::test]
@@ -7314,23 +7304,46 @@ async fn slash_mcp_requests_inventory_via_app_server() {
 }
 
 #[tokio::test]
-async fn slash_memory_update_reports_stubbed_feature() {
+async fn slash_memory_update_submits_core_op() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
     chat.dispatch_command(SlashCommand::MemoryUpdate);
 
-    let event = rx.try_recv().expect("expected unsupported-feature error");
-    match event {
-        AppEvent::InsertHistoryCell(cell) => {
-            let rendered = lines_to_single_string(&cell.display_lines(80));
-            assert!(rendered.contains("Memory maintenance: Not available in app-server TUI yet."));
-        }
-        other => panic!("expected InsertHistoryCell error, got {other:?}"),
-    }
-    assert!(
-        op_rx.try_recv().is_err(),
-        "expected no memory op to be sent"
+    assert_matches!(next_submit_op(&mut op_rx), Op::UpdateMemories);
+    assert!(rx.try_recv().is_err(), "expected no stub message");
+}
+
+#[tokio::test]
+async fn slash_memory_recall_submits_core_op() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryRecall);
+
+    assert_matches!(
+        next_submit_op(&mut op_rx),
+        Op::RecallMemories { query: None }
     );
+    assert!(rx.try_recv().is_err(), "expected no stub message");
+}
+
+#[tokio::test]
+async fn slash_memory_recall_with_inline_args_submits_query() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.set_composer_text(
+        "/memory-recall retrieval freshness".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        next_submit_op(&mut op_rx),
+        Op::RecallMemories {
+            query: Some(query)
+        } if query == "retrieval freshness"
+    );
+    assert!(rx.try_recv().is_err(), "expected no stub message");
 }
 
 #[tokio::test]

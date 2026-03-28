@@ -20,6 +20,7 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) realtime_conversation_enabled: bool,
     pub(crate) audio_device_selection_enabled: bool,
     pub(crate) allow_elevate_sandbox: bool,
+    pub(crate) agentmemory_enabled: bool,
 }
 
 /// Return the built-ins that should be visible/usable for the current input.
@@ -37,6 +38,15 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
         .filter(|(_, cmd)| flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
         .filter(|(_, cmd)| flags.audio_device_selection_enabled || *cmd != SlashCommand::Settings)
+        .filter(|(_, cmd)| {
+            flags.agentmemory_enabled
+                || !matches!(
+                    *cmd,
+                    SlashCommand::MemoryDrop
+                        | SlashCommand::MemoryUpdate
+                        | SlashCommand::MemoryRecall
+                )
+        })
         .collect()
 }
 
@@ -71,6 +81,7 @@ mod tests {
             realtime_conversation_enabled: true,
             audio_device_selection_enabled: true,
             allow_elevate_sandbox: true,
+            agentmemory_enabled: true,
         }
     }
 
@@ -131,5 +142,12 @@ mod tests {
         let mut flags = all_enabled_flags();
         flags.audio_device_selection_enabled = false;
         assert_eq!(find_builtin_command("settings", flags), None);
+    }
+
+    #[test]
+    fn memory_recall_is_hidden_when_agentmemory_is_disabled() {
+        let mut flags = all_enabled_flags();
+        flags.agentmemory_enabled = false;
+        assert_eq!(find_builtin_command("memory-recall", flags), None);
     }
 }

@@ -311,6 +311,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_agentmemory_enabled(&mut self, enabled: bool) {
+        self.composer.set_agentmemory_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub fn set_fast_command_enabled(&mut self, enabled: bool) {
         self.composer.set_fast_command_enabled(enabled);
         self.request_redraw();

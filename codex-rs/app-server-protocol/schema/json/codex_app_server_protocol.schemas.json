@@ -510,6 +510,78 @@
             },
             "method": {
               "enum": [
+                "thread/memory/drop"
+              ],
+              "title": "Thread/memory/dropRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadMemoryDropParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/memory/dropRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/memory/update"
+              ],
+              "title": "Thread/memory/updateRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadMemoryUpdateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/memory/updateRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/memory/recall"
+              ],
+              "title": "Thread/memory/recallRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadMemoryRecallParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/memory/recallRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/shellCommand"
               ],
               "title": "Thread/shellCommandRequestMethod",
@@ -8222,9 +8294,16 @@
         "enum": [
           "preToolUse",
           "postToolUse",
+          "postToolUseFailure",
+          "preCompact",
           "sessionStart",
+          "subagentStart",
+          "subagentStop",
+          "notification",
+          "taskCompleted",
           "userPromptSubmit",
-          "stop"
+          "stop",
+          "sessionEnd"
         ],
         "type": "string"
       },
@@ -13110,6 +13189,66 @@
           "data"
         ],
         "title": "ThreadLoadedListResponse",
+        "type": "object"
+      },
+      "ThreadMemoryDropParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadMemoryDropParams",
+        "type": "object"
+      },
+      "ThreadMemoryDropResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadMemoryDropResponse",
+        "type": "object"
+      },
+      "ThreadMemoryRecallParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "query": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadMemoryRecallParams",
+        "type": "object"
+      },
+      "ThreadMemoryRecallResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadMemoryRecallResponse",
+        "type": "object"
+      },
+      "ThreadMemoryUpdateParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadMemoryUpdateParams",
+        "type": "object"
+      },
+      "ThreadMemoryUpdateResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadMemoryUpdateResponse",
         "type": "object"
       },
       "ThreadMetadataGitInfoUpdateParams": {

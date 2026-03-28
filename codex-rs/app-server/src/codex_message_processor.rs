@@ -117,6 +117,12 @@ use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
+use codex_app_server_protocol::ThreadMemoryDropParams;
+use codex_app_server_protocol::ThreadMemoryDropResponse;
+use codex_app_server_protocol::ThreadMemoryRecallParams;
+use codex_app_server_protocol::ThreadMemoryRecallResponse;
+use codex_app_server_protocol::ThreadMemoryUpdateParams;
+use codex_app_server_protocol::ThreadMemoryUpdateResponse;
 use codex_app_server_protocol::ThreadDecrementElicitationParams;
 use codex_app_server_protocol::ThreadDecrementElicitationResponse;
 use codex_app_server_protocol::ThreadForkParams;
@@ -709,6 +715,18 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadCompactStart { request_id, params } => {
                 self.thread_compact_start(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadMemoryDrop { request_id, params } => {
+                self.thread_memory_drop(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadMemoryUpdate { request_id, params } => {
+                self.thread_memory_update(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadMemoryRecall { request_id, params } => {
+                self.thread_memory_recall(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadBackgroundTerminalsClean { request_id, params } => {
@@ -3049,6 +3067,99 @@ impl CodexMessageProcessor {
                     format!("failed to clean background terminals: {err}"),
                 )
                 .await;
+            }
+        }
+    }
+
+    async fn thread_memory_drop(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadMemoryDropParams,
+    ) {
+        let ThreadMemoryDropParams { thread_id } = params;
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match self
+            .submit_core_op(&request_id, thread.as_ref(), Op::DropMemories)
+            .await
+        {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadMemoryDropResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(request_id, format!("failed to drop memories: {err}"))
+                    .await;
+            }
+        }
+    }
+
+    async fn thread_memory_update(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadMemoryUpdateParams,
+    ) {
+        let ThreadMemoryUpdateParams { thread_id } = params;
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match self
+            .submit_core_op(&request_id, thread.as_ref(), Op::UpdateMemories)
+            .await
+        {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadMemoryUpdateResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(request_id, format!("failed to update memories: {err}"))
+                    .await;
+            }
+        }
+    }
+
+    async fn thread_memory_recall(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadMemoryRecallParams,
+    ) {
+        let ThreadMemoryRecallParams { thread_id, query } = params;
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match self
+            .submit_core_op(&request_id, thread.as_ref(), Op::RecallMemories { query })
+            .await
+        {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadMemoryRecallResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(request_id, format!("failed to recall memories: {err}"))
+                    .await;
             }
         }
     }

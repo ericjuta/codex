@@ -5,9 +5,16 @@
       "enum": [
         "preToolUse",
         "postToolUse",
+        "postToolUseFailure",
+        "preCompact",
         "sessionStart",
+        "subagentStart",
+        "subagentStop",
+        "notification",
+        "taskCompleted",
         "userPromptSubmit",
-        "stop"
+        "stop",
+        "sessionEnd"
       ],
       "type": "string"
     },

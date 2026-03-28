@@ -2131,6 +2131,20 @@ impl App {
                 app_server.thread_compact_start(thread_id).await?;
                 Ok(true)
             }
+            AppCommandView::MemoryDrop => {
+                app_server.thread_memory_drop(thread_id).await?;
+                Ok(true)
+            }
+            AppCommandView::MemoryUpdate => {
+                app_server.thread_memory_update(thread_id).await?;
+                Ok(true)
+            }
+            AppCommandView::MemoryRecall { query } => {
+                app_server
+                    .thread_memory_recall(thread_id, query.clone())
+                    .await?;
+                Ok(true)
+            }
             AppCommandView::SetThreadName { name } => {
                 app_server
                     .thread_set_name(thread_id, name.to_string())

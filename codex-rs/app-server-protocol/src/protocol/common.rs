@@ -257,6 +257,18 @@ client_request_definitions! {
         params: v2::ThreadCompactStartParams,
         response: v2::ThreadCompactStartResponse,
     },
+    ThreadMemoryDrop => "thread/memory/drop" {
+        params: v2::ThreadMemoryDropParams,
+        response: v2::ThreadMemoryDropResponse,
+    },
+    ThreadMemoryUpdate => "thread/memory/update" {
+        params: v2::ThreadMemoryUpdateParams,
+        response: v2::ThreadMemoryUpdateResponse,
+    },
+    ThreadMemoryRecall => "thread/memory/recall" {
+        params: v2::ThreadMemoryRecallParams,
+        response: v2::ThreadMemoryRecallResponse,
+    },
     ThreadShellCommand => "thread/shellCommand" {
         params: v2::ThreadShellCommandParams,
         response: v2::ThreadShellCommandResponse,
@@ -1546,6 +1558,71 @@ mod tests {
                 "id": 8,
                 "params": {
                     "threadId": "thr_123"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_memory_drop() -> Result<()> {
+        let request = ClientRequest::ThreadMemoryDrop {
+            request_id: RequestId::Integer(8),
+            params: v2::ThreadMemoryDropParams {
+                thread_id: "thr_123".to_string(),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/memory/drop",
+                "id": 8,
+                "params": {
+                    "threadId": "thr_123"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_memory_update() -> Result<()> {
+        let request = ClientRequest::ThreadMemoryUpdate {
+            request_id: RequestId::Integer(8),
+            params: v2::ThreadMemoryUpdateParams {
+                thread_id: "thr_123".to_string(),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/memory/update",
+                "id": 8,
+                "params": {
+                    "threadId": "thr_123"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_memory_recall() -> Result<()> {
+        let request = ClientRequest::ThreadMemoryRecall {
+            request_id: RequestId::Integer(8),
+            params: v2::ThreadMemoryRecallParams {
+                thread_id: "thr_123".to_string(),
+                query: Some("search term".to_string()),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/memory/recall",
+                "id": 8,
+                "params": {
+                    "threadId": "thr_123",
+                    "query": "search term"
                 }
             }),
             serde_json::to_value(&request)?,

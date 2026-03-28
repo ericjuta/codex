@@ -58,11 +58,13 @@ pub enum SlashCommand {
     TestApproval,
     #[strum(serialize = "subagents")]
     MultiAgents,
-    // Debugging commands.
-    #[strum(serialize = "debug-m-drop")]
+    // Memory commands.
+    #[strum(serialize = "memory-drop")]
     MemoryDrop,
-    #[strum(serialize = "debug-m-update")]
+    #[strum(serialize = "memory-update")]
     MemoryUpdate,
+    #[strum(serialize = "memory-recall")]
+    MemoryRecall,
 }
 
 impl SlashCommand {
@@ -90,8 +92,9 @@ impl SlashCommand {
             SlashCommand::Theme => "choose a syntax highlighting theme",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Stop => "stop all background terminals",
-            SlashCommand::MemoryDrop => "DO NOT USE",
-            SlashCommand::MemoryUpdate => "DO NOT USE",
+            SlashCommand::MemoryDrop => "clear the active memory store",
+            SlashCommand::MemoryUpdate => "sync and consolidate memories",
+            SlashCommand::MemoryRecall => "recall memories and inject into context",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Fast => "toggle Fast mode to enable fastest inference at 2X plan usage",
             SlashCommand::Personality => "choose a communication style for Codex",
@@ -131,6 +134,7 @@ impl SlashCommand {
                 | SlashCommand::Plan
                 | SlashCommand::Fast
                 | SlashCommand::SandboxReadRoot
+                | SlashCommand::MemoryRecall
         )
     }
 
@@ -154,9 +158,7 @@ impl SlashCommand {
             | SlashCommand::Review
             | SlashCommand::Plan
             | SlashCommand::Clear
-            | SlashCommand::Logout
-            | SlashCommand::MemoryDrop
-            | SlashCommand::MemoryUpdate => false,
+            | SlashCommand::Logout => false,
             SlashCommand::Diff
             | SlashCommand::Copy
             | SlashCommand::Rename
@@ -166,6 +168,9 @@ impl SlashCommand {
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop
+            | SlashCommand::MemoryDrop
+            | SlashCommand::MemoryUpdate
+            | SlashCommand::MemoryRecall
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Plugins

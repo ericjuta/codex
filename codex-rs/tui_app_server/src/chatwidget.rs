@@ -4497,6 +4497,10 @@ impl ChatWidget {
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
+        widget.bottom_pane.set_agentmemory_enabled(
+            widget.config.memories.backend
+                == codex_core::config::types::MemoryBackend::Agentmemory,
+        );
         widget
             .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
@@ -5049,10 +5053,13 @@ impl ChatWidget {
                 self.clean_background_terminals();
             }
             SlashCommand::MemoryDrop => {
-                self.add_app_server_stub_message("Memory maintenance");
+                self.submit_op(AppCommand::memory_drop());
             }
             SlashCommand::MemoryUpdate => {
-                self.add_app_server_stub_message("Memory maintenance");
+                self.submit_op(AppCommand::memory_update());
+            }
+            SlashCommand::MemoryRecall => {
+                self.submit_op(AppCommand::memory_recall(None));
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
@@ -5220,6 +5227,16 @@ impl ChatWidget {
                     },
                     user_facing_hint: None,
                 }));
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryRecall if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                self.submit_op(AppCommand::memory_recall(Some(prepared_args)));
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {

@@ -145,6 +145,9 @@ Example with notification opt-out:
 - `thread/name/set` — set or update a thread’s user-facing name for either a loaded thread or a persisted rollout; returns `{}` on success and emits `thread/name/updated` to initialized, opted-in clients. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
+- `thread/memory/drop` — clear the active memory store using the thread's configured memory backend; returns `{}` when the request is accepted.
+- `thread/memory/update` — trigger a memory sync/consolidation pass using the thread's configured memory backend; returns `{}` when the request is accepted.
+- `thread/memory/recall` — retrieve memory context for a thread and inject it into that thread as developer instructions; accepts optional `query` and returns `{}` when the recall request is accepted.
 - `thread/shellCommand` — run a user-initiated `!` shell command against a thread; this runs unsandboxed with full access rather than inheriting the thread sandbox policy. Returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
@@ -452,6 +455,30 @@ If the thread does not already have an active turn, the server starts a standalo
 ```json
 { "method": "thread/shellCommand", "id": 26, "params": { "threadId": "thr_b", "command": "git status --short" } }
 { "id": 26, "result": {} }
+```
+
+### Example: Manage thread memory
+
+Use the thread-scoped memory methods to mirror the legacy TUI slash commands:
+
+- `thread/memory/drop` clears the active memory store for the configured backend.
+- `thread/memory/update` triggers a backend-specific sync/consolidation pass.
+- `thread/memory/recall` retrieves memory context and injects it into the thread as developer instructions.
+
+All three requests return immediately with `{}`. Result details surface through the normal thread event stream as warning/error items, just like the equivalent core ops.
+
+```json
+{ "method": "thread/memory/drop", "id": 27, "params": { "threadId": "thr_b" } }
+{ "id": 27, "result": {} }
+
+{ "method": "thread/memory/update", "id": 28, "params": { "threadId": "thr_b" } }
+{ "id": 28, "result": {} }
+
+{ "method": "thread/memory/recall", "id": 29, "params": {
+    "threadId": "thr_b",
+    "query": "recent auth failures"
+} }
+{ "id": 29, "result": {} }
 ```
 
 ### Example: Start a turn (send user input)

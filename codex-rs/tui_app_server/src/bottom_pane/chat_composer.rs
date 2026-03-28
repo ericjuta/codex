@@ -406,6 +406,7 @@ pub(crate) struct ChatComposer {
     plugins_command_enabled: bool,
     fast_command_enabled: bool,
     personality_command_enabled: bool,
+    agentmemory_enabled: bool,
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
     windows_degraded_sandbox_active: bool,
@@ -445,6 +446,7 @@ impl ChatComposer {
             plugins_command_enabled: self.plugins_command_enabled,
             fast_command_enabled: self.fast_command_enabled,
             personality_command_enabled: self.personality_command_enabled,
+            agentmemory_enabled: self.agentmemory_enabled,
             realtime_conversation_enabled: self.realtime_conversation_enabled,
             audio_device_selection_enabled: self.audio_device_selection_enabled,
             allow_elevate_sandbox: self.windows_degraded_sandbox_active,
@@ -530,6 +532,7 @@ impl ChatComposer {
             plugins_command_enabled: false,
             fast_command_enabled: false,
             personality_command_enabled: false,
+            agentmemory_enabled: false,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
             windows_degraded_sandbox_active: false,
@@ -617,6 +620,10 @@ impl ChatComposer {
 
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
         self.personality_command_enabled = enabled;
+    }
+
+    pub fn set_agentmemory_enabled(&mut self, enabled: bool) {
+        self.agentmemory_enabled = enabled;
     }
 
     pub fn set_realtime_conversation_enabled(&mut self, enabled: bool) {
@@ -3501,6 +3508,7 @@ impl ChatComposer {
                     let plugins_command_enabled = self.plugins_command_enabled;
                     let fast_command_enabled = self.fast_command_enabled;
                     let personality_command_enabled = self.personality_command_enabled;
+                    let agentmemory_enabled = self.agentmemory_enabled;
                     let realtime_conversation_enabled = self.realtime_conversation_enabled;
                     let audio_device_selection_enabled = self.audio_device_selection_enabled;
                     let mut command_popup = CommandPopup::new(
@@ -3511,6 +3519,7 @@ impl ChatComposer {
                             plugins_command_enabled,
                             fast_command_enabled,
                             personality_command_enabled,
+                            agentmemory_enabled,
                             realtime_conversation_enabled,
                             audio_device_selection_enabled,
                             windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
