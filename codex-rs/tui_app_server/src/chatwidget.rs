@@ -4498,8 +4498,7 @@ impl ChatWidget {
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
         widget.bottom_pane.set_agentmemory_enabled(
-            widget.config.memories.backend
-                == codex_core::config::types::MemoryBackend::Agentmemory,
+            widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory,
         );
         widget
             .bottom_pane
@@ -9805,11 +9804,6 @@ impl ChatWidget {
     pub(crate) fn add_error_message(&mut self, message: String) {
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
-    }
-
-    fn add_app_server_stub_message(&mut self, feature: &str) {
-        warn!(feature, "stubbed unsupported app-server TUI feature");
-        self.add_error_message(format!("{feature}: {APP_SERVER_TUI_STUB_MESSAGE}"));
     }
 
     fn rename_confirmation_cell(name: &str, thread_id: Option<ThreadId>) -> PlainHistoryCell {
