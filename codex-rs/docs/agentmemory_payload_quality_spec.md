@@ -25,20 +25,28 @@ What is already working:
   - `pre_tool_use`
   - `post_tool_use`
   - `post_tool_failure`
+  - `assistant_result`
   - `stop`
 - Prompt, tool input, tool output, and error fields are mapped into the
   canonical Agentmemory schema.
+- Structured tool arguments are parsed from JSON command strings into
+  searchable top-level fields (`file_path`, `path`, `pattern`, `query`, etc.).
+- File-aware enrichment surfaces `files[]` and `search_terms[]` on tool events.
+- Assistant conclusions are captured at turn completion (`is_final: true`) and
+  progressively as each message block completes streaming (`is_final: false`).
+- Mid-session memory retrieval via `/memory-recall [query]` injects recalled
+  context as developer messages into the active conversation.
+- Token-budgeted context injection at session startup via `/agentmemory/context`.
+- All event capture is non-blocking via `tokio::spawn`.
+- Assistant text truncated to 4096 bytes respecting UTF-8 boundaries.
 
 Remaining gaps:
 
-- `pre_tool_use` often contains only a shell-style command string instead of
-  structured tool arguments.
-- assistant conclusions/final answers are not emitted as first-class memory
-  payloads.
-- repeated lifecycle hooks create noisy timelines.
-- file-enrichment opportunities are weaker than the standalone JavaScript hook
-  path because Codex does not yet forward structured file arguments in the same
-  way.
+- Tool output payloads (`post_tool_use`) have no size cap and may cause
+  memory bloat for large file reads.
+- `pre_tool_use` fires unconditionally for all tools; no selective filtering
+  to reduce timeline noise for low-signal events.
+- Real-session quality evaluation fixtures are deferred (unit tests exist).
 
 ## Desired Outcomes
 
@@ -184,8 +192,11 @@ Acceptance criteria:
 
 1. ~~suppress or gate low-value lifecycle observations~~ — kept all events including pre_tool_use; enriched with structured args instead of gating
 2. ~~forward richer structured tool input~~ — implemented
-3. ~~add assistant-result capture~~ — implemented
+3. ~~add assistant-result capture~~ — implemented; streaming intermediate capture added (`is_final: false` per completed message block)
 4. ~~add evaluation fixtures and compare before/after quality~~ — unit tests added; real-session fixture comparison is deferred
+5. ~~mid-session memory retrieval~~ — implemented via `/memory-recall [query]` slash command and `Op::RecallMemories`
+6. tool output size caps — not yet implemented
+7. selective pre_tool_use filtering — not yet implemented
 
 ## Risks
 
