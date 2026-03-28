@@ -32,6 +32,7 @@ pub(crate) struct SessionState {
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
+    agentmemory_session_ended: bool,
     granted_permissions: Option<PermissionProfile>,
 }
 
@@ -50,6 +51,7 @@ impl SessionState {
             startup_prewarm: None,
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
+            agentmemory_session_ended: false,
             granted_permissions: None,
         }
     }
@@ -204,6 +206,14 @@ impl SessionState {
         &mut self,
     ) -> Option<codex_hooks::SessionStartSource> {
         self.pending_session_start_source.take()
+    }
+
+    pub(crate) fn agentmemory_session_ended(&self) -> bool {
+        self.agentmemory_session_ended
+    }
+
+    pub(crate) fn set_agentmemory_session_ended(&mut self, ended: bool) {
+        self.agentmemory_session_ended = ended;
     }
 
     pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {

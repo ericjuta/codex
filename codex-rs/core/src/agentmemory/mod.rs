@@ -69,15 +69,13 @@ impl AgentmemoryAdapter {
              Your context is bounded; use targeted queries to expand details as needed."
                 .to_string();
 
-        if let Ok(res) = context_result {
-            if let Ok(json_res) = res.json::<serde_json::Value>().await {
-                if let Some(context_str) = json_res.get("context").and_then(|v| v.as_str()) {
-                    if !context_str.is_empty() {
-                        instructions.push_str("\n\n");
-                        instructions.push_str(context_str);
-                    }
-                }
-            }
+        if let Ok(res) = context_result
+            && let Ok(json_res) = res.json::<serde_json::Value>().await
+            && let Some(context_str) = json_res.get("context").and_then(|v| v.as_str())
+            && !context_str.is_empty()
+        {
+            instructions.push_str("\n\n");
+            instructions.push_str(context_str);
         }
 
         Some(instructions)
@@ -86,49 +84,46 @@ impl AgentmemoryAdapter {
     /// Attempts to parse a tool command string as JSON to recover structured
     /// arguments. Falls back to the original string value on parse failure.
     fn parse_structured_tool_input(raw: &serde_json::Value) -> serde_json::Value {
-        if let Some(s) = raw.as_str() {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(s) {
-                if parsed.is_object() {
-                    return parsed;
-                }
-            }
+        if let Some(s) = raw.as_str()
+            && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(s)
+            && parsed.is_object()
+        {
+            return parsed;
         }
         raw.clone()
     }
 
     /// Extracts file paths and search terms from structured tool arguments
     /// so that Agentmemory observations mention the relevant paths and queries.
-    fn extract_file_enrichment(
-        tool_input: &serde_json::Value,
-    ) -> (Vec<String>, Vec<String>) {
+    fn extract_file_enrichment(tool_input: &serde_json::Value) -> (Vec<String>, Vec<String>) {
         let mut files: Vec<String> = Vec::new();
         let mut search_terms: Vec<String> = Vec::new();
 
         if let Some(obj) = tool_input.as_object() {
             // File path fields
             for key in &["file_path", "path", "dir_path"] {
-                if let Some(v) = obj.get(*key).and_then(|v| v.as_str()) {
-                    if !v.is_empty() {
-                        files.push(v.to_string());
-                    }
+                if let Some(v) = obj.get(*key).and_then(|v| v.as_str())
+                    && !v.is_empty()
+                {
+                    files.push(v.to_string());
                 }
             }
             // Array of paths
             if let Some(arr) = obj.get("paths").and_then(|v| v.as_array()) {
                 for item in arr {
-                    if let Some(s) = item.as_str() {
-                        if !s.is_empty() {
-                            files.push(s.to_string());
-                        }
+                    if let Some(s) = item.as_str()
+                        && !s.is_empty()
+                    {
+                        files.push(s.to_string());
                     }
                 }
             }
             // Search / pattern fields
             for key in &["query", "pattern", "glob"] {
-                if let Some(v) = obj.get(*key).and_then(|v| v.as_str()) {
-                    if !v.is_empty() {
-                        search_terms.push(v.to_string());
-                    }
+                if let Some(v) = obj.get(*key).and_then(|v| v.as_str())
+                    && !v.is_empty()
+                {
+                    search_terms.push(v.to_string());
                 }
             }
         }
@@ -290,8 +285,7 @@ impl AgentmemoryAdapter {
                     .get("assistant_text")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let truncated =
-                    Self::truncate_text(assistant_text, Self::ASSISTANT_TEXT_MAX_BYTES);
+                let truncated = Self::truncate_text(assistant_text, Self::ASSISTANT_TEXT_MAX_BYTES);
                 (
                     "assistant_result",
                     json!({
@@ -370,7 +364,10 @@ impl AgentmemoryAdapter {
             .map_err(|e| e.to_string())?;
 
         if !res.status().is_success() {
-            return Err(format!("Context retrieval failed with status {}", res.status()));
+            return Err(format!(
+                "Context retrieval failed with status {}",
+                res.status()
+            ));
         }
 
         let json_res: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
@@ -457,6 +454,12 @@ mod tests {
     use serde_json::json;
     use std::ffi::OsString;
     use std::sync::Mutex;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::body_json;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -577,7 +580,10 @@ mod tests {
         let formatted = adapter.format_agentmemory_payload("PostToolUse", raw_payload);
 
         // tool_input should be the parsed object, not the raw string.
-        assert_eq!(formatted["data"]["tool_input"]["file_path"], "/proj/src/main.rs");
+        assert_eq!(
+            formatted["data"]["tool_input"]["file_path"],
+            "/proj/src/main.rs"
+        );
         assert_eq!(formatted["data"]["tool_input"]["offset"], 1);
         // File enrichment should surface the path.
         assert_eq!(formatted["data"]["files"][0], "/proj/src/main.rs");
@@ -658,7 +664,10 @@ mod tests {
 
         assert_eq!(formatted["hookType"], "assistant_result");
         assert_eq!(formatted["sessionId"], "s1");
-        assert_eq!(formatted["data"]["assistant_text"], "The build succeeded with no warnings.");
+        assert_eq!(
+            formatted["data"]["assistant_text"],
+            "The build succeeded with no warnings."
+        );
         assert_eq!(formatted["data"]["is_final"], true);
         assert_eq!(formatted["data"]["turn_id"], "t1");
         assert_eq!(formatted["data"]["model"], "claude-opus-4-6");
@@ -700,6 +709,58 @@ mod tests {
         assert_eq!(files.len(), 2);
         assert_eq!(files[0], "/proj/a.rs");
         assert_eq!(files[1], "/proj/b.rs");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn test_start_session_posts_expected_payload() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _agentmemory_url_guard = EnvVarGuard::set("AGENTMEMORY_URL", server.uri().as_str());
+
+        Mock::given(method("POST"))
+            .and(path("/agentmemory/session/start"))
+            .and(body_json(json!({
+                "sessionId": "session-1",
+                "project": "/tmp/project",
+                "cwd": "/tmp/project",
+            })))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        adapter
+            .start_session(
+                "session-1",
+                Path::new("/tmp/project"),
+                Path::new("/tmp/project"),
+            )
+            .await
+            .expect("session start should succeed");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn test_end_session_posts_expected_payload() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _agentmemory_url_guard = EnvVarGuard::set("AGENTMEMORY_URL", server.uri().as_str());
+
+        Mock::given(method("POST"))
+            .and(path("/agentmemory/session/end"))
+            .and(body_json(json!({
+                "sessionId": "session-1",
+            })))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        adapter
+            .end_session("session-1")
+            .await
+            .expect("session end should succeed");
     }
 
     #[test]

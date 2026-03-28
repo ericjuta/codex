@@ -1272,6 +1272,40 @@ impl Session {
         Ok((network_proxy, session_network_proxy))
     }
 
+    async fn start_agentmemory_session(&self, cwd: &Path) -> Result<(), String> {
+        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+        let session_id = self.conversation_id.to_string();
+        adapter.start_session(session_id.as_str(), cwd, cwd).await
+    }
+
+    async fn end_agentmemory_session_if_needed(&self) {
+        if self.get_config().await.memories.backend
+            != crate::config::types::MemoryBackend::Agentmemory
+        {
+            return;
+        }
+
+        let should_end = {
+            let state = self.state.lock().await;
+            !state.agentmemory_session_ended()
+        };
+        if !should_end {
+            return;
+        }
+
+        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+        let session_id = self.conversation_id.to_string();
+        match adapter.end_session(session_id.as_str()).await {
+            Ok(()) => {
+                let mut state = self.state.lock().await;
+                state.set_agentmemory_session_ended(true);
+            }
+            Err(err) => {
+                warn!("Agentmemory session end failed for {session_id}: {err}");
+            }
+        }
+    }
+
     /// Don't expand the number of mutated arguments on config. We are in the process of getting rid of it.
     pub(crate) fn build_per_turn_config(session_configuration: &SessionConfiguration) -> Config {
         // todo(aibrahim): store this state somewhere else so we don't need to mut config
@@ -1948,6 +1982,17 @@ impl Session {
         .chain(post_session_configured_events.into_iter());
         for event in events {
             sess.send_event_raw(event).await;
+        }
+
+        if config.memories.backend == crate::config::types::MemoryBackend::Agentmemory
+            && let Err(err) = sess
+                .start_agentmemory_session(session_configuration.cwd.as_path())
+                .await
+        {
+            warn!(
+                "Agentmemory session start failed for {}: {err}",
+                sess.conversation_id
+            );
         }
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
@@ -4488,6 +4533,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
     }
     // Also drain cached guardian state if the submission loop exits because
     // the channel closed without receiving an explicit shutdown op.
+    sess.end_agentmemory_session_if_needed().await;
     sess.guardian_review_session.shutdown().await;
     debug!("Agent loop exited");
 }
@@ -4548,6 +4594,8 @@ mod handlers {
     use crate::tasks::UserShellCommandTask;
     use crate::tasks::execute_user_shell_command;
     use codex_protocol::custom_prompts::CustomPrompt;
+    use codex_protocol::models::DeveloperInstructions;
+    use codex_protocol::models::ResponseItem;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -4565,8 +4613,6 @@ mod handlers {
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
-    use codex_protocol::models::DeveloperInstructions;
-    use codex_protocol::models::ResponseItem;
     use codex_protocol::request_permissions::RequestPermissionsResponse;
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
@@ -5411,15 +5457,7 @@ mod handlers {
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
-        if sess.get_config().await.memories.backend
-            == crate::config::types::MemoryBackend::Agentmemory
-        {
-            let adapter = crate::agentmemory::AgentmemoryAdapter::new();
-            let session_id = sess.conversation_id.to_string();
-            if let Err(e) = adapter.end_session(session_id.as_str()).await {
-                warn!("Agentmemory session end failed for {session_id}: {e}");
-            }
-        }
+        sess.end_agentmemory_session_if_needed().await;
         let _ = sess.conversation.shutdown().await;
         sess.services
             .unified_exec_manager
@@ -6085,39 +6123,33 @@ pub(crate) async fn run_turn(
                         == crate::config::types::MemoryBackend::Agentmemory
                     {
                         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
-                        let stop_payload =
-                            serde_json::to_value(&stop_request).unwrap_or_default();
+                        let stop_payload = serde_json::to_value(&stop_request).unwrap_or_default();
 
                         // Emit an assistant_result observation when the turn
                         // produced a meaningful assistant conclusion. This
                         // ensures sessions with little tool usage still create
                         // useful memory records.
-                        let assistant_result_payload =
-                            if let Some(ref text) = last_agent_message {
-                                if !text.trim().is_empty() {
-                                    Some(serde_json::json!({
-                                        "session_id": sess.conversation_id.to_string(),
-                                        "turn_id": turn_context.sub_id.clone(),
-                                        "cwd": turn_context.cwd.to_string_lossy().to_string(),
-                                        "model": turn_context.model_info.slug.clone(),
-                                        "assistant_text": text,
-                                        "is_final": true,
-                                    }))
-                                } else {
-                                    None
-                                }
+                        let assistant_result_payload = if let Some(ref text) = last_agent_message {
+                            if !text.trim().is_empty() {
+                                Some(serde_json::json!({
+                                    "session_id": sess.conversation_id.to_string(),
+                                    "turn_id": turn_context.sub_id.clone(),
+                                    "cwd": turn_context.cwd.to_string_lossy().to_string(),
+                                    "model": turn_context.model_info.slug.clone(),
+                                    "assistant_text": text,
+                                    "is_final": true,
+                                }))
                             } else {
                                 None
-                            };
+                            }
+                        } else {
+                            None
+                        };
 
                         tokio::spawn(async move {
-                            adapter
-                                .capture_event("Stop", stop_payload)
-                                .await;
+                            adapter.capture_event("Stop", stop_payload).await;
                             if let Some(ar_payload) = assistant_result_payload {
-                                adapter
-                                    .capture_event("AssistantResult", ar_payload)
-                                    .await;
+                                adapter.capture_event("AssistantResult", ar_payload).await;
                             }
                         });
                     }

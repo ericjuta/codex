@@ -105,15 +105,7 @@ pub(crate) async fn run_pending_session_start_hooks(
     if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
         let payload = request.clone();
-        let session_id = request.session_id.to_string();
-        let cwd = request.cwd.clone();
         tokio::spawn(async move {
-            if let Err(e) = adapter
-                .start_session(session_id.as_str(), cwd.as_path(), cwd.as_path())
-                .await
-            {
-                tracing::warn!("Agentmemory session start failed for {session_id}: {e}");
-            }
             adapter
                 .capture_event(
                     "SessionStart",
@@ -246,7 +238,7 @@ pub(crate) async fn run_post_tool_use_failure_hooks(
 
     if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
-        let payload = request.clone();
+        let payload = request;
         tokio::spawn(async move {
             adapter
                 .capture_event(

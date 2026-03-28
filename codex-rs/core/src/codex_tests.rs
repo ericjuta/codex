@@ -105,9 +105,16 @@ use rmcp::model::JsonObject;
 use rmcp::model::Tool;
 use serde::Deserialize;
 use serde_json::json;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::body_json;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 #[path = "codex_tests_guardian.rs"]
 mod guardian_tests;
@@ -116,6 +123,34 @@ use codex_protocol::models::function_call_output_content_items_to_text;
 
 fn expect_text_tool_output(output: &FunctionToolOutput) -> String {
     function_call_output_content_items_to_text(&output.body).unwrap_or_default()
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match self.original.take() {
+            Some(value) => unsafe {
+                std::env::set_var(self.key, value);
+            },
+            None => unsafe {
+                std::env::remove_var(self.key);
+            },
+        }
+    }
 }
 
 struct InstructionsTestCase {
@@ -3287,6 +3322,37 @@ async fn shutdown_and_wait_waits_when_shutdown_is_already_in_progress() {
         .await
         .expect("shutdown waiter join")
         .expect("shutdown waiter");
+}
+
+#[tokio::test]
+#[serial_test::serial(agentmemory_env)]
+async fn submission_loop_closes_agentmemory_session_when_channel_closes() {
+    let server = MockServer::start().await;
+    let _agentmemory_url_guard = EnvVarGuard::set("AGENTMEMORY_URL", server.uri().as_str());
+
+    let (session, _turn_context) = make_session_and_context().await;
+    let mut config = (*session.get_config().await).clone();
+    config.memories.backend = crate::config::types::MemoryBackend::Agentmemory;
+    {
+        let mut state = session.state.lock().await;
+        state.session_configuration.original_config_do_not_use = Arc::new(config.clone());
+    }
+    let session = Arc::new(session);
+
+    Mock::given(method("POST"))
+        .and(path("/agentmemory/session/end"))
+        .and(body_json(json!({
+            "sessionId": session.conversation_id.to_string(),
+        })))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (tx_sub, rx_sub) = async_channel::bounded::<Submission>(1);
+    drop(tx_sub);
+
+    submission_loop(session, Arc::new(config), rx_sub).await;
 }
 
 #[tokio::test]
