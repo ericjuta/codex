@@ -69,7 +69,8 @@ pub trait ToolHandler: Send + Sync {
         invocation: &ToolInvocation,
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
-        let tool_response = result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
+        let tool_response =
+            result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
             tool_name: invocation.tool_name.clone(),
             command: invocation.payload.log_payload().into_owned(),
@@ -363,10 +364,7 @@ impl ToolRegistry {
         let post_tool_use_payload = if success {
             let guard = response_cell.lock().await;
             guard.as_ref().and_then(|result| {
-                handler.post_tool_use_payload(
-                    &invocation,
-                    result.result.as_ref(),
-                )
+                handler.post_tool_use_payload(&invocation, result.result.as_ref())
             })
         } else {
             None

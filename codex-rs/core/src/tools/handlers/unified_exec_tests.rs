@@ -210,7 +210,7 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
             payload,
         }),
         Some(crate::tools::registry::PreToolUsePayload {
-tool_name: "exec_command".to_string(),
+            tool_name: "exec_command".to_string(),
             command: "printf exec command".to_string(),
         })
     );
@@ -273,7 +273,7 @@ async fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_s
     assert_eq!(
         UnifiedExecHandler.post_tool_use_payload(&invocation, &output),
         Some(crate::tools::registry::PostToolUsePayload {
-tool_name: "exec_command".to_string(),
+            tool_name: "exec_command".to_string(),
             command: "echo three".to_string(),
             tool_response: serde_json::json!("three"),
         })

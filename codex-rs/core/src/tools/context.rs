@@ -214,9 +214,9 @@ impl ToolOutput for FunctionToolOutput {
     }
 
     fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
-        self.post_tool_use_response.clone().or_else(|| {
-            serde_json::to_value(&self.body).ok()
-        })
+        self.post_tool_use_response
+            .clone()
+            .or_else(|| serde_json::to_value(&self.body).ok())
     }
 }
 
