@@ -38,7 +38,15 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
         .filter(|(_, cmd)| flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
         .filter(|(_, cmd)| flags.audio_device_selection_enabled || *cmd != SlashCommand::Settings)
-        .filter(|(_, cmd)| flags.agentmemory_enabled || !matches!(*cmd, SlashCommand::MemoryDrop | SlashCommand::MemoryUpdate))
+        .filter(|(_, cmd)| {
+            flags.agentmemory_enabled
+                || !matches!(
+                    *cmd,
+                    SlashCommand::MemoryDrop
+                        | SlashCommand::MemoryUpdate
+                        | SlashCommand::MemoryRecall
+                )
+        })
         .collect()
 }
 
@@ -73,6 +81,7 @@ mod tests {
             realtime_conversation_enabled: true,
             audio_device_selection_enabled: true,
             allow_elevate_sandbox: true,
+            agentmemory_enabled: true,
         }
     }
 

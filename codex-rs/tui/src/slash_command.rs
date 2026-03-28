@@ -64,6 +64,8 @@ pub enum SlashCommand {
     MemoryDrop,
     #[strum(serialize = "memory-update")]
     MemoryUpdate,
+    #[strum(serialize = "memory-recall")]
+    MemoryRecall,
 }
 
 impl SlashCommand {
@@ -94,6 +96,7 @@ impl SlashCommand {
             SlashCommand::Stop => "stop all background terminals",
             SlashCommand::MemoryDrop => "clear the active memory store",
             SlashCommand::MemoryUpdate => "sync and consolidate memories",
+            SlashCommand::MemoryRecall => "recall memories and inject into context",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Fast => "toggle Fast mode to enable fastest inference at 2X plan usage",
             SlashCommand::Personality => "choose a communication style for Codex",
@@ -133,6 +136,7 @@ impl SlashCommand {
                 | SlashCommand::Plan
                 | SlashCommand::Fast
                 | SlashCommand::SandboxReadRoot
+                | SlashCommand::MemoryRecall
         )
     }
 
@@ -168,6 +172,7 @@ impl SlashCommand {
             | SlashCommand::Stop
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate
+            | SlashCommand::MemoryRecall
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Plugins

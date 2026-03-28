@@ -4438,6 +4438,10 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::update_memories(&sess, &config, sub.id.clone()).await;
                     false
                 }
+                Op::RecallMemories { query } => {
+                    handlers::recall_memories(&sess, &config, sub.id.clone(), query).await;
+                    false
+                }
                 Op::ThreadRollback { num_turns } => {
                     handlers::thread_rollback(&sess, sub.id.clone(), num_turns).await;
                     false
@@ -4561,6 +4565,8 @@ mod handlers {
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
+    use codex_protocol::models::DeveloperInstructions;
+    use codex_protocol::models::ResponseItem;
     use codex_protocol::request_permissions::RequestPermissionsResponse;
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
@@ -5169,6 +5175,68 @@ mod handlers {
             }),
         })
         .await;
+    }
+
+    pub async fn recall_memories(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        query: Option<String>,
+    ) {
+        if config.memories.backend != crate::config::types::MemoryBackend::Agentmemory {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Warning(WarningEvent {
+                    message: "Memory recall requires agentmemory backend.".to_string(),
+                }),
+            })
+            .await;
+            return;
+        }
+
+        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+        let session_id = sess.conversation_id.to_string();
+
+        match adapter
+            .recall_context(&session_id, config.cwd.as_ref(), query.as_deref(), 2000)
+            .await
+        {
+            Ok(context) if !context.trim().is_empty() => {
+                let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
+                let message: ResponseItem = DeveloperInstructions::new(format!(
+                    "<agentmemory-recall>\n{context}\n</agentmemory-recall>"
+                ))
+                .into();
+                sess.record_conversation_items(&turn_context, std::slice::from_ref(&message))
+                    .await;
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Warning(WarningEvent {
+                        message: "Memory context recalled and injected.".to_string(),
+                    }),
+                })
+                .await;
+            }
+            Ok(_) => {
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Warning(WarningEvent {
+                        message: "No relevant memory context found.".to_string(),
+                    }),
+                })
+                .await;
+            }
+            Err(e) => {
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: format!("Memory recall failed: {e}"),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                })
+                .await;
+            }
+        }
     }
 
     pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) {
@@ -7255,6 +7323,24 @@ async fn handle_assistant_item_done_in_plan_mode(
 
         record_completed_response_item(sess, turn_context, item).await;
         if let Some(agent_message) = last_assistant_message_from_item(item, /*plan_mode*/ true) {
+            // Capture intermediate assistant text in plan mode.
+            if turn_context.config.memories.backend
+                == crate::config::types::MemoryBackend::Agentmemory
+                && !agent_message.trim().is_empty()
+            {
+                let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+                let payload = serde_json::json!({
+                    "session_id": sess.conversation_id.to_string(),
+                    "turn_id": turn_context.sub_id.clone(),
+                    "cwd": turn_context.cwd.to_string_lossy().to_string(),
+                    "model": turn_context.model_info.slug.clone(),
+                    "assistant_text": agent_message,
+                    "is_final": false,
+                });
+                tokio::spawn(async move {
+                    adapter.capture_event("AssistantResult", payload).await;
+                });
+            }
             *last_agent_message = Some(agent_message);
         }
         return true;
@@ -7410,6 +7496,26 @@ async fn try_run_sampling_request(
                     in_flight.push_back(tool_future);
                 }
                 if let Some(agent_message) = output_result.last_agent_message {
+                    // Capture intermediate assistant text to agentmemory as it
+                    // streams (is_final=false). The final capture happens at
+                    // turn completion with is_final=true.
+                    if turn_context.config.memories.backend
+                        == crate::config::types::MemoryBackend::Agentmemory
+                        && !agent_message.trim().is_empty()
+                    {
+                        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+                        let payload = serde_json::json!({
+                            "session_id": sess.conversation_id.to_string(),
+                            "turn_id": turn_context.sub_id.clone(),
+                            "cwd": turn_context.cwd.to_string_lossy().to_string(),
+                            "model": turn_context.model_info.slug.clone(),
+                            "assistant_text": agent_message,
+                            "is_final": false,
+                        });
+                        tokio::spawn(async move {
+                            adapter.capture_event("AssistantResult", payload).await;
+                        });
+                    }
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;

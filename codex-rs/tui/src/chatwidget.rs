@@ -3834,7 +3834,7 @@ impl ChatWidget {
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
         widget.bottom_pane.set_agentmemory_enabled(
-            widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory
+            widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory,
         );
         widget
             .bottom_pane
@@ -4041,7 +4041,7 @@ impl ChatWidget {
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
         widget.bottom_pane.set_agentmemory_enabled(
-            widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory
+            widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory,
         );
         widget
             .bottom_pane
@@ -4240,7 +4240,7 @@ impl ChatWidget {
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
         widget.bottom_pane.set_agentmemory_enabled(
-            widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory
+            widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory,
         );
         widget
             .bottom_pane
@@ -4803,6 +4803,9 @@ impl ChatWidget {
             SlashCommand::MemoryUpdate => {
                 self.submit_op(Op::UpdateMemories);
             }
+            SlashCommand::MemoryRecall => {
+                self.submit_op(Op::RecallMemories { query: None });
+            }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
@@ -4992,6 +4995,12 @@ impl ChatWidget {
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
                         path: prepared_args,
                     });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryRecall if !trimmed.is_empty() => {
+                self.submit_op(Op::RecallMemories {
+                    query: Some(trimmed.to_string()),
+                });
                 self.bottom_pane.drain_pending_submission_state();
             }
             _ => self.dispatch_command(cmd),

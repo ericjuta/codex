@@ -339,6 +339,48 @@ impl AgentmemoryAdapter {
         }
     }
 
+    /// Retrieves memory context mid-session via `agentmemory`'s hybrid search.
+    ///
+    /// Unlike `build_startup_developer_instructions`, this uses the real
+    /// session ID and an optional query to scope retrieval.
+    pub async fn recall_context(
+        &self,
+        session_id: &str,
+        project: &Path,
+        query: Option<&str>,
+        token_budget: usize,
+    ) -> Result<String, String> {
+        let client = get_client();
+        let url = format!("{}/agentmemory/context", self.api_base());
+
+        let mut body = json!({
+            "sessionId": session_id,
+            "project": project.to_string_lossy(),
+            "budget": token_budget,
+        });
+        if let Some(q) = query {
+            body["query"] = serde_json::Value::String(q.to_string());
+        }
+
+        let res = client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !res.status().is_success() {
+            return Err(format!("Context retrieval failed with status {}", res.status()));
+        }
+
+        let json_res: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+        Ok(json_res
+            .get("context")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string())
+    }
+
     /// Registers a session so Agentmemory's session-backed views can discover it.
     pub async fn start_session(
         &self,

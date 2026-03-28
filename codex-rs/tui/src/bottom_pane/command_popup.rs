@@ -520,6 +520,7 @@ mod tests {
                 realtime_conversation_enabled: false,
                 audio_device_selection_enabled: false,
                 windows_degraded_sandbox_active: false,
+                agentmemory_enabled: false,
             },
         );
         popup.on_composer_text_change("/collab".to_string());
@@ -543,6 +544,7 @@ mod tests {
                 realtime_conversation_enabled: false,
                 audio_device_selection_enabled: false,
                 windows_degraded_sandbox_active: false,
+                agentmemory_enabled: false,
             },
         );
         popup.on_composer_text_change("/plan".to_string());
@@ -566,6 +568,7 @@ mod tests {
                 realtime_conversation_enabled: false,
                 audio_device_selection_enabled: false,
                 windows_degraded_sandbox_active: false,
+                agentmemory_enabled: false,
             },
         );
         popup.on_composer_text_change("/pers".to_string());
@@ -597,6 +600,7 @@ mod tests {
                 realtime_conversation_enabled: false,
                 audio_device_selection_enabled: false,
                 windows_degraded_sandbox_active: false,
+                agentmemory_enabled: false,
             },
         );
         popup.on_composer_text_change("/personality".to_string());
@@ -620,6 +624,7 @@ mod tests {
                 realtime_conversation_enabled: true,
                 audio_device_selection_enabled: false,
                 windows_degraded_sandbox_active: false,
+                agentmemory_enabled: false,
             },
         );
         popup.on_composer_text_change("/aud".to_string());
