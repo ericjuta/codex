@@ -30,7 +30,9 @@ with these raw asset names:
 - `librusty_v8_release_<target>.a.gz`
 - `src_binding_release_<target>.rs`
 
-The dedicated publishing workflow is `.github/workflows/rusty-v8-release.yml`.
+In the upstream repository, the dedicated publishing workflow is
+.github/workflows/rusty-v8-release.yml.
+Private forks may remove that workflow and stage artifacts by other means.
 It builds musl release pairs from source and keeps the release artifacts as the
 statically linked form:
 

@@ -16,7 +16,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = REPO_ROOT / "codex-cli" / "scripts" / "build_npm_package.py"
 INSTALL_NATIVE_DEPS = REPO_ROOT / "codex-cli" / "scripts" / "install_native_deps.py"
-WORKFLOW_NAME = ".github/workflows/rust-release.yml"
+DEFAULT_WORKFLOW_NAME = ".github/workflows/rust-release.yml"
 GITHUB_REPO = "openai/codex"
 
 _SPEC = importlib.util.spec_from_file_location("codex_build_npm_package", BUILD_SCRIPT)
@@ -78,7 +78,7 @@ def expand_packages(packages: list[str]) -> list[str]:
     return expanded
 
 
-def resolve_release_workflow(version: str) -> dict:
+def resolve_release_workflow(version: str, workflow_name: str) -> dict:
     stdout = subprocess.check_output(
         [
             "gh",
@@ -89,7 +89,7 @@ def resolve_release_workflow(version: str) -> dict:
             "--json",
             "workflowName,url,headSha",
             "--workflow",
-            WORKFLOW_NAME,
+            workflow_name,
             "--jq",
             "first(.[])",
         ],
@@ -98,7 +98,12 @@ def resolve_release_workflow(version: str) -> dict:
     )
     workflow = json.loads(stdout or "null")
     if not workflow:
-        raise RuntimeError(f"Unable to find rust-release workflow for version {version}.")
+        raise RuntimeError(
+            "Unable to find a release workflow run for version "
+            f"{version} using {workflow_name}. "
+            "If this fork does not keep the upstream release workflows, pass "
+            "--workflow-url explicitly."
+        )
     return workflow
 
 
@@ -106,7 +111,8 @@ def resolve_workflow_url(version: str, override: str | None) -> tuple[str, str |
     if override:
         return override, None
 
-    workflow = resolve_release_workflow(version)
+    workflow_name = DEFAULT_WORKFLOW_NAME
+    workflow = resolve_release_workflow(version, workflow_name)
     return workflow["url"], workflow.get("headSha")
 
 
