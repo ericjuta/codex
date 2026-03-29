@@ -1781,7 +1781,7 @@ fn create_memory_recall_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "memory_recall".to_string(),
-        description: "Recall relevant agentmemory context for the current thread and project. Use this when historical context is needed and live memory is available in the current runtime."
+        description: "Recall relevant agentmemory context for the current thread and project. Use this when prior work, design rationale, earlier failures, or cross-session continuity matter and the current thread does not already contain enough context. Prefer targeted queries naming the feature, file, bug, or decision you need."
             .to_string(),
         strict: false,
         defer_loading: None,

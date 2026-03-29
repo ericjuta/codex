@@ -74,9 +74,10 @@ impl AgentmemoryAdapter {
         let context_result = client.post(&url).json(&request_body).send().await;
 
         let mut instructions =
-            "Use the `memory_recall` tool to retrieve relevant historical context when needed.\n\
+            "Use the `memory_recall` tool when the user asks about prior work, earlier decisions, previous failures, resumed threads, or other historical context that is not fully present in the current thread.\n\
              Agentmemory startup context may be attached below when available.\n\
-             Your context is bounded; prefer targeted recall queries over broad memory fetches."
+             Prefer targeted recall queries naming the feature, file, bug, or decision you need.\n\
+             Do not call `memory_recall` on every turn; first use the current thread context, then recall memory when that context appears insufficient."
                 .to_string();
 
         if let Ok(res) = context_result
@@ -554,8 +555,12 @@ mod tests {
             .expect("instructions should be returned");
 
         assert!(instructions.contains("Use the `memory_recall` tool"));
+        assert!(instructions.contains("prior work, earlier decisions, previous failures"));
         assert!(instructions.contains("Agentmemory startup context may be attached below"));
-        assert!(instructions.contains("prefer targeted recall queries over broad memory fetches"));
+        assert!(instructions.contains(
+            "Prefer targeted recall queries naming the feature, file, bug, or decision you need"
+        ));
+        assert!(instructions.contains("Do not call `memory_recall` on every turn"));
     }
 
     #[tokio::test]
