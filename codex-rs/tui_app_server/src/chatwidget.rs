@@ -5052,13 +5052,34 @@ impl ChatWidget {
                 self.clean_background_terminals();
             }
             SlashCommand::MemoryDrop => {
+                self.add_info_message(
+                    "Dropping stored memories...".to_string(),
+                    Some("Codex will report whether the memory store was cleared.".to_string()),
+                );
                 self.submit_op(AppCommand::memory_drop());
             }
             SlashCommand::MemoryUpdate => {
+                self.add_info_message(
+                    "Triggering memory update...".to_string(),
+                    Some(
+                        "Codex will report when the memory refresh request has been accepted."
+                            .to_string(),
+                    ),
+                );
                 self.submit_op(AppCommand::memory_update());
             }
             SlashCommand::MemoryRecall => {
-                self.submit_op(AppCommand::memory_recall(None));
+                if !self.ensure_memory_recall_thread() {
+                    return;
+                }
+                self.add_info_message(
+                    "Recalling memory context...".to_string(),
+                    Some(
+                        "Recalled memory will be injected into the current thread and shown here."
+                            .to_string(),
+                    ),
+                );
+                self.submit_op(AppCommand::memory_recall(/*query*/ None));
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
@@ -5229,12 +5250,22 @@ impl ChatWidget {
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::MemoryRecall if !trimmed.is_empty() => {
+                if !self.ensure_memory_recall_thread() {
+                    return;
+                }
                 let Some((prepared_args, _prepared_elements)) = self
                     .bottom_pane
                     .prepare_inline_args_submission(/*record_history*/ false)
                 else {
                     return;
                 };
+                self.add_info_message(
+                    format!("Recalling memory context for: {trimmed}"),
+                    Some(
+                        "Recalled memory will be injected into the current thread and shown here."
+                            .to_string(),
+                    ),
+                );
                 self.submit_op(AppCommand::memory_recall(Some(prepared_args)));
                 self.bottom_pane.drain_pending_submission_state();
             }
@@ -9804,6 +9835,19 @@ impl ChatWidget {
     pub(crate) fn add_error_message(&mut self, message: String) {
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
+    }
+
+    fn ensure_memory_recall_thread(&mut self) -> bool {
+        if self.thread_id.is_some() {
+            return true;
+        }
+
+        self.add_error_message(
+            "Start a new chat or resume an existing thread before using /memory-recall."
+                .to_string(),
+        );
+        self.bottom_pane.drain_pending_submission_state();
+        false
     }
 
     fn rename_confirmation_cell(name: &str, thread_id: Option<ThreadId>) -> PlainHistoryCell {

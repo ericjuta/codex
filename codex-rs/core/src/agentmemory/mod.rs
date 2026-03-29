@@ -3,6 +3,7 @@
 //! This module provides the seam for integrating the `agentmemory` service
 //! as a replacement for Codex's native memory engine.
 
+use serde::Serialize;
 use serde_json::json;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -16,6 +17,14 @@ pub struct AgentmemoryAdapter {
 /// A shared, pooled HTTP client for agentmemory interactions.
 /// Reusing the client allows connection pooling (keep-alive) for high throughput.
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+pub(crate) const DEFAULT_RUNTIME_RECALL_TOKEN_BUDGET: usize = 2_000;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct MemoryRecallResult {
+    pub(crate) recalled: bool,
+    pub(crate) context: String,
+}
 
 fn get_client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| reqwest::Client::builder().build().unwrap_or_default())
@@ -65,8 +74,9 @@ impl AgentmemoryAdapter {
         let context_result = client.post(&url).json(&request_body).send().await;
 
         let mut instructions =
-            "Use the `AgentMemory` tools to search and retrieve relevant memory.\n\
-             Your context is bounded; use targeted queries to expand details as needed."
+            "Use the `memory_recall` tool to retrieve relevant historical context when needed.\n\
+             Agentmemory startup context may be attached below when available.\n\
+             Your context is bounded; prefer targeted recall queries over broad memory fetches."
                 .to_string();
 
         if let Ok(res) = context_result
@@ -378,6 +388,27 @@ impl AgentmemoryAdapter {
             .to_string())
     }
 
+    pub(crate) async fn recall_for_runtime(
+        &self,
+        session_id: &str,
+        project: &Path,
+        query: Option<&str>,
+    ) -> Result<MemoryRecallResult, String> {
+        let context = self
+            .recall_context(
+                session_id,
+                project,
+                query,
+                DEFAULT_RUNTIME_RECALL_TOKEN_BUDGET,
+            )
+            .await?;
+
+        Ok(MemoryRecallResult {
+            recalled: !context.trim().is_empty(),
+            context,
+        })
+    }
+
     /// Registers a session so Agentmemory's session-backed views can discover it.
     pub async fn start_session(
         &self,
@@ -449,6 +480,7 @@ impl AgentmemoryAdapter {
     }
 }
 #[cfg(test)]
+#[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -497,6 +529,58 @@ mod tests {
                 },
             }
         }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn test_startup_instructions_describe_current_runtime_surface() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _agentmemory_url_guard = EnvVarGuard::set("AGENTMEMORY_URL", server.uri().as_str());
+
+        Mock::given(method("POST"))
+            .and(path("/agentmemory/context"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "context": ""
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let instructions = adapter
+            .build_startup_developer_instructions(Path::new("/tmp/project"), 256)
+            .await
+            .expect("instructions should be returned");
+
+        assert!(instructions.contains("Use the `memory_recall` tool"));
+        assert!(instructions.contains("Agentmemory startup context may be attached below"));
+        assert!(instructions.contains("prefer targeted recall queries over broad memory fetches"));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn test_startup_instructions_append_retrieved_context() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _agentmemory_url_guard = EnvVarGuard::set("AGENTMEMORY_URL", server.uri().as_str());
+
+        Mock::given(method("POST"))
+            .and(path("/agentmemory/context"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "context": "<agentmemory-context>remember this</agentmemory-context>"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let instructions = adapter
+            .build_startup_developer_instructions(Path::new("/tmp/project"), 256)
+            .await
+            .expect("instructions should be returned");
+
+        assert!(instructions.contains("<agentmemory-context>remember this</agentmemory-context>"));
     }
 
     #[test]

@@ -3,6 +3,7 @@ use crate::client_common::tools::FreeformToolFormat;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
+use crate::config::types::MemoryBackend;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -167,6 +168,24 @@ fn send_input_output_schema() -> JsonValue {
     })
 }
 
+fn memory_recall_output_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "recalled": {
+                "type": "boolean",
+                "description": "Whether agentmemory returned any context for this request."
+            },
+            "context": {
+                "type": "string",
+                "description": "Recalled memory context. Empty when nothing relevant was found."
+            }
+        },
+        "required": ["recalled", "context"],
+        "additionalProperties": false
+    })
+}
+
 fn list_agents_output_schema() -> JsonValue {
     json!({
         "type": "object",
@@ -313,6 +332,8 @@ impl UnifiedExecShellMode {
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
     pub available_models: Vec<ModelPreset>,
+    pub memory_backend: MemoryBackend,
+    pub memory_tool_enabled: bool,
     pub shell_type: ConfigShellToolType,
     shell_command_backend: ShellCommandBackendConfig,
     pub unified_exec_shell_mode: UnifiedExecShellMode,
@@ -447,6 +468,8 @@ impl ToolsConfig {
 
         Self {
             available_models: available_models_ref.to_vec(),
+            memory_backend: MemoryBackend::Native,
+            memory_tool_enabled: features.enabled(Feature::MemoryTool),
             shell_type,
             shell_command_backend,
             unified_exec_shell_mode: UnifiedExecShellMode::Direct,
@@ -478,6 +501,11 @@ impl ToolsConfig {
 
     pub fn with_agent_roles(mut self, agent_roles: BTreeMap<String, AgentRoleConfig>) -> Self {
         self.agent_roles = agent_roles;
+        self
+    }
+
+    pub fn with_memory_backend(mut self, memory_backend: MemoryBackend) -> Self {
+        self.memory_backend = memory_backend;
         self
     }
 
@@ -1740,6 +1768,32 @@ fn create_request_permissions_tool() -> ToolSpec {
     })
 }
 
+fn create_memory_recall_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "query".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional targeted memory recall query. When omitted, recall uses the current thread and project context only."
+                    .to_string(),
+            ),
+        },
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "memory_recall".to_string(),
+        description: "Recall relevant agentmemory context for the current thread and project. Use this when historical context is needed and live memory is available in the current runtime."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(memory_recall_output_schema()),
+    })
+}
+
 fn create_close_agent_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -2565,6 +2619,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
+    use crate::tools::handlers::MemoryRecallHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
     use crate::tools::handlers::RequestUserInputHandler;
@@ -2602,6 +2657,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let request_user_input_handler = Arc::new(RequestUserInputHandler {
         default_mode_request_user_input: config.default_mode_request_user_input,
     });
+    let memory_recall_handler = Arc::new(MemoryRecallHandler);
     let tool_suggest_handler = Arc::new(ToolSuggestHandler);
     let code_mode_handler = Arc::new(CodeModeExecuteHandler);
     let code_mode_wait_handler = Arc::new(CodeModeWaitHandler);
@@ -2779,6 +2835,16 @@ pub(crate) fn build_specs_with_discoverable_tools(
             config.code_mode_enabled,
         );
         builder.register_handler("request_permissions", request_permissions_handler);
+    }
+
+    if config.memory_tool_enabled && config.memory_backend == MemoryBackend::Agentmemory {
+        push_tool_spec(
+            &mut builder,
+            create_memory_recall_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        builder.register_handler("memory_recall", memory_recall_handler);
     }
 
     if config.search_tool

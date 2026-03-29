@@ -937,6 +937,7 @@ impl TurnContext {
         .with_unified_exec_shell_mode(self.tools_config.unified_exec_shell_mode.clone())
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
+        .with_memory_backend(config.memories.backend.clone())
         .with_agent_roles(config.agent_roles.clone());
 
         Self {
@@ -1421,6 +1422,7 @@ impl Session {
         )
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
+        .with_memory_backend(per_turn_config.memories.backend.clone())
         .with_agent_roles(per_turn_config.agent_roles.clone());
 
         let cwd = session_configuration.cwd.clone();
@@ -5165,7 +5167,7 @@ mod handlers {
                 id: sub_id,
                 msg: EventMsg::Warning(WarningEvent {
                     message: format!(
-                        "Dropped memories at {} and cleared memory rows from state db.",
+                        "Memory drop completed. Cleared memory rows from the state db and removed stored memory files at {}.",
                         memory_root.display()
                     ),
                 }),
@@ -5206,7 +5208,7 @@ mod handlers {
             sess.send_event_raw(Event {
                 id: sub_id.clone(),
                 msg: EventMsg::Warning(WarningEvent {
-                    message: "Agentmemory sync triggered.".to_string(),
+                    message: "Agentmemory sync triggered. Updated observations will appear in future memory recalls once consolidation completes.".to_string(),
                 }),
             })
             .await;
@@ -5220,7 +5222,8 @@ mod handlers {
         sess.send_event_raw(Event {
             id: sub_id.clone(),
             msg: EventMsg::Warning(WarningEvent {
-                message: "Memory update triggered.".to_string(),
+                message: "Memory update triggered. Consolidation is running in the background."
+                    .to_string(),
             }),
         })
         .await;
@@ -5247,15 +5250,11 @@ mod handlers {
         let session_id = sess.conversation_id.to_string();
 
         match adapter
-            .recall_context(
-                &session_id,
-                config.cwd.as_ref(),
-                query.as_deref(),
-                /*token_budget*/ 2000,
-            )
+            .recall_for_runtime(&session_id, config.cwd.as_ref(), query.as_deref())
             .await
         {
-            Ok(context) if !context.trim().is_empty() => {
+            Ok(result) if result.recalled => {
+                let context = result.context;
                 let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
                 let message: ResponseItem = DeveloperInstructions::new(format!(
                     "<agentmemory-recall>\n{context}\n</agentmemory-recall>"
@@ -5263,19 +5262,33 @@ mod handlers {
                 .into();
                 sess.record_conversation_items(&turn_context, std::slice::from_ref(&message))
                     .await;
+                let query_summary = query
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|query| !query.is_empty())
+                    .map(|query| format!(" for query: {query}"))
+                    .unwrap_or_default();
                 sess.send_event_raw(Event {
                     id: sub_id,
                     msg: EventMsg::Warning(WarningEvent {
-                        message: "Memory context recalled and injected.".to_string(),
+                        message: format!(
+                            "Memory context recalled{query_summary} and injected into this thread:\n\n{context}"
+                        ),
                     }),
                 })
                 .await;
             }
             Ok(_) => {
+                let query_summary = query
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|query| !query.is_empty())
+                    .map(|query| format!(" for query: {query}"))
+                    .unwrap_or_default();
                 sess.send_event_raw(Event {
                     id: sub_id,
                     msg: EventMsg::Warning(WarningEvent {
-                        message: "No relevant memory context found.".to_string(),
+                        message: format!("No relevant memory context found{query_summary}."),
                     }),
                 })
                 .await;
@@ -5589,6 +5602,7 @@ async fn spawn_review_thread(
         sess.services.main_execve_wrapper_exe.as_ref(),
     )
     .with_web_search_config(/*web_search_config*/ None)
+    .with_memory_backend(config.memories.backend.clone())
     .with_allow_login_shell(config.permissions.allow_login_shell)
     .with_agent_roles(config.agent_roles.clone());
 

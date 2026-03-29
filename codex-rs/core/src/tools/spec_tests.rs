@@ -1,5 +1,6 @@
 use crate::client_common::tools::FreeformTool;
 use crate::config::test_config;
+use crate::config::types::MemoryBackend;
 use crate::models_manager::manager::ModelsManager;
 use crate::models_manager::model_info::with_config_overrides;
 use crate::shell::Shell;
@@ -914,7 +915,7 @@ fn request_permissions_tool_is_independent_from_additional_permissions() {
 }
 
 #[test]
-fn get_memory_requires_feature_flag() {
+fn memory_recall_requires_feature_flag() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     let mut features = Features::with_defaults();
@@ -930,10 +931,50 @@ fn get_memory_requires_feature_flag() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-    assert!(
-        !tools.iter().any(|t| t.spec.name() == "get_memory"),
-        "get_memory should be disabled when memory_tool feature is off"
-    );
+    assert_lacks_tool_name(&tools, "memory_recall");
+}
+
+#[test]
+fn memory_recall_is_absent_with_memory_tool_feature_on_and_native_backend() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::MemoryTool);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+    assert_lacks_tool_name(&tools, "memory_recall");
+}
+
+#[test]
+fn memory_recall_is_exposed_with_memory_tool_feature_on_and_agentmemory_backend() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::MemoryTool);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_memory_backend(MemoryBackend::Agentmemory);
+    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+
+    let memory_recall_tool = find_tool(&tools, "memory_recall");
+    assert_eq!(memory_recall_tool.spec, create_memory_recall_tool());
 }
 
 #[test]

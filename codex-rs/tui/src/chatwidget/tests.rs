@@ -6513,20 +6513,147 @@ async fn slash_clear_is_disabled_while_task_running() {
 
 #[tokio::test]
 async fn slash_memory_drop_submits_drop_memories_op() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
     chat.dispatch_command(SlashCommand::MemoryDrop);
 
+    let event = rx.try_recv().expect("expected memory drop info");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(80));
+            assert!(
+                rendered.contains("Dropping stored memories..."),
+                "expected memory drop info, got {rendered:?}"
+            );
+        }
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
+    }
     assert_matches!(op_rx.try_recv(), Ok(Op::DropMemories));
 }
 
 #[tokio::test]
 async fn slash_memory_update_submits_update_memories_op() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
     chat.dispatch_command(SlashCommand::MemoryUpdate);
 
+    let event = rx.try_recv().expect("expected memory update info");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(80));
+            assert!(
+                rendered.contains("Triggering memory update..."),
+                "expected memory update info, got {rendered:?}"
+            );
+        }
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
+    }
     assert_matches!(op_rx.try_recv(), Ok(Op::UpdateMemories));
+}
+
+#[tokio::test]
+async fn slash_memory_recall_requires_existing_thread() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_agentmemory_enabled(true);
+
+    chat.dispatch_command(SlashCommand::MemoryRecall);
+
+    let event = rx.try_recv().expect("expected missing-thread error");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(80));
+            assert!(
+                rendered.contains(
+                    "Start a new chat or resume an existing thread before using /memory-recall."
+                ),
+                "expected /memory-recall thread requirement error, got {rendered:?}"
+            );
+        }
+        other => panic!("expected InsertHistoryCell error, got {other:?}"),
+    }
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_memory_recall_with_inline_args_requires_existing_thread() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_agentmemory_enabled(true);
+
+    chat.bottom_pane.set_composer_text(
+        "/memory-recall retrieval freshness".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected missing-thread error");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(80));
+            assert!(
+                rendered.contains(
+                    "Start a new chat or resume an existing thread before using /memory-recall."
+                ),
+                "expected /memory-recall thread requirement error, got {rendered:?}"
+            );
+        }
+        other => panic!("expected InsertHistoryCell error, got {other:?}"),
+    }
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_memory_recall_submits_recall_memories_op() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_agentmemory_enabled(true);
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.dispatch_command(SlashCommand::MemoryRecall);
+
+    let event = rx.try_recv().expect("expected memory recall info");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(80));
+            assert!(
+                rendered.contains("Recalling memory context..."),
+                "expected memory recall info, got {rendered:?}"
+            );
+        }
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
+    }
+    assert_matches!(op_rx.try_recv(), Ok(Op::RecallMemories { query: None }));
+}
+
+#[tokio::test]
+async fn slash_memory_recall_with_inline_args_submits_query() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_agentmemory_enabled(true);
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.bottom_pane.set_composer_text(
+        "/memory-recall retrieval freshness".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected memory recall info");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(80));
+            assert!(
+                rendered.contains("Recalling memory context for: retrieval freshness"),
+                "expected memory recall info, got {rendered:?}"
+            );
+        }
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
+    }
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::RecallMemories {
+            query: Some(query)
+        }) if query == "retrieval freshness"
+    );
 }
 
 #[tokio::test]

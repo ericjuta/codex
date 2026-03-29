@@ -2217,6 +2217,19 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn ensure_memory_recall_thread(&mut self) -> bool {
+        if self.thread_id.is_some() {
+            return true;
+        }
+
+        self.add_error_message(
+            "Start a new chat or resume an existing thread before using /memory-recall."
+                .to_string(),
+        );
+        self.bottom_pane.drain_pending_submission_state();
+        false
+    }
+
     fn on_mcp_startup_update(&mut self, ev: McpStartupUpdateEvent) {
         let mut status = self.mcp_startup_status.take().unwrap_or_default();
         if let McpStartupStatus::Failed { error } = &ev.status {
@@ -4798,12 +4811,33 @@ impl ChatWidget {
                 self.clean_background_terminals();
             }
             SlashCommand::MemoryDrop => {
+                self.add_info_message(
+                    "Dropping stored memories...".to_string(),
+                    Some("Codex will report whether the memory store was cleared.".to_string()),
+                );
                 self.submit_op(Op::DropMemories);
             }
             SlashCommand::MemoryUpdate => {
+                self.add_info_message(
+                    "Triggering memory update...".to_string(),
+                    Some(
+                        "Codex will report when the memory refresh request has been accepted."
+                            .to_string(),
+                    ),
+                );
                 self.submit_op(Op::UpdateMemories);
             }
             SlashCommand::MemoryRecall => {
+                if !self.ensure_memory_recall_thread() {
+                    return;
+                }
+                self.add_info_message(
+                    "Recalling memory context...".to_string(),
+                    Some(
+                        "Recalled memory will be injected into the current thread and shown here."
+                            .to_string(),
+                    ),
+                );
                 self.submit_op(Op::RecallMemories { query: None });
             }
             SlashCommand::Mcp => {
@@ -4998,6 +5032,16 @@ impl ChatWidget {
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::MemoryRecall if !trimmed.is_empty() => {
+                if !self.ensure_memory_recall_thread() {
+                    return;
+                }
+                self.add_info_message(
+                    format!("Recalling memory context for: {trimmed}"),
+                    Some(
+                        "Recalled memory will be injected into the current thread and shown here."
+                            .to_string(),
+                    ),
+                );
                 self.submit_op(Op::RecallMemories {
                     query: Some(trimmed.to_string()),
                 });
