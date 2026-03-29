@@ -1983,6 +1983,250 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
+const MEMORY_PREVIEW_MAX_GRAPHEMES: usize = 1_200;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MemoryOperationKind {
+    Recall,
+    Update,
+    Drop,
+}
+
+impl MemoryOperationKind {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Recall => "Memory Recall",
+            Self::Update => "Memory Update",
+            Self::Drop => "Memory Drop",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MemoryOperationState {
+    Pending,
+    Success,
+    Empty,
+    Error,
+}
+
+#[derive(Debug)]
+pub(crate) struct MemoryHistoryCell {
+    operation: MemoryOperationKind,
+    state: MemoryOperationState,
+    query: Option<String>,
+    summary: String,
+    detail: Option<String>,
+}
+
+impl MemoryHistoryCell {
+    fn new(
+        operation: MemoryOperationKind,
+        state: MemoryOperationState,
+        query: Option<String>,
+        summary: String,
+        detail: Option<String>,
+    ) -> Self {
+        Self {
+            operation,
+            state,
+            query,
+            summary,
+            detail: detail
+                .map(|detail| detail.trim().to_string())
+                .filter(|detail| !detail.is_empty()),
+        }
+    }
+
+    fn state_span(&self) -> Span<'static> {
+        match self.state {
+            MemoryOperationState::Pending => "Pending".cyan().bold(),
+            MemoryOperationState::Success => "Ready".green().bold(),
+            MemoryOperationState::Empty => "Empty".magenta().bold(),
+            MemoryOperationState::Error => "Error".red().bold(),
+        }
+    }
+
+    fn preview_detail(&self) -> Option<String> {
+        self.detail
+            .as_deref()
+            .map(|detail| truncate_text(detail, MEMORY_PREVIEW_MAX_GRAPHEMES))
+    }
+}
+
+impl HistoryCell for MemoryHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let wrap_width = width.max(1) as usize;
+        let mut lines = vec![
+            vec![
+                "🧠 ".into(),
+                self.operation.title().bold(),
+                " ".into(),
+                self.state_span(),
+            ]
+            .into(),
+        ];
+
+        if let Some(query) = &self.query {
+            let query_line = Line::from(vec!["  Query: ".dim(), query.clone().into()]);
+            let wrapped = adaptive_wrap_line(&query_line, RtOptions::new(wrap_width));
+            push_owned_lines(&wrapped, &mut lines);
+        }
+
+        let summary_line = Line::from(vec!["  ".into(), self.summary.clone().into()]);
+        let wrapped_summary = adaptive_wrap_line(&summary_line, RtOptions::new(wrap_width));
+        push_owned_lines(&wrapped_summary, &mut lines);
+
+        if let Some(detail) = self.preview_detail() {
+            lines.push(Line::from(vec!["  Preview:".dim()]));
+            let detail_line = Line::from(detail);
+            let wrapped_detail = adaptive_wrap_line(
+                &detail_line,
+                RtOptions::new(wrap_width)
+                    .initial_indent(Line::from("    "))
+                    .subsequent_indent(Line::from("    ")),
+            );
+            push_owned_lines(&wrapped_detail, &mut lines);
+        }
+
+        lines
+    }
+}
+
+fn parse_memory_query(message: &str) -> Option<String> {
+    let marker = " for query: ";
+    let start = message.find(marker)? + marker.len();
+    let tail = &message[start..];
+    let end = tail
+        .find(" and ")
+        .or_else(|| tail.find('.'))
+        .unwrap_or(tail.len());
+    let query = tail[..end].trim();
+    (!query.is_empty()).then(|| query.to_string())
+}
+
+pub(crate) fn new_memory_recall_submission(query: Option<String>) -> MemoryHistoryCell {
+    MemoryHistoryCell::new(
+        MemoryOperationKind::Recall,
+        MemoryOperationState::Pending,
+        query,
+        "Recalling memory context for the current thread.".to_string(),
+        /*detail*/ None,
+    )
+}
+
+pub(crate) fn new_memory_update_submission() -> MemoryHistoryCell {
+    MemoryHistoryCell::new(
+        MemoryOperationKind::Update,
+        MemoryOperationState::Pending,
+        /*query*/ None,
+        "Requesting a memory refresh.".to_string(),
+        /*detail*/ None,
+    )
+}
+
+pub(crate) fn new_memory_drop_submission() -> MemoryHistoryCell {
+    MemoryHistoryCell::new(
+        MemoryOperationKind::Drop,
+        MemoryOperationState::Pending,
+        /*query*/ None,
+        "Dropping stored memories for this workspace.".to_string(),
+        /*detail*/ None,
+    )
+}
+
+pub(crate) fn new_memory_recall_thread_requirement() -> MemoryHistoryCell {
+    MemoryHistoryCell::new(
+        MemoryOperationKind::Recall,
+        MemoryOperationState::Error,
+        /*query*/ None,
+        "Start a new chat or resume an existing thread before using /memory-recall.".to_string(),
+        /*detail*/ None,
+    )
+}
+
+pub(crate) fn memory_warning_event(message: &str) -> Option<MemoryHistoryCell> {
+    if let Some((summary, detail)) = message.split_once("\n\n")
+        && summary.starts_with("Memory context recalled")
+    {
+        return Some(MemoryHistoryCell::new(
+            MemoryOperationKind::Recall,
+            MemoryOperationState::Success,
+            parse_memory_query(summary),
+            "Recalled memory context and injected it into the current thread.".to_string(),
+            Some(detail.to_string()),
+        ));
+    }
+
+    if message.starts_with("No relevant memory context found") {
+        return Some(MemoryHistoryCell::new(
+            MemoryOperationKind::Recall,
+            MemoryOperationState::Empty,
+            parse_memory_query(message),
+            "No relevant memory context was found.".to_string(),
+            /*detail*/ None,
+        ));
+    }
+
+    if message.starts_with("Agentmemory sync triggered")
+        || message.starts_with("Memory update triggered")
+    {
+        return Some(MemoryHistoryCell::new(
+            MemoryOperationKind::Update,
+            MemoryOperationState::Success,
+            /*query*/ None,
+            message.to_string(),
+            /*detail*/ None,
+        ));
+    }
+
+    if message.starts_with("Memory drop completed") {
+        return Some(MemoryHistoryCell::new(
+            MemoryOperationKind::Drop,
+            MemoryOperationState::Success,
+            /*query*/ None,
+            message.to_string(),
+            /*detail*/ None,
+        ));
+    }
+
+    None
+}
+
+pub(crate) fn memory_error_event(message: &str) -> Option<MemoryHistoryCell> {
+    if let Some(detail) = message.strip_prefix("Memory recall failed: ") {
+        return Some(MemoryHistoryCell::new(
+            MemoryOperationKind::Recall,
+            MemoryOperationState::Error,
+            /*query*/ None,
+            "Memory recall failed.".to_string(),
+            Some(detail.to_string()),
+        ));
+    }
+
+    if let Some(detail) = message.strip_prefix("Agentmemory sync failed: ") {
+        return Some(MemoryHistoryCell::new(
+            MemoryOperationKind::Update,
+            MemoryOperationState::Error,
+            /*query*/ None,
+            "Memory update failed.".to_string(),
+            Some(detail.to_string()),
+        ));
+    }
+
+    if let Some(detail) = message.strip_prefix("Memory drop completed with errors: ") {
+        return Some(MemoryHistoryCell::new(
+            MemoryOperationKind::Drop,
+            MemoryOperationState::Error,
+            /*query*/ None,
+            "Memory drop completed with errors.".to_string(),
+            Some(detail.to_string()),
+        ));
+    }
+
+    None
+}
+
 /// Renders a completed (or interrupted) request_user_input exchange in history.
 #[derive(Debug)]
 pub(crate) struct RequestUserInputResultCell {
@@ -2890,6 +3134,33 @@ mod tests {
         );
         let rendered = render_lines(&cell.display_lines(120)).join("\n");
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn memory_recall_submission_snapshot() {
+        let cell = new_memory_recall_submission(Some("retrieval freshness".to_string()));
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+🧠 Memory Recall Pending
+  Query: retrieval freshness
+  Recalling memory context for the current thread.
+"###);
+    }
+
+    #[test]
+    fn memory_recall_result_snapshot() {
+        let cell = memory_warning_event(
+            "Memory context recalled for query: retrieval freshness and injected into this thread:\n\n<agentmemory-context>remember this</agentmemory-context>",
+        )
+        .expect("expected memory warning cell");
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+🧠 Memory Recall Ready
+  Query: retrieval freshness
+  Recalled memory context and injected it into the current thread.
+  Preview:
+    <agentmemory-context>remember this</agentmemory-context>
+"###);
     }
 
     #[tokio::test]

@@ -60,6 +60,8 @@ markers.
    - what conclusion or decision mattered
 3. File-sensitive tasks should yield observations and memories that mention the
    relevant paths and search terms when available.
+4. Manual memory recall should be inspectable by the human in the TUI, not only
+   injected into assistant context.
 
 ## Proposed Changes
 

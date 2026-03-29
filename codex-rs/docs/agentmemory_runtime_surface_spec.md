@@ -121,6 +121,32 @@ Required UX behavior:
 - on recall without a thread:
   - show an explicit thread/session requirement message
 
+### Visual Memory UI
+
+The human-facing memory actions should render as dedicated memory UI cells, not
+generic warning/info text.
+
+Minimum visual fields:
+
+- operation:
+  - recall
+  - update
+  - drop
+- status:
+  - pending
+  - ready
+  - empty
+  - error
+- query when present
+- whether recalled context was injected into the current thread
+- a wrapped preview body for recalled context or error detail
+
+Design rule:
+
+- do not make the human infer memory activity from generic bullets or warning
+  styling alone
+- memory actions should be visually recognizable at a glance in the transcript
+
 Human-surface principle:
 
 - memory actions must be observable by the human, not only by the assistant.
@@ -221,6 +247,7 @@ Required behavior:
 
 - immediate submit acknowledgment in history
 - visible completion/result message in history
+- dedicated visual memory cells for submit and completion states
 - no success path that only changes assistant context silently
 
 This applies to both:
@@ -271,6 +298,8 @@ The lane is done when all of the following are true:
 - a human pressing Enter on `/memory-recall` sees immediate feedback in the TUI
 - a human pressing Enter on successful `/memory-recall` sees recalled context in
   the TUI history
+- the recall/update/drop history entries are visually distinct memory cells, not
+  generic warnings or info bullets
 - `/memory-update` and `/memory-drop` visibly acknowledge both submission and
   completion
 - the assistant can call a first-class internal recall tool when memory is
@@ -292,8 +321,10 @@ Expected primary files for this lane:
   add a dedicated memory-recall handler module
 - `core/src/tools/spec_tests.rs`
 - `tui/src/chatwidget.rs`
+- `tui/src/history_cell.rs`
 - `tui/src/chatwidget/tests.rs`
 - `tui_app_server/src/chatwidget.rs`
+- `tui_app_server/src/history_cell.rs`
 - `tui_app_server/src/chatwidget/tests.rs`
 
 ## Practical Recommendation
