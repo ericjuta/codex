@@ -1298,7 +1298,7 @@ impl Session {
         match adapter.end_session(session_id.as_str()).await {
             Ok(()) => {
                 let mut state = self.state.lock().await;
-                state.set_agentmemory_session_ended(true);
+                state.set_agentmemory_session_ended(/*ended*/ true);
             }
             Err(err) => {
                 warn!("Agentmemory session end failed for {session_id}: {err}");
@@ -3565,7 +3565,10 @@ impl Session {
                     let adapter = crate::agentmemory::AgentmemoryAdapter::new();
                     // Provide a default explicit token budget for the startup query context
                     adapter
-                        .build_startup_developer_instructions(&turn_context.config.codex_home, 2000)
+                        .build_startup_developer_instructions(
+                            &turn_context.config.codex_home,
+                            /*token_budget*/ 2000,
+                        )
                         .await
                 }
                 crate::config::types::MemoryBackend::Native => {
@@ -5244,7 +5247,12 @@ mod handlers {
         let session_id = sess.conversation_id.to_string();
 
         match adapter
-            .recall_context(&session_id, config.cwd.as_ref(), query.as_deref(), 2000)
+            .recall_context(
+                &session_id,
+                config.cwd.as_ref(),
+                query.as_deref(),
+                /*token_budget*/ 2000,
+            )
             .await
         {
             Ok(context) if !context.trim().is_empty() => {
