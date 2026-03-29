@@ -1030,6 +1030,10 @@ fn active_turn_missing_steer_error(error: &TypedRequestError) -> bool {
     source.message == "no active turn to steer"
 }
 
+fn thread_op_error_message(target: &str, op: &AppCommand, err: &color_eyre::Report) -> String {
+    format!("Failed to run {} for {target}: {err}", op.kind())
+}
+
 impl App {
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
@@ -3838,11 +3842,24 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
-                self.submit_active_thread_op(app_server, op.into()).await?;
+                let op: AppCommand = op.into();
+                if let Err(err) = self.submit_active_thread_op(app_server, op.clone()).await {
+                    let message = thread_op_error_message("current thread", &op, &err);
+                    tracing::warn!(error = %err, op = op.kind(), "{message}");
+                    self.chat_widget.add_error_message(message);
+                }
             }
             AppEvent::SubmitThreadOp { thread_id, op } => {
-                self.submit_thread_op(app_server, thread_id, op.into())
-                    .await?;
+                let op: AppCommand = op.into();
+                if let Err(err) = self
+                    .submit_thread_op(app_server, thread_id, op.clone())
+                    .await
+                {
+                    let target = format!("thread {thread_id}");
+                    let message = thread_op_error_message(&target, &op, &err);
+                    tracing::warn!(error = %err, op = op.kind(), thread_id = %thread_id, "{message}");
+                    self.chat_widget.add_error_message(message);
+                }
             }
             AppEvent::ThreadHistoryEntryResponse { thread_id, event } => {
                 self.enqueue_thread_history_entry_response(thread_id, event)
@@ -5913,6 +5930,20 @@ mod tests {
         assert_eq!(
             App::should_handle_active_thread_events(wait_for_fork, true),
             true
+        );
+    }
+
+    #[test]
+    fn thread_op_error_message_mentions_op_kind_and_target() {
+        let message = thread_op_error_message(
+            "current thread",
+            &AppCommand::memory_recall(Some("retrieval freshness".to_string())),
+            &color_eyre::eyre::eyre!("connection reset by peer"),
+        );
+
+        assert_eq!(
+            message,
+            "Failed to run recall_memories for current thread: connection reset by peer"
         );
     }
 

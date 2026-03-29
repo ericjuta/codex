@@ -7285,10 +7285,11 @@ async fn slash_clear_is_disabled_while_task_running() {
 #[tokio::test]
 async fn slash_memory_drop_submits_core_op() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_agentmemory_enabled(true);
 
     chat.dispatch_command(SlashCommand::MemoryDrop);
 
-    assert_matches!(next_submit_op(&mut op_rx), Op::DropMemories);
+    assert_matches!(op_rx.try_recv(), Ok(Op::DropMemories));
     assert!(rx.try_recv().is_err(), "expected no stub message");
 }
 
@@ -7306,29 +7307,29 @@ async fn slash_mcp_requests_inventory_via_app_server() {
 #[tokio::test]
 async fn slash_memory_update_submits_core_op() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_agentmemory_enabled(true);
 
     chat.dispatch_command(SlashCommand::MemoryUpdate);
 
-    assert_matches!(next_submit_op(&mut op_rx), Op::UpdateMemories);
+    assert_matches!(op_rx.try_recv(), Ok(Op::UpdateMemories));
     assert!(rx.try_recv().is_err(), "expected no stub message");
 }
 
 #[tokio::test]
 async fn slash_memory_recall_submits_core_op() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_agentmemory_enabled(true);
 
     chat.dispatch_command(SlashCommand::MemoryRecall);
 
-    assert_matches!(
-        next_submit_op(&mut op_rx),
-        Op::RecallMemories { query: None }
-    );
+    assert_matches!(op_rx.try_recv(), Ok(Op::RecallMemories { query: None }));
     assert!(rx.try_recv().is_err(), "expected no stub message");
 }
 
 #[tokio::test]
 async fn slash_memory_recall_with_inline_args_submits_query() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_agentmemory_enabled(true);
 
     chat.bottom_pane.set_composer_text(
         "/memory-recall retrieval freshness".to_string(),
@@ -7338,10 +7339,10 @@ async fn slash_memory_recall_with_inline_args_submits_query() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     assert_matches!(
-        next_submit_op(&mut op_rx),
-        Op::RecallMemories {
+        op_rx.try_recv(),
+        Ok(Op::RecallMemories {
             query: Some(query)
-        } if query == "retrieval freshness"
+        }) if query == "retrieval freshness"
     );
     assert!(rx.try_recv().is_err(), "expected no stub message");
 }
