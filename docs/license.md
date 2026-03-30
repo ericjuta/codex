@@ -26,7 +26,7 @@ The root [NOTICE](../NOTICE) file summarizes the bundled third-party materials
 that currently require explicit attribution in this source tree.
 
 For release and publication guidance, including the current recommendation for
-vendored bubblewrap, see [fork-intent.md](./fork-intent.md).
+vendored bubblewrap, see [public-release-notes.md](./public-release-notes.md).
 
 ## Package Metadata
 
