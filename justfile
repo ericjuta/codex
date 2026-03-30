@@ -94,11 +94,11 @@ write-hooks-schema:
 # Run the argument-comment Dylint checks across codex-rs.
 [no-cd]
 argument-comment-lint *args:
-    ./tools/argument-comment-lint/run-prebuilt-linter.sh "$@"
+    {{justfile_directory()}}/tools/argument-comment-lint/run-prebuilt-linter.sh "$@"
 
 [no-cd]
 argument-comment-lint-from-source *args:
-    ./tools/argument-comment-lint/run.sh "$@"
+    {{justfile_directory()}}/tools/argument-comment-lint/run.sh "$@"
 
 # Tail logs from the state SQLite database
 log *args:

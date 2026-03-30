@@ -73,12 +73,8 @@ fi
 lint_args+=("$@")
 
 if ! command -v dotslash >/dev/null 2>&1; then
-    cat >&2 <<EOF
-argument-comment-lint prebuilt wrapper requires dotslash.
-Install dotslash, or use:
-  ./tools/argument-comment-lint/run.sh ...
-EOF
-    exit 1
+    echo "argument-comment-lint: dotslash not found; falling back to source wrapper" >&2
+    exec "$repo_root/tools/argument-comment-lint/run.sh" "$@"
 fi
 
 if command -v rustup >/dev/null 2>&1; then
