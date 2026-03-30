@@ -1847,9 +1847,18 @@ pub struct WarningEvent {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum MemoryOperationSource {
+    Human,
+    Assistant,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub struct MemoryOperationEvent {
+    pub source: MemoryOperationSource,
     pub operation: MemoryOperationKind,
     pub status: MemoryOperationStatus,
     pub query: Option<String>,

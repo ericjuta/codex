@@ -556,6 +556,14 @@ fn server_notification_thread_events(
             vec![Event {
                 id: String::new(),
                 msg: EventMsg::MemoryOperation(MemoryOperationEvent {
+                    source: match notification.source {
+                        codex_app_server_protocol::MemoryOperationSource::Human => {
+                            codex_protocol::protocol::MemoryOperationSource::Human
+                        }
+                        codex_app_server_protocol::MemoryOperationSource::Assistant => {
+                            codex_protocol::protocol::MemoryOperationSource::Assistant
+                        }
+                    },
                     operation: match notification.operation {
                         codex_app_server_protocol::MemoryOperationKind::Recall => {
                             codex_protocol::items::MemoryOperationKind::Recall

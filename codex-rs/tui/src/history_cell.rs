@@ -61,6 +61,7 @@ use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::MemoryOperationEvent;
+use codex_protocol::protocol::MemoryOperationSource;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
@@ -1990,6 +1991,7 @@ const MEMORY_PREVIEW_MAX_GRAPHEMES: usize = 1_200;
 
 #[derive(Debug)]
 pub(crate) struct MemoryHistoryCell {
+    source: MemoryOperationSource,
     operation: MemoryOperationKind,
     status: MemoryOperationStatus,
     query: Option<String>,
@@ -1999,6 +2001,7 @@ pub(crate) struct MemoryHistoryCell {
 
 impl MemoryHistoryCell {
     fn new(
+        source: MemoryOperationSource,
         operation: MemoryOperationKind,
         status: MemoryOperationStatus,
         query: Option<String>,
@@ -2006,6 +2009,7 @@ impl MemoryHistoryCell {
         detail: Option<String>,
     ) -> Self {
         Self {
+            source,
             operation,
             status,
             query,
@@ -2038,6 +2042,29 @@ impl MemoryHistoryCell {
             .as_deref()
             .map(|detail| truncate_text(detail, MEMORY_PREVIEW_MAX_GRAPHEMES))
     }
+
+    pub(crate) fn is_human_pending_submission(
+        &self,
+        operation: MemoryOperationKind,
+        query: Option<&str>,
+    ) -> bool {
+        self.source == MemoryOperationSource::Human
+            && self.status == MemoryOperationStatus::Pending
+            && self.operation == operation
+            && self.query.as_deref().map(str::trim) == query.map(str::trim)
+    }
+
+    pub(crate) fn apply_event(&mut self, event: MemoryOperationEvent) {
+        self.source = event.source;
+        self.operation = event.operation;
+        self.status = event.status;
+        self.query = event.query;
+        self.summary = event.summary;
+        self.detail = event
+            .detail
+            .map(|detail| detail.trim().to_string())
+            .filter(|detail| !detail.is_empty());
+    }
 }
 
 impl HistoryCell for MemoryHistoryCell {
@@ -2057,6 +2084,10 @@ impl HistoryCell for MemoryHistoryCell {
             let query_line = Line::from(vec!["  Query: ".dim(), query.clone().into()]);
             let wrapped = adaptive_wrap_line(&query_line, RtOptions::new(wrap_width));
             push_owned_lines(&wrapped, &mut lines);
+        }
+
+        if self.source == MemoryOperationSource::Assistant {
+            lines.push(Line::from(vec!["  Source: ".dim(), "assistant tool".dim()]));
         }
 
         let summary_line = Line::from(vec!["  ".into(), self.summary.clone().into()]);
@@ -2081,6 +2112,7 @@ impl HistoryCell for MemoryHistoryCell {
 
 pub(crate) fn new_memory_recall_submission(query: Option<String>) -> MemoryHistoryCell {
     MemoryHistoryCell::new(
+        MemoryOperationSource::Human,
         MemoryOperationKind::Recall,
         MemoryOperationStatus::Pending,
         query,
@@ -2091,6 +2123,7 @@ pub(crate) fn new_memory_recall_submission(query: Option<String>) -> MemoryHisto
 
 pub(crate) fn new_memory_update_submission() -> MemoryHistoryCell {
     MemoryHistoryCell::new(
+        MemoryOperationSource::Human,
         MemoryOperationKind::Update,
         MemoryOperationStatus::Pending,
         /*query*/ None,
@@ -2101,6 +2134,7 @@ pub(crate) fn new_memory_update_submission() -> MemoryHistoryCell {
 
 pub(crate) fn new_memory_drop_submission() -> MemoryHistoryCell {
     MemoryHistoryCell::new(
+        MemoryOperationSource::Human,
         MemoryOperationKind::Drop,
         MemoryOperationStatus::Pending,
         /*query*/ None,
@@ -2111,6 +2145,7 @@ pub(crate) fn new_memory_drop_submission() -> MemoryHistoryCell {
 
 pub(crate) fn new_memory_recall_thread_requirement() -> MemoryHistoryCell {
     MemoryHistoryCell::new(
+        MemoryOperationSource::Human,
         MemoryOperationKind::Recall,
         MemoryOperationStatus::Error,
         /*query*/ None,
@@ -2121,6 +2156,7 @@ pub(crate) fn new_memory_recall_thread_requirement() -> MemoryHistoryCell {
 
 pub(crate) fn new_memory_operation_event(event: MemoryOperationEvent) -> MemoryHistoryCell {
     MemoryHistoryCell::new(
+        event.source,
         event.operation,
         event.status,
         event.query,
@@ -3052,6 +3088,7 @@ mod tests {
     #[test]
     fn memory_recall_result_snapshot() {
         let cell = new_memory_operation_event(MemoryOperationEvent {
+            source: MemoryOperationSource::Human,
             operation: MemoryOperationKind::Recall,
             status: MemoryOperationStatus::Ready,
             query: Some("retrieval freshness".to_string()),

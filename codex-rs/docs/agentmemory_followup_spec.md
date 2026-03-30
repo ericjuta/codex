@@ -8,8 +8,12 @@ visual-memory-UI lanes.
 Priority 1 is now implemented for the human-triggered memory control plane:
 structured memory events replace string-matched warning/error parsing for
 `/memory-recall`, `/memory-update`, and `/memory-drop` across both TUIs.
-The remaining backlog starts at in-place completion updates and
-assistant-triggered memory visibility.
+Priority 2 and Priority 3 are also now implemented:
+`/memory-*` operations collapse to a single coherent card per operation, and
+assistant-triggered `memory_recall` is visible to the human transcript.
+Priority 5 is also implemented with a lightweight ambient availability
+indicator in the TUI footer. The remaining backlog starts at richer metadata
+and broader end-to-end confidence work.
 
 This document exists to answer one practical question:
 
@@ -27,6 +31,9 @@ The fork already has:
 - proactive runtime guidance for when the assistant should use recall
 - dedicated visual memory history cells in both TUIs
 - structured memory outcome events for human-triggered recall/update/drop
+- a single coherent memory card per human-triggered operation
+- visible assistant-triggered `memory_recall` events in both TUIs
+- a lightweight ambient memory-availability indicator in the footer
 
 That means the system is functionally good. What remains is mostly structural
 cleanup, richer human visibility, and better retrieval/capture quality.

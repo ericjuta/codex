@@ -64,6 +64,7 @@ use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::McpInvocation;
+#[cfg(test)]
 use codex_protocol::protocol::MemoryOperationEvent;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
@@ -2192,8 +2193,15 @@ enum MemoryOperationState {
     Error,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MemoryOperationSource {
+    Human,
+    Assistant,
+}
+
 #[derive(Debug)]
 pub(crate) struct MemoryHistoryCell {
+    source: MemoryOperationSource,
     operation: MemoryOperationKind,
     state: MemoryOperationState,
     query: Option<String>,
@@ -2203,6 +2211,7 @@ pub(crate) struct MemoryHistoryCell {
 
 impl MemoryHistoryCell {
     fn new(
+        source: MemoryOperationSource,
         operation: MemoryOperationKind,
         state: MemoryOperationState,
         query: Option<String>,
@@ -2210,6 +2219,7 @@ impl MemoryHistoryCell {
         detail: Option<String>,
     ) -> Self {
         Self {
+            source,
             operation,
             state,
             query,
@@ -2234,6 +2244,74 @@ impl MemoryHistoryCell {
             .as_deref()
             .map(|detail| truncate_text(detail, MEMORY_PREVIEW_MAX_GRAPHEMES))
     }
+
+    pub(crate) fn is_human_pending_submission(
+        &self,
+        operation: MemoryOperationKind,
+        query: Option<&str>,
+    ) -> bool {
+        self.source == MemoryOperationSource::Human
+            && self.state == MemoryOperationState::Pending
+            && self.operation == operation
+            && self.query.as_deref().map(str::trim) == query.map(str::trim)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn apply_event(&mut self, event: MemoryOperationEvent) {
+        self.source = match event.source {
+            codex_protocol::protocol::MemoryOperationSource::Human => MemoryOperationSource::Human,
+            codex_protocol::protocol::MemoryOperationSource::Assistant => {
+                MemoryOperationSource::Assistant
+            }
+        };
+        self.operation = match event.operation {
+            codex_protocol::items::MemoryOperationKind::Recall => MemoryOperationKind::Recall,
+            codex_protocol::items::MemoryOperationKind::Update => MemoryOperationKind::Update,
+            codex_protocol::items::MemoryOperationKind::Drop => MemoryOperationKind::Drop,
+        };
+        self.state = match event.status {
+            codex_protocol::items::MemoryOperationStatus::Pending => MemoryOperationState::Pending,
+            codex_protocol::items::MemoryOperationStatus::Ready => MemoryOperationState::Success,
+            codex_protocol::items::MemoryOperationStatus::Empty => MemoryOperationState::Empty,
+            codex_protocol::items::MemoryOperationStatus::Error => MemoryOperationState::Error,
+        };
+        self.query = event.query;
+        self.summary = event.summary;
+        self.detail = event
+            .detail
+            .map(|detail| detail.trim().to_string())
+            .filter(|detail| !detail.is_empty());
+    }
+
+    pub(crate) fn apply_notification(&mut self, notification: MemoryOperationNotification) {
+        self.source = match notification.source {
+            codex_app_server_protocol::MemoryOperationSource::Human => MemoryOperationSource::Human,
+            codex_app_server_protocol::MemoryOperationSource::Assistant => {
+                MemoryOperationSource::Assistant
+            }
+        };
+        self.operation = match notification.operation {
+            codex_app_server_protocol::MemoryOperationKind::Recall => MemoryOperationKind::Recall,
+            codex_app_server_protocol::MemoryOperationKind::Update => MemoryOperationKind::Update,
+            codex_app_server_protocol::MemoryOperationKind::Drop => MemoryOperationKind::Drop,
+        };
+        self.state = match notification.status {
+            codex_app_server_protocol::MemoryOperationStatus::Pending => {
+                MemoryOperationState::Pending
+            }
+            codex_app_server_protocol::MemoryOperationStatus::Ready => {
+                MemoryOperationState::Success
+            }
+            codex_app_server_protocol::MemoryOperationStatus::Empty => MemoryOperationState::Empty,
+            codex_app_server_protocol::MemoryOperationStatus::Error => MemoryOperationState::Error,
+        };
+        self.query = notification.query;
+        self.summary = notification.summary;
+        self.detail = notification
+            .detail
+            .map(|detail| detail.trim().to_string())
+            .filter(|detail| !detail.is_empty());
+    }
 }
 
 impl HistoryCell for MemoryHistoryCell {
@@ -2253,6 +2331,10 @@ impl HistoryCell for MemoryHistoryCell {
             let query_line = Line::from(vec!["  Query: ".dim(), query.clone().into()]);
             let wrapped = adaptive_wrap_line(&query_line, RtOptions::new(wrap_width));
             push_owned_lines(&wrapped, &mut lines);
+        }
+
+        if self.source == MemoryOperationSource::Assistant {
+            lines.push(Line::from(vec!["  Source: ".dim(), "assistant tool".dim()]));
         }
 
         let summary_line = Line::from(vec!["  ".into(), self.summary.clone().into()]);
@@ -2277,6 +2359,7 @@ impl HistoryCell for MemoryHistoryCell {
 
 pub(crate) fn new_memory_recall_submission(query: Option<String>) -> MemoryHistoryCell {
     MemoryHistoryCell::new(
+        MemoryOperationSource::Human,
         MemoryOperationKind::Recall,
         MemoryOperationState::Pending,
         query,
@@ -2287,6 +2370,7 @@ pub(crate) fn new_memory_recall_submission(query: Option<String>) -> MemoryHisto
 
 pub(crate) fn new_memory_update_submission() -> MemoryHistoryCell {
     MemoryHistoryCell::new(
+        MemoryOperationSource::Human,
         MemoryOperationKind::Update,
         MemoryOperationState::Pending,
         /*query*/ None,
@@ -2297,6 +2381,7 @@ pub(crate) fn new_memory_update_submission() -> MemoryHistoryCell {
 
 pub(crate) fn new_memory_drop_submission() -> MemoryHistoryCell {
     MemoryHistoryCell::new(
+        MemoryOperationSource::Human,
         MemoryOperationKind::Drop,
         MemoryOperationState::Pending,
         /*query*/ None,
@@ -2307,6 +2392,7 @@ pub(crate) fn new_memory_drop_submission() -> MemoryHistoryCell {
 
 pub(crate) fn new_memory_recall_thread_requirement() -> MemoryHistoryCell {
     MemoryHistoryCell::new(
+        MemoryOperationSource::Human,
         MemoryOperationKind::Recall,
         MemoryOperationState::Error,
         /*query*/ None,
@@ -2315,8 +2401,15 @@ pub(crate) fn new_memory_recall_thread_requirement() -> MemoryHistoryCell {
     )
 }
 
+#[cfg(test)]
 pub(crate) fn new_memory_operation_event(event: MemoryOperationEvent) -> MemoryHistoryCell {
     MemoryHistoryCell::new(
+        match event.source {
+            codex_protocol::protocol::MemoryOperationSource::Human => MemoryOperationSource::Human,
+            codex_protocol::protocol::MemoryOperationSource::Assistant => {
+                MemoryOperationSource::Assistant
+            }
+        },
         match event.operation {
             codex_protocol::items::MemoryOperationKind::Recall => MemoryOperationKind::Recall,
             codex_protocol::items::MemoryOperationKind::Update => MemoryOperationKind::Update,
@@ -2338,6 +2431,12 @@ pub(crate) fn new_memory_operation_notification(
     notification: MemoryOperationNotification,
 ) -> MemoryHistoryCell {
     MemoryHistoryCell::new(
+        match notification.source {
+            codex_app_server_protocol::MemoryOperationSource::Human => MemoryOperationSource::Human,
+            codex_app_server_protocol::MemoryOperationSource::Assistant => {
+                MemoryOperationSource::Assistant
+            }
+        },
         match notification.operation {
             codex_app_server_protocol::MemoryOperationKind::Recall => MemoryOperationKind::Recall,
             codex_app_server_protocol::MemoryOperationKind::Update => MemoryOperationKind::Update,
@@ -3331,6 +3430,7 @@ mod tests {
     #[test]
     fn memory_recall_result_snapshot() {
         let cell = new_memory_operation_event(MemoryOperationEvent {
+            source: codex_protocol::protocol::MemoryOperationSource::Human,
             operation: codex_protocol::items::MemoryOperationKind::Recall,
             status: codex_protocol::items::MemoryOperationStatus::Ready,
             query: Some("retrieval freshness".to_string()),

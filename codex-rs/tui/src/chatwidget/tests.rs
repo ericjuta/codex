@@ -6517,17 +6517,15 @@ async fn slash_memory_drop_submits_drop_memories_op() {
 
     chat.dispatch_command(SlashCommand::MemoryDrop);
 
-    let event = rx.try_recv().expect("expected memory drop info");
-    match event {
-        AppEvent::InsertHistoryCell(cell) => {
-            let rendered = lines_to_single_string(&cell.display_lines(80));
-            assert!(
-                rendered.contains("Memory Drop"),
-                "expected memory drop info, got {rendered:?}"
-            );
-        }
-        other => panic!("expected InsertHistoryCell info, got {other:?}"),
-    }
+    assert!(
+        active_blob(&chat).contains("Memory Drop"),
+        "expected active memory drop card, got {:?}",
+        active_blob(&chat)
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "expected no committed history cell yet"
+    );
     assert_matches!(op_rx.try_recv(), Ok(Op::DropMemories));
 }
 
@@ -6537,17 +6535,15 @@ async fn slash_memory_update_submits_update_memories_op() {
 
     chat.dispatch_command(SlashCommand::MemoryUpdate);
 
-    let event = rx.try_recv().expect("expected memory update info");
-    match event {
-        AppEvent::InsertHistoryCell(cell) => {
-            let rendered = lines_to_single_string(&cell.display_lines(80));
-            assert!(
-                rendered.contains("Memory Update"),
-                "expected memory update info, got {rendered:?}"
-            );
-        }
-        other => panic!("expected InsertHistoryCell info, got {other:?}"),
-    }
+    assert!(
+        active_blob(&chat).contains("Memory Update"),
+        "expected active memory update card, got {:?}",
+        active_blob(&chat)
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "expected no committed history cell yet"
+    );
     assert_matches!(op_rx.try_recv(), Ok(Op::UpdateMemories));
 }
 
@@ -6610,17 +6606,15 @@ async fn slash_memory_recall_submits_recall_memories_op() {
 
     chat.dispatch_command(SlashCommand::MemoryRecall);
 
-    let event = rx.try_recv().expect("expected memory recall info");
-    match event {
-        AppEvent::InsertHistoryCell(cell) => {
-            let rendered = lines_to_single_string(&cell.display_lines(80));
-            assert!(
-                rendered.contains("Memory Recall"),
-                "expected memory recall info, got {rendered:?}"
-            );
-        }
-        other => panic!("expected InsertHistoryCell info, got {other:?}"),
-    }
+    assert!(
+        active_blob(&chat).contains("Memory Recall"),
+        "expected active memory recall card, got {:?}",
+        active_blob(&chat)
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "expected no committed history cell yet"
+    );
     assert_matches!(op_rx.try_recv(), Ok(Op::RecallMemories { query: None }));
 }
 
@@ -6637,17 +6631,15 @@ async fn slash_memory_recall_with_inline_args_submits_query() {
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
-    let event = rx.try_recv().expect("expected memory recall info");
-    match event {
-        AppEvent::InsertHistoryCell(cell) => {
-            let rendered = lines_to_single_string(&cell.display_lines(80));
-            assert!(
-                rendered.contains("Query: retrieval freshness"),
-                "expected memory recall info, got {rendered:?}"
-            );
-        }
-        other => panic!("expected InsertHistoryCell info, got {other:?}"),
-    }
+    assert!(
+        active_blob(&chat).contains("Query: retrieval freshness"),
+        "expected active memory recall card, got {:?}",
+        active_blob(&chat)
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "expected no committed history cell yet"
+    );
     assert_matches!(
         op_rx.try_recv(),
         Ok(Op::RecallMemories {
@@ -11611,12 +11603,13 @@ async fn memory_operation_event_adds_memory_history_cell() {
     chat.handle_codex_event(Event {
         id: "sub-1".into(),
         msg: EventMsg::MemoryOperation(codex_protocol::protocol::MemoryOperationEvent {
+            source: codex_protocol::protocol::MemoryOperationSource::Assistant,
             operation: codex_protocol::items::MemoryOperationKind::Recall,
             status: codex_protocol::items::MemoryOperationStatus::Ready,
             query: Some("retrieval freshness".to_string()),
-            summary: "Recalled memory context and injected it into the current thread.".to_string(),
+            summary: "Assistant recalled memory context for this turn.".to_string(),
             detail: Some("<agentmemory-context>remember this</agentmemory-context>".to_string()),
-            context_injected: true,
+            context_injected: false,
         }),
     });
 
@@ -11632,9 +11625,57 @@ async fn memory_operation_event_adds_memory_history_cell() {
         "missing memory query: {rendered}"
     );
     assert!(
+        rendered.contains("Source: assistant tool"),
+        "missing assistant source label: {rendered}"
+    );
+    assert!(
         rendered.contains("<agentmemory-context>remember this</agentmemory-context>"),
         "missing memory detail: {rendered}"
     );
+}
+
+#[tokio::test]
+async fn human_memory_recall_completion_replaces_pending_card_in_place() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_agentmemory_enabled(true);
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.bottom_pane.set_composer_text(
+        "/memory-recall retrieval freshness".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::RecallMemories {
+            query: Some(query)
+        }) if query == "retrieval freshness"
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "expected pending card to stay active"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::MemoryOperation(codex_protocol::protocol::MemoryOperationEvent {
+            source: codex_protocol::protocol::MemoryOperationSource::Human,
+            operation: codex_protocol::items::MemoryOperationKind::Recall,
+            status: codex_protocol::items::MemoryOperationStatus::Ready,
+            query: Some("retrieval freshness".to_string()),
+            summary: "Recalled memory context and injected it into the current thread.".to_string(),
+            detail: Some("<agentmemory-context>remember this</agentmemory-context>".to_string()),
+            context_injected: true,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected a single completed memory card");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("Memory Recall Ready"));
+    assert!(rendered.contains("Query: retrieval freshness"));
+    assert!(rx.try_recv().is_err(), "expected no extra history insert");
 }
 
 #[tokio::test]

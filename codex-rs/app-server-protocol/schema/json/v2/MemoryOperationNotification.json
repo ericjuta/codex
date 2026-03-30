@@ -9,6 +9,13 @@
       ],
       "type": "string"
     },
+    "MemoryOperationSource": {
+      "enum": [
+        "human",
+        "assistant"
+      ],
+      "type": "string"
+    },
     "MemoryOperationStatus": {
       "enum": [
         "pending",
@@ -38,6 +45,9 @@
         "null"
       ]
     },
+    "source": {
+      "$ref": "#/definitions/MemoryOperationSource"
+    },
     "status": {
       "$ref": "#/definitions/MemoryOperationStatus"
     },
@@ -51,6 +61,7 @@
   "required": [
     "contextInjected",
     "operation",
+    "source",
     "status",
     "summary",
     "threadId"

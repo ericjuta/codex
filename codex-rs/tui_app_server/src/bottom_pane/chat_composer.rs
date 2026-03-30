@@ -3217,6 +3217,16 @@ impl ChatComposer {
             }
         };
 
+        let mut status_line_value = self.status_line_value.clone();
+        if self.agentmemory_enabled {
+            if let Some(existing) = status_line_value.as_mut() {
+                existing.spans.push(" · ".into());
+                existing.spans.push("Agentmemory".dim());
+            } else {
+                status_line_value = Some(Line::from("Agentmemory".dim()));
+            }
+        }
+
         FooterProps {
             mode,
             esc_backtrack_hint: self.esc_backtrack_hint,
@@ -3227,7 +3237,7 @@ impl ChatComposer {
             is_wsl,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
-            status_line_value: self.status_line_value.clone(),
+            status_line_value,
             status_line_enabled: self.status_line_enabled,
             active_agent_label: self.active_agent_label.clone(),
         }
@@ -4775,6 +4785,19 @@ mod tests {
         snapshot_composer_state("footer_mode_hidden_while_typing", true, |composer| {
             type_chars_humanlike(composer, &['h']);
         });
+    }
+
+    #[test]
+    fn footer_status_line_shows_agentmemory_indicator() {
+        snapshot_composer_state(
+            "footer_status_line_with_agentmemory_indicator",
+            true,
+            |composer| {
+                composer.set_status_line_enabled(true);
+                composer.set_status_line(Some(Line::from("Status line content".to_string())));
+                composer.set_agentmemory_enabled(true);
+            },
+        );
     }
 
     #[test]

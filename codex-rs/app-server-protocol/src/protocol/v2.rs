@@ -66,6 +66,7 @@ use codex_protocol::protocol::HookOutputEntryKind as CoreHookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus as CoreHookRunStatus;
 use codex_protocol::protocol::HookRunSummary as CoreHookRunSummary;
 use codex_protocol::protocol::HookScope as CoreHookScope;
+use codex_protocol::protocol::MemoryOperationSource as CoreMemoryOperationSource;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::protocol::NonSteerableTurnKind as CoreNonSteerableTurnKind;
@@ -3053,6 +3054,23 @@ impl From<CoreMemoryOperationStatus> for MemoryOperationStatus {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum MemoryOperationSource {
+    Human,
+    Assistant,
+}
+
+impl From<CoreMemoryOperationSource> for MemoryOperationSource {
+    fn from(value: CoreMemoryOperationSource) -> Self {
+        match value {
+            CoreMemoryOperationSource::Human => Self::Human,
+            CoreMemoryOperationSource::Assistant => Self::Assistant,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -5065,6 +5083,7 @@ pub struct ItemCompletedNotification {
 #[ts(export_to = "v2/")]
 pub struct MemoryOperationNotification {
     pub thread_id: String,
+    pub source: MemoryOperationSource,
     pub operation: MemoryOperationKind,
     pub status: MemoryOperationStatus,
     pub query: Option<String>,

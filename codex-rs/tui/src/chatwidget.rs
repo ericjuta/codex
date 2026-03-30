@@ -136,6 +136,7 @@ use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::MemoryOperationEvent;
+use codex_protocol::protocol::MemoryOperationSource;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
@@ -2219,8 +2220,41 @@ impl ChatWidget {
     }
 
     fn on_memory_operation(&mut self, event: MemoryOperationEvent) {
+        if self.try_complete_pending_memory_operation(&event) {
+            self.request_redraw();
+            return;
+        }
         self.add_to_history(history_cell::new_memory_operation_event(event));
         self.request_redraw();
+    }
+
+    fn show_pending_memory_operation(&mut self, cell: history_cell::MemoryHistoryCell) {
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(cell));
+        self.bump_active_cell_revision();
+        self.request_redraw();
+    }
+
+    fn try_complete_pending_memory_operation(&mut self, event: &MemoryOperationEvent) -> bool {
+        if event.source != MemoryOperationSource::Human {
+            return false;
+        }
+        let Some(active) = self.active_cell.as_mut() else {
+            return false;
+        };
+        let Some(memory) = active
+            .as_any_mut()
+            .downcast_mut::<history_cell::MemoryHistoryCell>()
+        else {
+            return false;
+        };
+        if !memory.is_human_pending_submission(event.operation, event.query.as_deref()) {
+            return false;
+        }
+        memory.apply_event(event.clone());
+        self.bump_active_cell_revision();
+        self.flush_active_cell();
+        true
     }
 
     fn ensure_memory_recall_thread(&mut self) -> bool {
@@ -3851,7 +3885,8 @@ impl ChatWidget {
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
         widget.bottom_pane.set_agentmemory_enabled(
-            widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory,
+            widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory
+                && widget.config.features.enabled(Feature::MemoryTool),
         );
         widget
             .bottom_pane
@@ -4058,7 +4093,8 @@ impl ChatWidget {
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
         widget.bottom_pane.set_agentmemory_enabled(
-            widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory,
+            widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory
+                && widget.config.features.enabled(Feature::MemoryTool),
         );
         widget
             .bottom_pane
@@ -4257,7 +4293,8 @@ impl ChatWidget {
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
         widget.bottom_pane.set_agentmemory_enabled(
-            widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory,
+            widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory
+                && widget.config.features.enabled(Feature::MemoryTool),
         );
         widget
             .bottom_pane
@@ -4815,23 +4852,20 @@ impl ChatWidget {
                 self.clean_background_terminals();
             }
             SlashCommand::MemoryDrop => {
-                self.add_to_history(history_cell::new_memory_drop_submission());
-                self.request_redraw();
+                self.show_pending_memory_operation(history_cell::new_memory_drop_submission());
                 self.submit_op(Op::DropMemories);
             }
             SlashCommand::MemoryUpdate => {
-                self.add_to_history(history_cell::new_memory_update_submission());
-                self.request_redraw();
+                self.show_pending_memory_operation(history_cell::new_memory_update_submission());
                 self.submit_op(Op::UpdateMemories);
             }
             SlashCommand::MemoryRecall => {
                 if !self.ensure_memory_recall_thread() {
                     return;
                 }
-                self.add_to_history(history_cell::new_memory_recall_submission(
+                self.show_pending_memory_operation(history_cell::new_memory_recall_submission(
                     /*query*/ None,
                 ));
-                self.request_redraw();
                 self.submit_op(Op::RecallMemories { query: None });
             }
             SlashCommand::Mcp => {
@@ -5029,10 +5063,9 @@ impl ChatWidget {
                 if !self.ensure_memory_recall_thread() {
                     return;
                 }
-                self.add_to_history(history_cell::new_memory_recall_submission(Some(
-                    trimmed.to_string(),
-                )));
-                self.request_redraw();
+                self.show_pending_memory_operation(history_cell::new_memory_recall_submission(
+                    Some(trimmed.to_string()),
+                ));
                 self.submit_op(Op::RecallMemories {
                     query: Some(trimmed.to_string()),
                 });
