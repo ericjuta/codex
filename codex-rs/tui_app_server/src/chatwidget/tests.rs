@@ -11450,6 +11450,45 @@ async fn app_server_guardian_review_started_sets_review_status() {
 }
 
 #[tokio::test]
+async fn app_server_memory_operation_notification_adds_memory_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::MemoryOperation(
+            codex_app_server_protocol::MemoryOperationNotification {
+                thread_id: "thread-1".to_string(),
+                operation: codex_app_server_protocol::MemoryOperationKind::Recall,
+                status: codex_app_server_protocol::MemoryOperationStatus::Ready,
+                query: Some("retrieval freshness".to_string()),
+                summary: "Recalled memory context and injected it into the current thread."
+                    .to_string(),
+                detail: Some(
+                    "<agentmemory-context>remember this</agentmemory-context>".to_string(),
+                ),
+                context_injected: true,
+            },
+        ),
+        None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one memory history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Memory Recall"),
+        "missing memory title: {rendered}"
+    );
+    assert!(
+        rendered.contains("Query: retrieval freshness"),
+        "missing memory query: {rendered}"
+    );
+    assert!(
+        rendered.contains("<agentmemory-context>remember this</agentmemory-context>"),
+        "missing memory detail: {rendered}"
+    );
+}
+
+#[tokio::test]
 async fn app_server_guardian_review_denied_renders_denied_request_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.show_welcome_banner = false;

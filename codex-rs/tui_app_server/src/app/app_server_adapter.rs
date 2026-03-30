@@ -79,6 +79,8 @@ use codex_protocol::protocol::ItemCompletedEvent;
 #[cfg(test)]
 use codex_protocol::protocol::ItemStartedEvent;
 #[cfg(test)]
+use codex_protocol::protocol::MemoryOperationEvent;
+#[cfg(test)]
 use codex_protocol::protocol::PlanDeltaEvent;
 #[cfg(test)]
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
@@ -328,6 +330,7 @@ fn server_notification_thread_target(
             Some(notification.thread_id.as_str())
         }
         ServerNotification::ItemCompleted(notification) => Some(notification.thread_id.as_str()),
+        ServerNotification::MemoryOperation(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::RawResponseItemCompleted(notification) => {
             Some(notification.thread_id.as_str())
         }
@@ -545,6 +548,43 @@ fn server_notification_thread_events(
                 id: String::new(),
                 msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
                     delta: notification.delta,
+                }),
+            }],
+        )),
+        ServerNotification::MemoryOperation(notification) => Some((
+            ThreadId::from_string(&notification.thread_id).ok()?,
+            vec![Event {
+                id: String::new(),
+                msg: EventMsg::MemoryOperation(MemoryOperationEvent {
+                    operation: match notification.operation {
+                        codex_app_server_protocol::MemoryOperationKind::Recall => {
+                            codex_protocol::items::MemoryOperationKind::Recall
+                        }
+                        codex_app_server_protocol::MemoryOperationKind::Update => {
+                            codex_protocol::items::MemoryOperationKind::Update
+                        }
+                        codex_app_server_protocol::MemoryOperationKind::Drop => {
+                            codex_protocol::items::MemoryOperationKind::Drop
+                        }
+                    },
+                    status: match notification.status {
+                        codex_app_server_protocol::MemoryOperationStatus::Pending => {
+                            codex_protocol::items::MemoryOperationStatus::Pending
+                        }
+                        codex_app_server_protocol::MemoryOperationStatus::Ready => {
+                            codex_protocol::items::MemoryOperationStatus::Ready
+                        }
+                        codex_app_server_protocol::MemoryOperationStatus::Empty => {
+                            codex_protocol::items::MemoryOperationStatus::Empty
+                        }
+                        codex_app_server_protocol::MemoryOperationStatus::Error => {
+                            codex_protocol::items::MemoryOperationStatus::Error
+                        }
+                    },
+                    query: notification.query,
+                    summary: notification.summary,
+                    detail: notification.detail,
+                    context_injected: notification.context_injected,
                 }),
             }],
         )),

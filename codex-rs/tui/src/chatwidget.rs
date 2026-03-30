@@ -135,6 +135,7 @@ use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
+use codex_protocol::protocol::MemoryOperationEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
@@ -2205,11 +2206,7 @@ impl ChatWidget {
     fn on_error(&mut self, message: String) {
         self.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
-        if let Some(cell) = history_cell::memory_error_event(&message) {
-            self.add_to_history(cell);
-        } else {
-            self.add_to_history(history_cell::new_error_event(message));
-        }
+        self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
 
         // After an error ends the turn, try sending the next queued input.
@@ -2217,12 +2214,12 @@ impl ChatWidget {
     }
 
     fn on_warning(&mut self, message: impl Into<String>) {
-        let message = message.into();
-        if let Some(cell) = history_cell::memory_warning_event(&message) {
-            self.add_to_history(cell);
-        } else {
-            self.add_to_history(history_cell::new_warning_event(message));
-        }
+        self.add_to_history(history_cell::new_warning_event(message.into()));
+        self.request_redraw();
+    }
+
+    fn on_memory_operation(&mut self, event: MemoryOperationEvent) {
+        self.add_to_history(history_cell::new_memory_operation_event(event));
         self.request_redraw();
     }
 
@@ -5556,6 +5553,7 @@ impl ChatWidget {
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
+            EventMsg::MemoryOperation(event) => self.on_memory_operation(event),
             EventMsg::GuardianAssessment(ev) => self.on_guardian_assessment(ev),
             EventMsg::ModelReroute(_) => {}
             EventMsg::Error(ErrorEvent {

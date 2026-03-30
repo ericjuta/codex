@@ -47,6 +47,8 @@ use codex_core::web_search::web_search_detail;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::items::MemoryOperationKind;
+use codex_protocol::items::MemoryOperationStatus;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::models::WebSearchAction;
@@ -58,6 +60,7 @@ use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::MemoryOperationEvent;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
@@ -1985,35 +1988,10 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
 
 const MEMORY_PREVIEW_MAX_GRAPHEMES: usize = 1_200;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MemoryOperationKind {
-    Recall,
-    Update,
-    Drop,
-}
-
-impl MemoryOperationKind {
-    fn title(self) -> &'static str {
-        match self {
-            Self::Recall => "Memory Recall",
-            Self::Update => "Memory Update",
-            Self::Drop => "Memory Drop",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MemoryOperationState {
-    Pending,
-    Success,
-    Empty,
-    Error,
-}
-
 #[derive(Debug)]
 pub(crate) struct MemoryHistoryCell {
     operation: MemoryOperationKind,
-    state: MemoryOperationState,
+    status: MemoryOperationStatus,
     query: Option<String>,
     summary: String,
     detail: Option<String>,
@@ -2022,14 +2000,14 @@ pub(crate) struct MemoryHistoryCell {
 impl MemoryHistoryCell {
     fn new(
         operation: MemoryOperationKind,
-        state: MemoryOperationState,
+        status: MemoryOperationStatus,
         query: Option<String>,
         summary: String,
         detail: Option<String>,
     ) -> Self {
         Self {
             operation,
-            state,
+            status,
             query,
             summary,
             detail: detail
@@ -2038,12 +2016,20 @@ impl MemoryHistoryCell {
         }
     }
 
+    fn title(&self) -> &'static str {
+        match self.operation {
+            MemoryOperationKind::Recall => "Memory Recall",
+            MemoryOperationKind::Update => "Memory Update",
+            MemoryOperationKind::Drop => "Memory Drop",
+        }
+    }
+
     fn state_span(&self) -> Span<'static> {
-        match self.state {
-            MemoryOperationState::Pending => "Pending".cyan().bold(),
-            MemoryOperationState::Success => "Ready".green().bold(),
-            MemoryOperationState::Empty => "Empty".magenta().bold(),
-            MemoryOperationState::Error => "Error".red().bold(),
+        match self.status {
+            MemoryOperationStatus::Pending => "Pending".cyan().bold(),
+            MemoryOperationStatus::Ready => "Ready".green().bold(),
+            MemoryOperationStatus::Empty => "Empty".magenta().bold(),
+            MemoryOperationStatus::Error => "Error".red().bold(),
         }
     }
 
@@ -2060,7 +2046,7 @@ impl HistoryCell for MemoryHistoryCell {
         let mut lines = vec![
             vec![
                 "🧠 ".into(),
-                self.operation.title().bold(),
+                self.title().bold(),
                 " ".into(),
                 self.state_span(),
             ]
@@ -2093,22 +2079,10 @@ impl HistoryCell for MemoryHistoryCell {
     }
 }
 
-fn parse_memory_query(message: &str) -> Option<String> {
-    let marker = " for query: ";
-    let start = message.find(marker)? + marker.len();
-    let tail = &message[start..];
-    let end = tail
-        .find(" and ")
-        .or_else(|| tail.find('.'))
-        .unwrap_or(tail.len());
-    let query = tail[..end].trim();
-    (!query.is_empty()).then(|| query.to_string())
-}
-
 pub(crate) fn new_memory_recall_submission(query: Option<String>) -> MemoryHistoryCell {
     MemoryHistoryCell::new(
         MemoryOperationKind::Recall,
-        MemoryOperationState::Pending,
+        MemoryOperationStatus::Pending,
         query,
         "Recalling memory context for the current thread.".to_string(),
         /*detail*/ None,
@@ -2118,7 +2092,7 @@ pub(crate) fn new_memory_recall_submission(query: Option<String>) -> MemoryHisto
 pub(crate) fn new_memory_update_submission() -> MemoryHistoryCell {
     MemoryHistoryCell::new(
         MemoryOperationKind::Update,
-        MemoryOperationState::Pending,
+        MemoryOperationStatus::Pending,
         /*query*/ None,
         "Requesting a memory refresh.".to_string(),
         /*detail*/ None,
@@ -2128,7 +2102,7 @@ pub(crate) fn new_memory_update_submission() -> MemoryHistoryCell {
 pub(crate) fn new_memory_drop_submission() -> MemoryHistoryCell {
     MemoryHistoryCell::new(
         MemoryOperationKind::Drop,
-        MemoryOperationState::Pending,
+        MemoryOperationStatus::Pending,
         /*query*/ None,
         "Dropping stored memories for this workspace.".to_string(),
         /*detail*/ None,
@@ -2138,93 +2112,21 @@ pub(crate) fn new_memory_drop_submission() -> MemoryHistoryCell {
 pub(crate) fn new_memory_recall_thread_requirement() -> MemoryHistoryCell {
     MemoryHistoryCell::new(
         MemoryOperationKind::Recall,
-        MemoryOperationState::Error,
+        MemoryOperationStatus::Error,
         /*query*/ None,
         "Start a new chat or resume an existing thread before using /memory-recall.".to_string(),
         /*detail*/ None,
     )
 }
 
-pub(crate) fn memory_warning_event(message: &str) -> Option<MemoryHistoryCell> {
-    if let Some((summary, detail)) = message.split_once("\n\n")
-        && summary.starts_with("Memory context recalled")
-    {
-        return Some(MemoryHistoryCell::new(
-            MemoryOperationKind::Recall,
-            MemoryOperationState::Success,
-            parse_memory_query(summary),
-            "Recalled memory context and injected it into the current thread.".to_string(),
-            Some(detail.to_string()),
-        ));
-    }
-
-    if message.starts_with("No relevant memory context found") {
-        return Some(MemoryHistoryCell::new(
-            MemoryOperationKind::Recall,
-            MemoryOperationState::Empty,
-            parse_memory_query(message),
-            "No relevant memory context was found.".to_string(),
-            /*detail*/ None,
-        ));
-    }
-
-    if message.starts_with("Agentmemory sync triggered")
-        || message.starts_with("Memory update triggered")
-    {
-        return Some(MemoryHistoryCell::new(
-            MemoryOperationKind::Update,
-            MemoryOperationState::Success,
-            /*query*/ None,
-            message.to_string(),
-            /*detail*/ None,
-        ));
-    }
-
-    if message.starts_with("Memory drop completed") {
-        return Some(MemoryHistoryCell::new(
-            MemoryOperationKind::Drop,
-            MemoryOperationState::Success,
-            /*query*/ None,
-            message.to_string(),
-            /*detail*/ None,
-        ));
-    }
-
-    None
-}
-
-pub(crate) fn memory_error_event(message: &str) -> Option<MemoryHistoryCell> {
-    if let Some(detail) = message.strip_prefix("Memory recall failed: ") {
-        return Some(MemoryHistoryCell::new(
-            MemoryOperationKind::Recall,
-            MemoryOperationState::Error,
-            /*query*/ None,
-            "Memory recall failed.".to_string(),
-            Some(detail.to_string()),
-        ));
-    }
-
-    if let Some(detail) = message.strip_prefix("Agentmemory sync failed: ") {
-        return Some(MemoryHistoryCell::new(
-            MemoryOperationKind::Update,
-            MemoryOperationState::Error,
-            /*query*/ None,
-            "Memory update failed.".to_string(),
-            Some(detail.to_string()),
-        ));
-    }
-
-    if let Some(detail) = message.strip_prefix("Memory drop completed with errors: ") {
-        return Some(MemoryHistoryCell::new(
-            MemoryOperationKind::Drop,
-            MemoryOperationState::Error,
-            /*query*/ None,
-            "Memory drop completed with errors.".to_string(),
-            Some(detail.to_string()),
-        ));
-    }
-
-    None
+pub(crate) fn new_memory_operation_event(event: MemoryOperationEvent) -> MemoryHistoryCell {
+    MemoryHistoryCell::new(
+        event.operation,
+        event.status,
+        event.query,
+        event.summary,
+        event.detail,
+    )
 }
 
 /// Renders a completed (or interrupted) request_user_input exchange in history.
@@ -3149,10 +3051,14 @@ mod tests {
 
     #[test]
     fn memory_recall_result_snapshot() {
-        let cell = memory_warning_event(
-            "Memory context recalled for query: retrieval freshness and injected into this thread:\n\n<agentmemory-context>remember this</agentmemory-context>",
-        )
-        .expect("expected memory warning cell");
+        let cell = new_memory_operation_event(MemoryOperationEvent {
+            operation: MemoryOperationKind::Recall,
+            status: MemoryOperationStatus::Ready,
+            query: Some("retrieval freshness".to_string()),
+            summary: "Recalled memory context and injected it into the current thread.".to_string(),
+            detail: Some("<agentmemory-context>remember this</agentmemory-context>".to_string()),
+            context_injected: true,
+        });
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
 🧠 Memory Recall Ready
