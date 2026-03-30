@@ -42,6 +42,10 @@ mod mcp_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use crate::mcp_cmd::McpCli;
 
 use codex_core::config::Config;
