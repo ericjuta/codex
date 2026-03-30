@@ -26,6 +26,8 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
+use codex_protocol::items::MemoryOperationKind as CoreMemoryOperationKind;
+use codex_protocol::items::MemoryOperationStatus as CoreMemoryOperationStatus;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::Resource as McpResource;
 use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
@@ -3011,6 +3013,46 @@ pub struct ThreadMemoryRecallParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadMemoryRecallResponse {}
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum MemoryOperationKind {
+    Recall,
+    Update,
+    Drop,
+}
+
+impl From<CoreMemoryOperationKind> for MemoryOperationKind {
+    fn from(value: CoreMemoryOperationKind) -> Self {
+        match value {
+            CoreMemoryOperationKind::Recall => Self::Recall,
+            CoreMemoryOperationKind::Update => Self::Update,
+            CoreMemoryOperationKind::Drop => Self::Drop,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum MemoryOperationStatus {
+    Pending,
+    Ready,
+    Empty,
+    Error,
+}
+
+impl From<CoreMemoryOperationStatus> for MemoryOperationStatus {
+    fn from(value: CoreMemoryOperationStatus) -> Self {
+        match value {
+            CoreMemoryOperationStatus::Pending => Self::Pending,
+            CoreMemoryOperationStatus::Ready => Self::Ready,
+            CoreMemoryOperationStatus::Empty => Self::Empty,
+            CoreMemoryOperationStatus::Error => Self::Error,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -5016,6 +5058,19 @@ pub struct ItemCompletedNotification {
     pub item: ThreadItem,
     pub thread_id: String,
     pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MemoryOperationNotification {
+    pub thread_id: String,
+    pub operation: MemoryOperationKind,
+    pub status: MemoryOperationStatus,
+    pub query: Option<String>,
+    pub summary: String,
+    pub detail: Option<String>,
+    pub context_injected: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

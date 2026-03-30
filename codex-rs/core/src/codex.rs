@@ -4599,6 +4599,8 @@ mod handlers {
     use crate::tasks::UserShellCommandTask;
     use crate::tasks::execute_user_shell_command;
     use codex_protocol::custom_prompts::CustomPrompt;
+    use codex_protocol::items::MemoryOperationKind;
+    use codex_protocol::items::MemoryOperationStatus;
     use codex_protocol::models::DeveloperInstructions;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::protocol::CodexErrorInfo;
@@ -4609,6 +4611,7 @@ mod handlers {
     use codex_protocol::protocol::ListCustomPromptsResponseEvent;
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
+    use codex_protocol::protocol::MemoryOperationEvent;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
@@ -5120,26 +5123,57 @@ mod handlers {
         .await;
     }
 
+    async fn send_memory_operation_event(
+        sess: &Session,
+        sub_id: &str,
+        operation: MemoryOperationKind,
+        status: MemoryOperationStatus,
+        query: Option<String>,
+        summary: String,
+        detail: Option<String>,
+        context_injected: bool,
+    ) {
+        sess.send_event_raw(Event {
+            id: sub_id.to_string(),
+            msg: EventMsg::MemoryOperation(MemoryOperationEvent {
+                operation,
+                status,
+                query,
+                summary,
+                detail,
+                context_injected,
+            }),
+        })
+        .await;
+    }
+
     pub async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
         if config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
             let adapter = crate::agentmemory::AgentmemoryAdapter::new();
             if let Err(e) = adapter.drop_memories().await {
-                sess.send_event_raw(Event {
-                    id: sub_id,
-                    msg: EventMsg::Error(ErrorEvent {
-                        message: format!("Agentmemory clear failed: {e}"),
-                        codex_error_info: Some(CodexErrorInfo::Other),
-                    }),
-                })
+                send_memory_operation_event(
+                    sess,
+                    &sub_id,
+                    MemoryOperationKind::Drop,
+                    MemoryOperationStatus::Error,
+                    /*query*/ None,
+                    "Memory drop failed.".to_string(),
+                    Some(e.to_string()),
+                    /*context_injected*/ false,
+                )
                 .await;
                 return;
             }
-            sess.send_event_raw(Event {
-                id: sub_id,
-                msg: EventMsg::Warning(WarningEvent {
-                    message: "Cleared Agentmemory contents.".to_string(),
-                }),
-            })
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationKind::Drop,
+                MemoryOperationStatus::Ready,
+                /*query*/ None,
+                "Cleared Agentmemory contents.".to_string(),
+                /*detail*/ None,
+                /*context_injected*/ false,
+            )
             .await;
             return;
         }
@@ -5163,26 +5197,33 @@ mod handlers {
         }
 
         if errors.is_empty() {
-            sess.send_event_raw(Event {
-                id: sub_id,
-                msg: EventMsg::Warning(WarningEvent {
-                    message: format!(
-                        "Memory drop completed. Cleared memory rows from the state db and removed stored memory files at {}.",
-                        memory_root.display()
-                    ),
-                }),
-            })
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationKind::Drop,
+                MemoryOperationStatus::Ready,
+                /*query*/ None,
+                "Dropped stored memories for this workspace.".to_string(),
+                Some(format!(
+                    "Cleared memory rows from the state db and removed stored memory files at {}.",
+                    memory_root.display()
+                )),
+                /*context_injected*/ false,
+            )
             .await;
             return;
         }
 
-        sess.send_event_raw(Event {
-            id: sub_id,
-            msg: EventMsg::Error(ErrorEvent {
-                message: format!("Memory drop completed with errors: {}", errors.join("; ")),
-                codex_error_info: Some(CodexErrorInfo::Other),
-            }),
-        })
+        send_memory_operation_event(
+            sess,
+            &sub_id,
+            MemoryOperationKind::Drop,
+            MemoryOperationStatus::Error,
+            /*query*/ None,
+            "Memory drop completed with errors.".to_string(),
+            Some(errors.join("; ")),
+            /*context_injected*/ false,
+        )
         .await;
     }
 
@@ -5195,22 +5236,31 @@ mod handlers {
         if config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
             let adapter = crate::agentmemory::AgentmemoryAdapter::new();
             if let Err(e) = adapter.update_memories().await {
-                sess.send_event_raw(Event {
-                    id: sub_id.clone(),
-                    msg: EventMsg::Error(ErrorEvent {
-                        message: format!("Agentmemory sync failed: {e}"),
-                        codex_error_info: Some(CodexErrorInfo::Other),
-                    }),
-                })
+                send_memory_operation_event(
+                    sess,
+                    &sub_id,
+                    MemoryOperationKind::Update,
+                    MemoryOperationStatus::Error,
+                    /*query*/ None,
+                    "Memory update failed.".to_string(),
+                    Some(e.to_string()),
+                    /*context_injected*/ false,
+                )
                 .await;
                 return;
             }
-            sess.send_event_raw(Event {
-                id: sub_id.clone(),
-                msg: EventMsg::Warning(WarningEvent {
-                    message: "Agentmemory sync triggered. Updated observations will appear in future memory recalls once consolidation completes.".to_string(),
-                }),
-            })
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationKind::Update,
+                MemoryOperationStatus::Ready,
+                /*query*/ None,
+                "Agentmemory sync triggered.".to_string(),
+                Some(
+                    "Updated observations will appear in future memory recalls once consolidation completes.".to_string(),
+                ),
+                /*context_injected*/ false,
+            )
             .await;
             return;
         }
@@ -5219,13 +5269,16 @@ mod handlers {
             crate::memories::start_memories_startup_task(sess, Arc::clone(config), &session_source);
         }
 
-        sess.send_event_raw(Event {
-            id: sub_id.clone(),
-            msg: EventMsg::Warning(WarningEvent {
-                message: "Memory update triggered. Consolidation is running in the background."
-                    .to_string(),
-            }),
-        })
+        send_memory_operation_event(
+            sess,
+            &sub_id,
+            MemoryOperationKind::Update,
+            MemoryOperationStatus::Ready,
+            /*query*/ None,
+            "Memory update triggered.".to_string(),
+            Some("Consolidation is running in the background.".to_string()),
+            /*context_injected*/ false,
+        )
         .await;
     }
 
@@ -5236,12 +5289,16 @@ mod handlers {
         query: Option<String>,
     ) {
         if config.memories.backend != crate::config::types::MemoryBackend::Agentmemory {
-            sess.send_event_raw(Event {
-                id: sub_id,
-                msg: EventMsg::Warning(WarningEvent {
-                    message: "Memory recall requires agentmemory backend.".to_string(),
-                }),
-            })
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationKind::Recall,
+                MemoryOperationStatus::Error,
+                query,
+                "Memory recall requires agentmemory backend.".to_string(),
+                /*detail*/ None,
+                /*context_injected*/ false,
+            )
             .await;
             return;
         }
@@ -5262,45 +5319,42 @@ mod handlers {
                 .into();
                 sess.record_conversation_items(&turn_context, std::slice::from_ref(&message))
                     .await;
-                let query_summary = query
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|query| !query.is_empty())
-                    .map(|query| format!(" for query: {query}"))
-                    .unwrap_or_default();
-                sess.send_event_raw(Event {
-                    id: sub_id,
-                    msg: EventMsg::Warning(WarningEvent {
-                        message: format!(
-                            "Memory context recalled{query_summary} and injected into this thread:\n\n{context}"
-                        ),
-                    }),
-                })
+                send_memory_operation_event(
+                    sess,
+                    &sub_id,
+                    MemoryOperationKind::Recall,
+                    MemoryOperationStatus::Ready,
+                    query,
+                    "Recalled memory context and injected it into the current thread.".to_string(),
+                    Some(context),
+                    /*context_injected*/ true,
+                )
                 .await;
             }
             Ok(_) => {
-                let query_summary = query
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|query| !query.is_empty())
-                    .map(|query| format!(" for query: {query}"))
-                    .unwrap_or_default();
-                sess.send_event_raw(Event {
-                    id: sub_id,
-                    msg: EventMsg::Warning(WarningEvent {
-                        message: format!("No relevant memory context found{query_summary}."),
-                    }),
-                })
+                send_memory_operation_event(
+                    sess,
+                    &sub_id,
+                    MemoryOperationKind::Recall,
+                    MemoryOperationStatus::Empty,
+                    query,
+                    "No relevant memory context was found.".to_string(),
+                    /*detail*/ None,
+                    /*context_injected*/ false,
+                )
                 .await;
             }
             Err(e) => {
-                sess.send_event_raw(Event {
-                    id: sub_id,
-                    msg: EventMsg::Error(ErrorEvent {
-                        message: format!("Memory recall failed: {e}"),
-                        codex_error_info: Some(CodexErrorInfo::Other),
-                    }),
-                })
+                send_memory_operation_event(
+                    sess,
+                    &sub_id,
+                    MemoryOperationKind::Recall,
+                    MemoryOperationStatus::Error,
+                    query,
+                    "Memory recall failed.".to_string(),
+                    Some(e.to_string()),
+                    /*context_injected*/ false,
+                )
                 .await;
             }
         }
@@ -7046,6 +7100,7 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         },
         EventMsg::Error(_)
         | EventMsg::Warning(_)
+        | EventMsg::MemoryOperation(_)
         | EventMsg::RealtimeConversationStarted(_)
         | EventMsg::RealtimeConversationRealtime(_)
         | EventMsg::RealtimeConversationClosed(_)

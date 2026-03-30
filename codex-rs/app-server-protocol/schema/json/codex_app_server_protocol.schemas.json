@@ -3952,6 +3952,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/memory/operation"
+              ],
+              "title": "Thread/memory/operationNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/MemoryOperationNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/memory/operationNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "item/agentMessage/delta"
               ],
               "title": "Item/agentMessage/deltaNotificationMethod",
@@ -9129,6 +9149,64 @@
           "path"
         ],
         "type": "object"
+      },
+      "MemoryOperationKind": {
+        "enum": [
+          "recall",
+          "update",
+          "drop"
+        ],
+        "type": "string"
+      },
+      "MemoryOperationNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "contextInjected": {
+            "type": "boolean"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operation": {
+            "$ref": "#/definitions/v2/MemoryOperationKind"
+          },
+          "query": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/definitions/v2/MemoryOperationStatus"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "contextInjected",
+          "operation",
+          "status",
+          "summary",
+          "threadId"
+        ],
+        "title": "MemoryOperationNotification",
+        "type": "object"
+      },
+      "MemoryOperationStatus": {
+        "enum": [
+          "pending",
+          "ready",
+          "empty",
+          "error"
+        ],
+        "type": "string"
       },
       "MergeStrategy": {
         "enum": [

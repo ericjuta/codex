@@ -62,6 +62,7 @@ use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
+use codex_app_server_protocol::MemoryOperationNotification;
 use codex_app_server_protocol::ModelReroutedNotification;
 use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContext;
 use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendment;
@@ -342,6 +343,22 @@ pub(crate) async fn apply_bespoke_event_handling(
             }
         }
         EventMsg::Warning(_warning_event) => {}
+        EventMsg::MemoryOperation(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = MemoryOperationNotification {
+                    thread_id: conversation_id.to_string(),
+                    operation: event.operation.into(),
+                    status: event.status.into(),
+                    query: event.query,
+                    summary: event.summary,
+                    detail: event.detail,
+                    context_injected: event.context_injected,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::MemoryOperation(notification))
+                    .await;
+            }
+        }
         EventMsg::GuardianAssessment(assessment) => {
             if let ApiVersion::V2 = api_version {
                 let notification = guardian_auto_approval_review_notification(

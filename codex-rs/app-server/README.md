@@ -79,7 +79,7 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 - Start (or resume) a thread: Call `thread/start` to open a fresh conversation. The response returns the thread object and you’ll also get a `thread/started` notification. If you’re continuing an existing conversation, call `thread/resume` with its ID instead. If you want to branch from an existing conversation, call `thread/fork` to create a new thread id with copied history. Like `thread/start`, `thread/fork` also accepts `ephemeral: true` for an in-memory temporary thread.
   The returned `thread.ephemeral` flag tells you whether the session is intentionally in-memory only; when it is `true`, `thread.path` is `null`.
 - Begin a turn: To send user input, call `turn/start` with the target `threadId` and the user's input. Optional fields let you override model, cwd, sandbox policy, approval policy, approvals reviewer, etc. This immediately returns the new turn object. The app-server emits `turn/started` when that turn actually begins running.
-- Stream events: After `turn/start`, keep reading JSON-RPC notifications on stdout. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
+- Stream events: After `turn/start`, keep reading JSON-RPC notifications on stdout. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, memory-operation notifications, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
 - Finish the turn: When the model is done (or the turn is interrupted via making the `turn/interrupt` call), the server sends `turn/completed` with the final turn state and token usage.
 
 ## Initialization
@@ -465,7 +465,7 @@ Use the thread-scoped memory methods to mirror the legacy TUI slash commands:
 - `thread/memory/update` triggers a backend-specific sync/consolidation pass.
 - `thread/memory/recall` retrieves memory context and injects it into the thread as developer instructions.
 
-All three requests return immediately with `{}`. Result details surface through the normal thread event stream as warning/error items, just like the equivalent core ops.
+All three requests return immediately with `{}`. Result details surface through the thread event stream as `thread/memory/operation` notifications carrying the structured operation, status, optional query, summary, optional detail, and whether recalled context was injected into the thread.
 
 ```json
 { "method": "thread/memory/drop", "id": 27, "params": { "threadId": "thr_b" } }
@@ -942,6 +942,7 @@ All items emit shared lifecycle events:
 - `item/completed` — sends the final `item` once that work itself finishes (for example, after a tool call or message completes); treat this as the authoritative execution/result state.
 - `item/autoApprovalReview/started` — [UNSTABLE] temporary guardian notification carrying `{threadId, turnId, targetItemId, review, action?}` when guardian approval review begins. This shape is expected to change soon.
 - `item/autoApprovalReview/completed` — [UNSTABLE] temporary guardian notification carrying `{threadId, turnId, targetItemId, review, action?}` when guardian approval review resolves. This shape is expected to change soon.
+- `thread/memory/operation` — sends structured outcomes for `thread/memory/drop`, `thread/memory/update`, and `thread/memory/recall` with `{threadId, operation, status, query?, summary, detail?, contextInjected}`.
 
 `review` is [UNSTABLE] and currently has `{status, riskScore?, riskLevel?, rationale?}`, where `status` is one of `inProgress`, `approved`, `denied`, or `aborted`. `action` is the guardian action summary payload from core when available and is intended to support temporary standalone pending-review UI. These notifications are separate from the target item's own `item/completed` lifecycle and are intentionally temporary while the guardian app protocol is still being designed.
 

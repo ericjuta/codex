@@ -1627,6 +1627,62 @@
       ],
       "type": "object"
     },
+    "MemoryOperationKind": {
+      "enum": [
+        "recall",
+        "update",
+        "drop"
+      ],
+      "type": "string"
+    },
+    "MemoryOperationNotification": {
+      "properties": {
+        "contextInjected": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "$ref": "#/definitions/MemoryOperationKind"
+        },
+        "query": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/MemoryOperationStatus"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "contextInjected",
+        "operation",
+        "status",
+        "summary",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "MemoryOperationStatus": {
+      "enum": [
+        "pending",
+        "ready",
+        "empty",
+        "error"
+      ],
+      "type": "string"
+    },
     "MessagePhase": {
       "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
       "oneOf": [
@@ -4163,6 +4219,26 @@
         "params"
       ],
       "title": "Item/completedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/memory/operation"
+          ],
+          "title": "Thread/memory/operationNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/MemoryOperationNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/memory/operationNotification",
       "type": "object"
     },
     {
