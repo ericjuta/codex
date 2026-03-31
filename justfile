@@ -82,6 +82,44 @@ bazel-remote-test:
 build-for-release:
     bazel build //codex-rs/cli:release_binaries --config=remote
 
+# Build a machine-local codex binary with native CPU tuning, panic=abort,
+# profile-guided optimization, and mimalloc on top of the existing release
+# profile's LTO and codegen-units settings.
+#
+# You can provide additional representative training commands via:
+#   CODEX_PGO_TRAIN='
+#     ./target/release/codex --version >/dev/null
+#     ./target/release/codex exec --help >/dev/null
+#   ' just perf-build-local
+perf-build-local:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    PGO_DIR="${TMPDIR:-/tmp}/codex-pgo"
+    rm -rf "$PGO_DIR"
+    mkdir -p "$PGO_DIR"
+    LLVM_PROFDATA="$(command -v llvm-profdata || xcrun --find llvm-profdata)"
+    COMMON_RUSTFLAGS="-C target-cpu=native"
+    if command -v ld64.lld >/dev/null 2>&1 || command -v lld >/dev/null 2>&1; then
+        COMMON_RUSTFLAGS="$COMMON_RUSTFLAGS -C link-arg=-fuse-ld=lld"
+    fi
+    CARGO_PROFILE_RELEASE_LTO=fat \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL=3 \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
+    CARGO_PROFILE_RELEASE_PANIC=abort \
+    RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-generate=$PGO_DIR" \
+    cargo build -p codex-cli --release --features mimalloc
+    ./target/release/codex --help >/dev/null
+    ./target/release/codex exec --help >/dev/null
+    ./target/release/codex mcp --help >/dev/null
+    if [ -n "${CODEX_PGO_TRAIN:-}" ]; then sh -lc "$CODEX_PGO_TRAIN"; fi
+    "$LLVM_PROFDATA" merge -output="$PGO_DIR/merged.profdata" "$PGO_DIR"
+    CARGO_PROFILE_RELEASE_LTO=fat \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL=3 \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
+    CARGO_PROFILE_RELEASE_PANIC=abort \
+    RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-use=$PGO_DIR/merged.profdata -C llvm-args=-pgo-warn-missing-function" \
+    cargo build -p codex-cli --release --features mimalloc
+
 # Run the MCP server
 mcp-server-run *args:
     cargo run -p codex-mcp-server -- "$@"

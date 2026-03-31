@@ -7003,9 +7003,13 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
-        terminal_title_invalid_items_warned: Arc::new(…1391 tokens truncated…ast_copyable_output,
-        Some("Final reply **markdown**".to_string())
-    );
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        session_telemetry,
+    };
+
+    let chat = ChatWidget::new_with_app_event(init);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(chat.current_model(), resolved_model);
 }
 
 #[tokio::test]
@@ -14152,4 +14156,3 @@ async fn compact_queues_user_messages_snapshot() {
         term.backend().vt100().screen().contents()
     ));
 }
-

@@ -114,9 +114,9 @@ pub(crate) fn completed_summary(
 
 fn scope_for_event(event_name: HookEventName) -> HookScope {
     match event_name {
-        HookEventName::SessionStart 
-        | HookEventName::SessionEnd 
-        | HookEventName::PreCompact 
+        HookEventName::SessionStart
+        | HookEventName::SessionEnd
+        | HookEventName::PreCompact
         | HookEventName::TaskCompleted => HookScope::Thread,
         HookEventName::PreToolUse
         | HookEventName::PostToolUse

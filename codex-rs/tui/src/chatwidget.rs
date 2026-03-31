@@ -4860,9 +4860,6 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
-        widget.bottom_pane.set_voice_transcription_enabled(
-            widget.config.features.enabled(Feature::VoiceTranscription),
-        );
         widget.bottom_pane.set_agentmemory_enabled(
             widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory
                 && widget.config.features.enabled(Feature::MemoryTool),
@@ -6493,6 +6490,47 @@ impl ChatWidget {
             }
             ServerNotification::ItemCompleted(notification) => {
                 self.handle_item_completed_notification(notification, replay_kind);
+            }
+            ServerNotification::MemoryOperation(notification) => {
+                self.on_memory_operation(MemoryOperationEvent {
+                    source: match notification.source {
+                        codex_app_server_protocol::MemoryOperationSource::Human => {
+                            MemoryOperationSource::Human
+                        }
+                        codex_app_server_protocol::MemoryOperationSource::Assistant => {
+                            MemoryOperationSource::Assistant
+                        }
+                    },
+                    operation: match notification.operation {
+                        codex_app_server_protocol::MemoryOperationKind::Recall => {
+                            codex_protocol::items::MemoryOperationKind::Recall
+                        }
+                        codex_app_server_protocol::MemoryOperationKind::Update => {
+                            codex_protocol::items::MemoryOperationKind::Update
+                        }
+                        codex_app_server_protocol::MemoryOperationKind::Drop => {
+                            codex_protocol::items::MemoryOperationKind::Drop
+                        }
+                    },
+                    status: match notification.status {
+                        codex_app_server_protocol::MemoryOperationStatus::Pending => {
+                            codex_protocol::items::MemoryOperationStatus::Pending
+                        }
+                        codex_app_server_protocol::MemoryOperationStatus::Ready => {
+                            codex_protocol::items::MemoryOperationStatus::Ready
+                        }
+                        codex_app_server_protocol::MemoryOperationStatus::Empty => {
+                            codex_protocol::items::MemoryOperationStatus::Empty
+                        }
+                        codex_app_server_protocol::MemoryOperationStatus::Error => {
+                            codex_protocol::items::MemoryOperationStatus::Error
+                        }
+                    },
+                    query: notification.query,
+                    summary: notification.summary,
+                    detail: notification.detail,
+                    context_injected: notification.context_injected,
+                });
             }
             ServerNotification::AgentMessageDelta(notification) => {
                 self.on_agent_message_delta(notification.delta);
@@ -11200,6 +11238,3 @@ pub(crate) fn show_review_commit_picker_with_entries(
 
 #[cfg(test)]
 pub(crate) mod tests;
-
-
-

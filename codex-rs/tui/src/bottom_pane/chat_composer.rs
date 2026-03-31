@@ -330,6 +330,7 @@ pub(crate) struct ChatComposer {
     plugins_command_enabled: bool,
     fast_command_enabled: bool,
     personality_command_enabled: bool,
+    agentmemory_enabled: bool,
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
     windows_degraded_sandbox_active: bool,
@@ -451,6 +452,7 @@ impl ChatComposer {
             plugins_command_enabled: false,
             fast_command_enabled: false,
             personality_command_enabled: false,
+            agentmemory_enabled: false,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
             windows_degraded_sandbox_active: false,
@@ -546,6 +548,10 @@ impl ChatComposer {
 
     pub fn set_audio_device_selection_enabled(&mut self, enabled: bool) {
         self.audio_device_selection_enabled = enabled;
+    }
+
+    pub fn set_agentmemory_enabled(&mut self, enabled: bool) {
+        self.agentmemory_enabled = enabled;
     }
 
     /// Compatibility shim for tests that still toggle the removed steer mode flag.

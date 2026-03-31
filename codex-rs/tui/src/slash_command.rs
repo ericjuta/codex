@@ -64,6 +64,7 @@ pub enum SlashCommand {
     MemoryDrop,
     #[strum(serialize = "debug-m-update")]
     MemoryUpdate,
+    MemoryRecall,
 }
 
 impl SlashCommand {
@@ -94,6 +95,7 @@ impl SlashCommand {
             SlashCommand::Stop => "stop all background terminals",
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
+            SlashCommand::MemoryRecall => "recall relevant long-term memory into the current thread",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Fast => "toggle Fast mode to enable fastest inference at 2X plan usage",
             SlashCommand::Personality => "choose a communication style for Codex",
@@ -133,6 +135,7 @@ impl SlashCommand {
                 | SlashCommand::Plan
                 | SlashCommand::Fast
                 | SlashCommand::SandboxReadRoot
+                | SlashCommand::MemoryRecall
         )
     }
 
@@ -158,7 +161,8 @@ impl SlashCommand {
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
-            | SlashCommand::MemoryUpdate => false,
+            | SlashCommand::MemoryUpdate
+            | SlashCommand::MemoryRecall => false,
             SlashCommand::Diff
             | SlashCommand::Copy
             | SlashCommand::Rename

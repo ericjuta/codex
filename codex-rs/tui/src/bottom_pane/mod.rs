@@ -255,6 +255,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_agentmemory_enabled(&mut self, enabled: bool) {
+        self.composer.set_agentmemory_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub fn set_connectors_snapshot(&mut self, snapshot: Option<ConnectorsSnapshot>) {
         self.composer.set_connector_mentions(snapshot);
         self.request_redraw();

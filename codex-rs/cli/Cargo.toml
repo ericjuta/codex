@@ -12,6 +12,10 @@ path = "src/main.rs"
 name = "codex_cli"
 path = "src/lib.rs"
 
+[features]
+default = []
+mimalloc = ["dep:mimalloc"]
+
 [lints]
 workspace = true
 
@@ -42,6 +46,7 @@ codex-stdio-to-uds = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-tui = { workspace = true }
 libc = { workspace = true }
+mimalloc = { workspace = true, optional = true }
 owo-colors = { workspace = true }
 regex-lite = { workspace = true }
 serde_json = { workspace = true }
