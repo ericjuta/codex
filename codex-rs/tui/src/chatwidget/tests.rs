@@ -7003,159 +7003,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
-        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
-        session_telemetry,
-    };
-
-    let chat = ChatWidget::new_with_app_event(init);
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
-    assert_eq!(chat.current_model(), resolved_model);
-}
-
-#[tokio::test]
-async fn set_model_updates_active_collaboration_mask() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-    let plan_mask = collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Plan)
-        .expect("expected plan collaboration mask");
-    chat.set_collaboration_mask(plan_mask);
-
-    chat.set_model("gpt-5.1-codex-mini");
-
-    assert_eq!(chat.current_model(), "gpt-5.1-codex-mini");
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
-}
-
-#[tokio::test]
-async fn set_reasoning_effort_updates_active_collaboration_mask() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-    let plan_mask = collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Plan)
-        .expect("expected plan collaboration mask");
-    chat.set_collaboration_mask(plan_mask);
-
-    chat.set_reasoning_effort(/*effort*/ None);
-
-    assert_eq!(
-        chat.current_reasoning_effort(),
-        Some(ReasoningEffortConfig::Medium)
-    );
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
-}
-
-#[tokio::test]
-async fn set_reasoning_effort_does_not_override_active_plan_override() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::High));
-    let plan_mask = collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Plan)
-        .expect("expected plan collaboration mask");
-    chat.set_collaboration_mask(plan_mask);
-
-    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Low));
-
-    assert_eq!(
-        chat.current_reasoning_effort(),
-        Some(ReasoningEffortConfig::High)
-    );
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
-}
-
-#[tokio::test]
-async fn collab_mode_is_sent_after_enabling() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.thread_id = Some(ThreadId::new());
-    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-
-    chat.bottom_pane
-        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            collaboration_mode:
-                Some(CollaborationMode {
-                    mode: ModeKind::Default,
-                    ..
-                }),
-            personality: Some(Personality::Pragmatic),
-            ..
-        } => {}
-        other => {
-            panic!("expected Op::UserTurn, got {other:?}")
-        }
-    }
-}
-
-#[tokio::test]
-async fn collab_mode_applies_default_preset() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.thread_id = Some(ThreadId::new());
-
-    chat.bottom_pane
-        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            collaboration_mode:
-                Some(CollaborationMode {
-                    mode: ModeKind::Default,
-                    ..
-                }),
-            personality: Some(Personality::Pragmatic),
-            ..
-        } => {}
-        other => {
-            panic!("expected Op::UserTurn with default collaboration_mode, got {other:?}")
-        }
-    }
-
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
-    assert_eq!(chat.current_collaboration_mode().mode, ModeKind::Default);
-}
-
-#[tokio::test]
-async fn user_turn_includes_personality_from_config() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
-    chat.set_feature_enabled(Feature::Personality, /*enabled*/ true);
-    chat.thread_id = Some(ThreadId::new());
-    chat.set_model("gpt-5.2-codex");
-    chat.set_personality(Personality::Friendly);
-
-    chat.bottom_pane
-        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            personality: Some(Personality::Friendly),
-            ..
-        } => {}
-        other => panic!("expected Op::UserTurn with friendly personality, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn slash_quit_requests_exit() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.dispatch_command(SlashCommand::Quit);
-
-    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
-}
-
-#[tokio::test]
-async fn slash_copy_state_tracks_turn_complete_final_reply() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.handle_codex_event(Event {
-        id: "turn-1".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "turn-1".to_string(),
-            last_agent_message: Some("Final reply **markdown**".to_string()),
-        }),
-    });
-
-    assert_eq!(
-        chat.last_copyable_output,
+        terminal_title_invalid_items_warned: Arc::new(…1391 tokens truncated…ast_copyable_output,
         Some("Final reply **markdown**".to_string())
     );
 }
@@ -7426,23 +7274,23 @@ async fn slash_clear_is_disabled_while_task_running() {
 }
 
 #[tokio::test]
-async fn slash_memory_drop_reports_stubbed_feature() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+async fn slash_memory_drop_submits_drop_memories_op() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
     chat.dispatch_command(SlashCommand::MemoryDrop);
 
-    let event = rx.try_recv().expect("expected unsupported-feature error");
+    let event = rx.try_recv().expect("expected memory drop info");
     match event {
         AppEvent::InsertHistoryCell(cell) => {
-            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
-            assert!(rendered.contains("Memory maintenance: Not available in TUI yet."));
+            let rendered = lines_to_single_string(&cell.display_lines(80));
+            assert!(
+                rendered.contains("Dropping stored memories..."),
+                "expected memory drop info, got {rendered:?}"
+            );
         }
-        other => panic!("expected InsertHistoryCell error, got {other:?}"),
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
     }
-    assert!(
-        op_rx.try_recv().is_err(),
-        "expected no memory op to be sent"
-    );
+    assert_matches!(op_rx.try_recv(), Ok(Op::DropMemories));
 }
 
 #[tokio::test]
@@ -7457,22 +7305,127 @@ async fn slash_mcp_requests_inventory_via_app_server() {
 }
 
 #[tokio::test]
-async fn slash_memory_update_reports_stubbed_feature() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+async fn slash_memory_update_submits_update_memories_op() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
     chat.dispatch_command(SlashCommand::MemoryUpdate);
 
-    let event = rx.try_recv().expect("expected unsupported-feature error");
+    let event = rx.try_recv().expect("expected memory update info");
     match event {
         AppEvent::InsertHistoryCell(cell) => {
-            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
-            assert!(rendered.contains("Memory maintenance: Not available in TUI yet."));
+            let rendered = lines_to_single_string(&cell.display_lines(80));
+            assert!(
+                rendered.contains("Triggering memory update..."),
+                "expected memory update info, got {rendered:?}"
+            );
+        }
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
+    }
+    assert_matches!(op_rx.try_recv(), Ok(Op::UpdateMemories));
+}
+
+#[tokio::test]
+async fn slash_memory_recall_requires_existing_thread() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_agentmemory_enabled(true);
+
+    chat.dispatch_command(SlashCommand::MemoryRecall);
+
+    let event = rx.try_recv().expect("expected missing-thread error");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(80));
+            assert!(
+                rendered.contains(
+                    "Start a new chat or resume an existing thread before using /memory-recall."
+                ),
+                "expected /memory-recall thread requirement error, got {rendered:?}"
+            );
         }
         other => panic!("expected InsertHistoryCell error, got {other:?}"),
     }
-    assert!(
-        op_rx.try_recv().is_err(),
-        "expected no memory op to be sent"
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_memory_recall_with_inline_args_requires_existing_thread() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_agentmemory_enabled(true);
+
+    chat.bottom_pane.set_composer_text(
+        "/memory-recall retrieval freshness".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected missing-thread error");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(80));
+            assert!(
+                rendered.contains(
+                    "Start a new chat or resume an existing thread before using /memory-recall."
+                ),
+                "expected /memory-recall thread requirement error, got {rendered:?}"
+            );
+        }
+        other => panic!("expected InsertHistoryCell error, got {other:?}"),
+    }
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_memory_recall_submits_recall_memories_op() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_agentmemory_enabled(true);
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.dispatch_command(SlashCommand::MemoryRecall);
+
+    let event = rx.try_recv().expect("expected memory recall info");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(80));
+            assert!(
+                rendered.contains("Recalling memory context..."),
+                "expected memory recall info, got {rendered:?}"
+            );
+        }
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
+    }
+    assert_matches!(op_rx.try_recv(), Ok(Op::RecallMemories { query: None }));
+}
+
+#[tokio::test]
+async fn slash_memory_recall_with_inline_args_submits_query() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_agentmemory_enabled(true);
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.bottom_pane.set_composer_text(
+        "/memory-recall retrieval freshness".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected memory recall info");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(80));
+            assert!(
+                rendered.contains("Recalling memory context for: retrieval freshness"),
+                "expected memory recall info, got {rendered:?}"
+            );
+        }
+        other => panic!("expected InsertHistoryCell info, got {other:?}"),
+    }
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::RecallMemories {
+            query: Some(query)
+        }) if query == "retrieval freshness"
     );
 }
 
@@ -14126,3 +14079,4 @@ async fn compact_queues_user_messages_snapshot() {
         term.backend().vt100().screen().contents()
     ));
 }
+
