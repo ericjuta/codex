@@ -1,33 +1,27 @@
 # Workflow Strategy
 
-The workflows in this directory are split so that pull requests get fast, review-friendly signal while `main` still gets the full cross-platform verification pass.
+This fork keeps only the hosted CI lanes that still provide direct value for the
+private Rust-first workflow.
 
-## Pull Requests
+## Retained Workflows
 
-- `bazel.yml` is the main pre-merge verification path for Rust code.
-  It runs Bazel `test` and Bazel `clippy` on the supported Bazel targets.
-- `rust-ci.yml` keeps the Cargo-native PR checks intentionally small:
-  - `cargo fmt --check`
-  - `cargo shear`
-  - `argument-comment-lint` on Linux, macOS, and Windows
-  - `tools/argument-comment-lint` package tests when the lint or its workflow wiring changes
+- `rust-ci.yml` provides the primary cross-platform Rust validation signal for
+  changes in this fork.
+- `cargo-deny.yml` preserves dependency and license-policy visibility.
 
-The PR workflow still keeps the Linux lint lane on the default-targets-only invocation for now, but the released linter runs on Linux, macOS, and Windows before merge.
+## Removed Workflow Categories
 
-## Post-Merge On `main`
+The fork intentionally does not keep hosted workflows for:
 
-- `bazel.yml` also runs on pushes to `main`.
-  This re-verifies the merged Bazel path and helps keep the BuildBuddy caches warm.
-- `rust-ci-full.yml` is the full Cargo-native verification workflow.
-  It keeps the heavier checks off the PR path while still validating them after merge:
-  - the full Cargo `clippy` matrix
-  - the full Cargo `nextest` matrix
-  - release-profile Cargo builds
-  - cross-platform `argument-comment-lint`
-  - Linux remote-env tests
+- public-maintainer governance such as CLA or stale-PR handling
+- issue and PR triage automation
+- release publishing and packaging automation
+- heavyweight post-merge validation lanes that are not required for this fork's
+  day-to-day development path
 
 ## Rule Of Thumb
 
-- If a build/test/clippy check can be expressed in Bazel, prefer putting the PR-time version in `bazel.yml`.
-- Keep `rust-ci.yml` fast enough that it usually does not dominate PR latency.
-- Reserve `rust-ci-full.yml` for heavyweight Cargo-native coverage that Bazel does not replace yet.
+- keep workflow scope narrow and directly tied to the code paths this fork still
+  develops and ships
+- prefer local or manually-invoked validation for heavyweight checks that do not
+  need to consume hosted CI on every branch update
