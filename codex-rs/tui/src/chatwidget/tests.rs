@@ -7284,7 +7284,7 @@ async fn slash_memory_drop_submits_drop_memories_op() {
         AppEvent::InsertHistoryCell(cell) => {
             let rendered = lines_to_single_string(&cell.display_lines(80));
             assert!(
-                rendered.contains("Dropping stored memories..."),
+                rendered.contains("Memory Drop"),
                 "expected memory drop info, got {rendered:?}"
             );
         }
@@ -7315,7 +7315,7 @@ async fn slash_memory_update_submits_update_memories_op() {
         AppEvent::InsertHistoryCell(cell) => {
             let rendered = lines_to_single_string(&cell.display_lines(80));
             assert!(
-                rendered.contains("Triggering memory update..."),
+                rendered.contains("Memory Update"),
                 "expected memory update info, got {rendered:?}"
             );
         }
@@ -7388,7 +7388,7 @@ async fn slash_memory_recall_submits_recall_memories_op() {
         AppEvent::InsertHistoryCell(cell) => {
             let rendered = lines_to_single_string(&cell.display_lines(80));
             assert!(
-                rendered.contains("Recalling memory context..."),
+                rendered.contains("Memory Recall"),
                 "expected memory recall info, got {rendered:?}"
             );
         }
@@ -7415,7 +7415,7 @@ async fn slash_memory_recall_with_inline_args_submits_query() {
         AppEvent::InsertHistoryCell(cell) => {
             let rendered = lines_to_single_string(&cell.display_lines(80));
             assert!(
-                rendered.contains("Recalling memory context for: retrieval freshness"),
+                rendered.contains("Query: retrieval freshness"),
                 "expected memory recall info, got {rendered:?}"
             );
         }
