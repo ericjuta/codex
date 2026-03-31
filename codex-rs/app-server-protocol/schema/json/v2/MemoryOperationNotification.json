@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "MemoryOperationKind": {
+      "enum": [
+        "recall",
+        "update",
+        "drop"
+      ],
+      "type": "string"
+    },
+    "MemoryOperationStatus": {
+      "enum": [
+        "pending",
+        "ready",
+        "empty",
+        "error"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "contextInjected": {
+      "type": "boolean"
+    },
+    "detail": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "operation": {
+      "$ref": "#/definitions/MemoryOperationKind"
+    },
+    "query": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "$ref": "#/definitions/MemoryOperationStatus"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "contextInjected",
+    "operation",
+    "status",
+    "summary",
+    "threadId"
+  ],
+  "title": "MemoryOperationNotification",
+  "type": "object"
+}
