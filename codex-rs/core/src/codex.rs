@@ -2060,11 +2060,13 @@ impl Session {
             state.set_pending_session_start_source(Some(session_start_source));
         }
 
-        memories::start_memories_startup_task(
-            &sess,
-            Arc::clone(&config),
-            &session_configuration.session_source,
-        );
+        if config.memories.backend == crate::config::types::MemoryBackend::Native {
+            memories::start_memories_startup_task(
+                &sess,
+                Arc::clone(&config),
+                &session_configuration.session_source,
+            );
+        }
 
         Ok(sess)
     }
@@ -3593,11 +3595,25 @@ impl Session {
         }
         // Add developer instructions for memories.
         if turn_context.features.enabled(Feature::MemoryTool)
-            && turn_context.config.memories.use_memories
-            && let Some(memory_prompt) =
-                build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
+            && (turn_context.config.memories.use_memories
+                || turn_context.config.memories.backend
+                    == crate::config::types::MemoryBackend::Agentmemory)
         {
-            developer_sections.push(memory_prompt);
+            let memory_prompt_opt = match turn_context.config.memories.backend {
+                crate::config::types::MemoryBackend::Agentmemory => {
+                    let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+                    // Provide a default explicit token budget for the startup query context
+                    adapter
+                        .build_startup_developer_instructions(&turn_context.config.codex_home, 2000)
+                        .await
+                }
+                crate::config::types::MemoryBackend::Native => {
+                    build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
+                }
+            };
+            if let Some(memory_prompt) = memory_prompt_opt {
+                developer_sections.push(memory_prompt);
+            }
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if let Some(collab_instructions) =
@@ -5167,7 +5183,9 @@ mod handlers {
             state.session_configuration.session_source.clone()
         };
 
-        crate::memories::start_memories_startup_task(sess, Arc::clone(config), &session_source);
+        if config.memories.backend == crate::config::types::MemoryBackend::Native {
+            crate::memories::start_memories_startup_task(sess, Arc::clone(config), &session_source);
+        }
 
         sess.send_event_raw(Event {
             id: sub_id.clone(),
@@ -6010,6 +6028,15 @@ pub(crate) async fn run_turn(
                         stop_hook_active,
                         last_assistant_message: last_agent_message.clone(),
                     };
+
+                    if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
+                        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+                        let payload = stop_request.clone();
+                        tokio::spawn(async move {
+                            adapter.capture_event("Stop", serde_json::to_value(&payload).unwrap_or_default()).await;
+                        });
+                    }
+
                     for run in sess.hooks().preview_stop(&stop_request) {
                         sess.send_event(
                             &turn_context,

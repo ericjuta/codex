@@ -6,7 +6,14 @@
       "enum": [
         "PreToolUse",
         "PostToolUse",
+        "PostToolUseFailure",
+        "PreCompact",
         "SessionStart",
+        "SessionEnd",
+        "SubagentStart",
+        "SubagentStop",
+        "Notification",
+        "TaskCompleted",
         "UserPromptSubmit",
         "Stop"
       ],
