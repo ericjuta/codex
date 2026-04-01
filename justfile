@@ -82,6 +82,100 @@ bazel-remote-test:
 build-for-release:
     bazel build //codex-rs/cli:release_binaries --config=remote
 
+# Build a machine-local codex binary with reasonable runtime-focused tuning on
+# top of the existing release profile. This keeps the build to a single pass
+# and intentionally skips PGO.
+#
+# Intended for homogeneous local boxes or clusters where `target-cpu=native`
+# is acceptable.
+#
+# Optional environment variables:
+#   CODEX_PERF_EXTRA_FLAGS='...' append extra rustc flags
+#   CODEX_PERF_FEATURES='...'    pass cargo features to codex-cli
+perf-build-local:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    FEATURE_ARGS=()
+    if [ -n "${CODEX_PERF_FEATURES:-}" ]; then
+        FEATURE_ARGS+=(--features "$CODEX_PERF_FEATURES")
+    fi
+    export CARGO_PROFILE_RELEASE_PANIC=abort
+    EXTRA_FLAGS="${CODEX_PERF_EXTRA_FLAGS:-}"
+    export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=native${EXTRA_FLAGS:+ $EXTRA_FLAGS}"
+    cargo build -p codex-cli --release --locked "${FEATURE_ARGS[@]}"
+
+# Build a machine-local codex binary using profile-guided optimization on top
+# of the same local tuning as `perf-build-local`.
+#
+# Optional environment variables:
+#   CODEX_PGO_DIR='...'         override the temporary profile data directory
+#   CODEX_PGO_TRAIN='...'       extra representative training commands to run
+#   CODEX_PERF_EXTRA_FLAGS='...' append extra rustc flags
+#   CODEX_PERF_FEATURES='...'   pass cargo features to codex-cli
+perf-build-local-pgo:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    FEATURE_ARGS=()
+    if [ -n "${CODEX_PERF_FEATURES:-}" ]; then
+        FEATURE_ARGS+=(--features "$CODEX_PERF_FEATURES")
+    fi
+    export CARGO_PROFILE_RELEASE_PANIC=abort
+    PGO_DIR="${CODEX_PGO_DIR:-${TMPDIR:-/tmp}/codex-pgo}"
+    rm -rf "$PGO_DIR"
+    mkdir -p "$PGO_DIR"
+    LLVM_PROFDATA="$(command -v llvm-profdata || xcrun --find llvm-profdata)"
+    EXTRA_FLAGS="${CODEX_PERF_EXTRA_FLAGS:-}"
+    COMMON_RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=native${EXTRA_FLAGS:+ $EXTRA_FLAGS}"
+    RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-generate=$PGO_DIR" \\
+        cargo build -p codex-cli --release --locked "${FEATURE_ARGS[@]}"
+    ./target/release/codex --help >/dev/null
+    ./target/release/codex exec --help >/dev/null
+    ./target/release/codex mcp --help >/dev/null
+    if [ -n "${CODEX_PGO_TRAIN:-}" ]; then sh -lc "$CODEX_PGO_TRAIN"; fi
+    "$LLVM_PROFDATA" merge -output="$PGO_DIR/merged.profdata" "$PGO_DIR"
+    RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-use=$PGO_DIR/merged.profdata -C llvm-args=-pgo-warn-missing-function" \\
+        cargo build -p codex-cli --release --locked "${FEATURE_ARGS[@]}"
+
+# Build a reproducible local binary tuned specifically for Apple M3 machines.
+# This is functionally similar to `perf-build-local` on this Mac, but pins the
+# CPU target instead of relying on `native`.
+perf-build-m3:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    FEATURE_ARGS=()
+    if [ -n "${CODEX_PERF_FEATURES:-}" ]; then
+        FEATURE_ARGS+=(--features "$CODEX_PERF_FEATURES")
+    fi
+    export CARGO_PROFILE_RELEASE_PANIC=abort
+    EXTRA_FLAGS="${CODEX_PERF_EXTRA_FLAGS:-}"
+    export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=apple-m3${EXTRA_FLAGS:+ $EXTRA_FLAGS}"
+    cargo build -p codex-cli --release --locked "${FEATURE_ARGS[@]}"
+
+# Build an Apple M3-tuned codex binary using profile-guided optimization.
+perf-build-m3-pgo:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    FEATURE_ARGS=()
+    if [ -n "${CODEX_PERF_FEATURES:-}" ]; then
+        FEATURE_ARGS+=(--features "$CODEX_PERF_FEATURES")
+    fi
+    export CARGO_PROFILE_RELEASE_PANIC=abort
+    PGO_DIR="${CODEX_PGO_DIR:-${TMPDIR:-/tmp}/codex-pgo-m3}"
+    rm -rf "$PGO_DIR"
+    mkdir -p "$PGO_DIR"
+    LLVM_PROFDATA="$(command -v llvm-profdata || xcrun --find llvm-profdata)"
+    EXTRA_FLAGS="${CODEX_PERF_EXTRA_FLAGS:-}"
+    COMMON_RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=apple-m3${EXTRA_FLAGS:+ $EXTRA_FLAGS}"
+    RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-generate=$PGO_DIR" \\
+        cargo build -p codex-cli --release --locked "${FEATURE_ARGS[@]}"
+    ./target/release/codex --help >/dev/null
+    ./target/release/codex exec --help >/dev/null
+    ./target/release/codex mcp --help >/dev/null
+    if [ -n "${CODEX_PGO_TRAIN:-}" ]; then sh -lc "$CODEX_PGO_TRAIN"; fi
+    "$LLVM_PROFDATA" merge -output="$PGO_DIR/merged.profdata" "$PGO_DIR"
+    RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-use=$PGO_DIR/merged.profdata -C llvm-args=-pgo-warn-missing-function" \\
+        cargo build -p codex-cli --release --locked "${FEATURE_ARGS[@]}"
+
 # Run the MCP server
 mcp-server-run *args:
     cargo run -p codex-mcp-server -- "$@"
