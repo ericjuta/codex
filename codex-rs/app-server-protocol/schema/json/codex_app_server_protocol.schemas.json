@@ -9585,6 +9585,9 @@
               "null"
             ]
           },
+          "source": {
+            "$ref": "#/definitions/v2/MemoryOperationSource"
+          },
           "status": {
             "$ref": "#/definitions/v2/MemoryOperationStatus"
           },
@@ -9598,12 +9601,20 @@
         "required": [
           "contextInjected",
           "operation",
+          "source",
           "status",
           "summary",
           "threadId"
         ],
         "title": "MemoryOperationNotification",
         "type": "object"
+      },
+      "MemoryOperationSource": {
+        "enum": [
+          "human",
+          "assistant"
+        ],
+        "type": "string"
       },
       "MemoryOperationStatus": {
         "enum": [

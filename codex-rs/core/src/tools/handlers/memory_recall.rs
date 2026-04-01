@@ -1,4 +1,7 @@
 use async_trait::async_trait;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::MemoryOperationEvent;
+use codex_protocol::protocol::MemoryOperationSource;
 use serde::Deserialize;
 
 use crate::config::types::MemoryBackend;
@@ -9,6 +12,8 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_protocol::items::MemoryOperationKind;
+use codex_protocol::items::MemoryOperationStatus;
 
 #[derive(Debug, Deserialize)]
 struct MemoryRecallArgs {
@@ -57,16 +62,63 @@ impl ToolHandler for MemoryRecallHandler {
             .filter(|query| !query.is_empty());
 
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
-        let response = adapter
+        let response = match adapter
             .recall_for_runtime(
                 &session.conversation_id.to_string(),
                 turn.cwd.as_path(),
                 query,
             )
             .await
-            .map_err(|err| {
-                FunctionCallError::RespondToModel(format!("memory_recall failed: {err}"))
-            })?;
+        {
+            Ok(response) => response,
+            Err(err) => {
+                session
+                    .send_event(
+                        turn.as_ref(),
+                        EventMsg::MemoryOperation(MemoryOperationEvent {
+                            source: MemoryOperationSource::Assistant,
+                            operation: MemoryOperationKind::Recall,
+                            status: MemoryOperationStatus::Error,
+                            query: args.query.clone(),
+                            summary: "Assistant memory recall failed.".to_string(),
+                            detail: Some(err.to_string()),
+                            context_injected: false,
+                        }),
+                    )
+                    .await;
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "memory_recall failed: {err}"
+                )));
+            }
+        };
+
+        session
+            .send_event(
+                turn.as_ref(),
+                EventMsg::MemoryOperation(if response.recalled {
+                    MemoryOperationEvent {
+                        source: MemoryOperationSource::Assistant,
+                        operation: MemoryOperationKind::Recall,
+                        status: MemoryOperationStatus::Ready,
+                        query: args.query.clone(),
+                        summary: "Assistant recalled memory context for this turn.".to_string(),
+                        detail: Some(response.context.clone()),
+                        context_injected: false,
+                    }
+                } else {
+                    MemoryOperationEvent {
+                        source: MemoryOperationSource::Assistant,
+                        operation: MemoryOperationKind::Recall,
+                        status: MemoryOperationStatus::Empty,
+                        query: args.query.clone(),
+                        summary: "Assistant found no relevant memory context for this turn."
+                            .to_string(),
+                        detail: None,
+                        context_injected: false,
+                    }
+                }),
+            )
+            .await;
 
         let content = serde_json::to_string(&response).map_err(|err| {
             FunctionCallError::Fatal(format!("failed to serialize memory_recall response: {err}"))
