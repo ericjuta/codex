@@ -229,6 +229,7 @@ async fn shell_pre_tool_use_payload_uses_joined_command() {
             payload,
         }),
         Some(crate::tools::registry::PreToolUsePayload {
+            tool_name: "shell".to_string(),
             command: "bash -lc 'printf hi'".to_string(),
         })
     );
@@ -254,13 +255,14 @@ async fn shell_command_pre_tool_use_payload_uses_raw_command() {
             payload,
         }),
         Some(crate::tools::registry::PreToolUsePayload {
+            tool_name: "shell_command".to_string(),
             command: "printf shell command".to_string(),
         })
     );
 }
 
-#[test]
-fn build_post_tool_use_payload_uses_tool_output_wire_value() {
+#[tokio::test]
+async fn build_post_tool_use_payload_uses_tool_output_wire_value() {
     let payload = ToolPayload::Function {
         arguments: json!({ "command": "printf shell command" }).to_string(),
     };
@@ -273,9 +275,21 @@ fn build_post_tool_use_payload_uses_tool_output_wire_value() {
         backend: super::ShellCommandBackend::Classic,
     };
 
+    let (session, turn) = make_session_and_context().await;
+    let invocation = ToolInvocation {
+        session: session.into(),
+        turn: turn.into(),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+        call_id: "call-42".to_string(),
+        tool_name: "shell_command".to_string(),
+        tool_namespace: None,
+        payload,
+    };
+
     assert_eq!(
-        handler.post_tool_use_payload("call-42", &payload, &output),
+        handler.post_tool_use_payload(&invocation, &output),
         Some(crate::tools::registry::PostToolUsePayload {
+            tool_name: "shell_command".to_string(),
             command: "printf shell command".to_string(),
             tool_response: json!("shell output"),
         })

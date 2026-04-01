@@ -8,16 +8,30 @@ pub(crate) struct HooksFile {
 
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct HookEvents {
-    #[serde(rename = "PreToolUse", default)]
-    pub pre_tool_use: Vec<MatcherGroup>,
-    #[serde(rename = "PostToolUse", default)]
-    pub post_tool_use: Vec<MatcherGroup>,
     #[serde(rename = "SessionStart", default)]
     pub session_start: Vec<MatcherGroup>,
     #[serde(rename = "UserPromptSubmit", default)]
     pub user_prompt_submit: Vec<MatcherGroup>,
+    #[serde(rename = "PreToolUse", default)]
+    pub pre_tool_use: Vec<MatcherGroup>,
+    #[serde(rename = "PostToolUse", default)]
+    pub post_tool_use: Vec<MatcherGroup>,
+    #[serde(rename = "PostToolUseFailure", default)]
+    pub post_tool_use_failure: Vec<MatcherGroup>,
+    #[serde(rename = "PreCompact", default)]
+    pub pre_compact: Vec<MatcherGroup>,
+    #[serde(rename = "SubagentStart", default)]
+    pub subagent_start: Vec<MatcherGroup>,
+    #[serde(rename = "SubagentStop", default)]
+    pub subagent_stop: Vec<MatcherGroup>,
+    #[serde(rename = "Notification", default)]
+    pub notification: Vec<MatcherGroup>,
+    #[serde(rename = "TaskCompleted", default)]
+    pub task_completed: Vec<MatcherGroup>,
     #[serde(rename = "Stop", default)]
     pub stop: Vec<MatcherGroup>,
+    #[serde(rename = "SessionEnd", default)]
+    pub session_end: Vec<MatcherGroup>,
 }
 
 #[derive(Debug, Default, Deserialize)]
