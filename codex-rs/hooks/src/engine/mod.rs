@@ -52,9 +52,16 @@ impl ConfiguredHandler {
         match self.event_name {
             codex_protocol::protocol::HookEventName::PreToolUse => "pre-tool-use",
             codex_protocol::protocol::HookEventName::PostToolUse => "post-tool-use",
+            codex_protocol::protocol::HookEventName::PostToolUseFailure => "post-tool-use-failure",
+            codex_protocol::protocol::HookEventName::PreCompact => "pre-compact",
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
+            codex_protocol::protocol::HookEventName::SubagentStart => "subagent-start",
+            codex_protocol::protocol::HookEventName::SubagentStop => "subagent-stop",
+            codex_protocol::protocol::HookEventName::Notification => "notification",
+            codex_protocol::protocol::HookEventName::TaskCompleted => "task-completed",
             codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
             codex_protocol::protocol::HookEventName::Stop => "stop",
+            codex_protocol::protocol::HookEventName::SessionEnd => "session-end",
         }
     }
 }

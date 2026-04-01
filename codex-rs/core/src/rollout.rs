@@ -33,6 +33,7 @@ impl codex_rollout::RolloutConfigView for Config {
 
     fn generate_memories(&self) -> bool {
         self.memories.generate_memories
+            || self.memories.backend == crate::config::types::MemoryBackend::Agentmemory
     }
 }
 

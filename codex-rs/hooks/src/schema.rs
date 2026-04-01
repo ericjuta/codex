@@ -71,8 +71,22 @@ pub(crate) enum HookEventNameWire {
     PreToolUse,
     #[serde(rename = "PostToolUse")]
     PostToolUse,
+    #[serde(rename = "PostToolUseFailure")]
+    PostToolUseFailure,
+    #[serde(rename = "PreCompact")]
+    PreCompact,
     #[serde(rename = "SessionStart")]
     SessionStart,
+    #[serde(rename = "SessionEnd")]
+    SessionEnd,
+    #[serde(rename = "SubagentStart")]
+    SubagentStart,
+    #[serde(rename = "SubagentStop")]
+    SubagentStop,
+    #[serde(rename = "Notification")]
+    Notification,
+    #[serde(rename = "TaskCompleted")]
+    TaskCompleted,
     #[serde(rename = "UserPromptSubmit")]
     UserPromptSubmit,
     #[serde(rename = "Stop")]

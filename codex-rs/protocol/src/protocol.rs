@@ -1427,9 +1427,16 @@ pub enum EventMsg {
 pub enum HookEventName {
     PreToolUse,
     PostToolUse,
+    PostToolUseFailure,
+    PreCompact,
     SessionStart,
+    SubagentStart,
+    SubagentStop,
+    Notification,
+    TaskCompleted,
     UserPromptSubmit,
     Stop,
+    SessionEnd,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
