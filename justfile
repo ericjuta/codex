@@ -120,15 +120,27 @@ perf-build-local-pgo:
     PGO_DIR="${CODEX_PGO_DIR:-${TMPDIR:-/tmp}/codex-pgo}"
     rm -rf "$PGO_DIR"
     mkdir -p "$PGO_DIR"
-    LLVM_PROFDATA="$(command -v llvm-profdata || xcrun --find llvm-profdata)"
+    LLVM_PROFDATA="$(command -v llvm-profdata || true)"
+    if [ -z "$LLVM_PROFDATA" ]; then
+        RUST_HOST="$(rustc -vV | sed -n 's/^host: //p')"
+        RUST_LLVM_PROFDATA="$(rustc --print sysroot)/lib/rustlib/$RUST_HOST/bin/llvm-profdata"
+        if [ -x "$RUST_LLVM_PROFDATA" ]; then
+            LLVM_PROFDATA="$RUST_LLVM_PROFDATA"
+        fi
+    fi
+    if [ -z "$LLVM_PROFDATA" ] && command -v xcrun >/dev/null 2>&1; then
+        LLVM_PROFDATA="$(xcrun --find llvm-profdata 2>/dev/null || true)"
+    fi
+    if [ -z "$LLVM_PROFDATA" ]; then
+        echo "llvm-profdata not found; install llvm-tools-preview or add llvm-profdata to PATH" >&2
+        exit 127
+    fi
     EXTRA_FLAGS="${CODEX_PERF_EXTRA_FLAGS:-}"
     COMMON_RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=native${EXTRA_FLAGS:+ $EXTRA_FLAGS}"
     if [ -n "${CODEX_PERF_FEATURES:-}" ]; then
-        RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-generate=$PGO_DIR" \\
-            cargo build -p codex-cli --release --locked --features "$CODEX_PERF_FEATURES"
+        RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-generate=$PGO_DIR" cargo build -p codex-cli --release --locked --features "$CODEX_PERF_FEATURES"
     else
-        RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-generate=$PGO_DIR" \\
-            cargo build -p codex-cli --release --locked
+        RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-generate=$PGO_DIR" cargo build -p codex-cli --release --locked
     fi
     ./target/release/codex --help >/dev/null
     ./target/release/codex exec --help >/dev/null
@@ -136,11 +148,9 @@ perf-build-local-pgo:
     if [ -n "${CODEX_PGO_TRAIN:-}" ]; then sh -lc "$CODEX_PGO_TRAIN"; fi
     "$LLVM_PROFDATA" merge -output="$PGO_DIR/merged.profdata" "$PGO_DIR"
     if [ -n "${CODEX_PERF_FEATURES:-}" ]; then
-        RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-use=$PGO_DIR/merged.profdata -C llvm-args=-pgo-warn-missing-function" \\
-            cargo build -p codex-cli --release --locked --features "$CODEX_PERF_FEATURES"
+        RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-use=$PGO_DIR/merged.profdata -C llvm-args=-pgo-warn-missing-function" cargo build -p codex-cli --release --locked --features "$CODEX_PERF_FEATURES"
     else
-        RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-use=$PGO_DIR/merged.profdata -C llvm-args=-pgo-warn-missing-function" \\
-            cargo build -p codex-cli --release --locked
+        RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-use=$PGO_DIR/merged.profdata -C llvm-args=-pgo-warn-missing-function" cargo build -p codex-cli --release --locked
     fi
 
 # Build a reproducible local binary tuned specifically for Apple M3 machines.
@@ -166,15 +176,27 @@ perf-build-m3-pgo:
     PGO_DIR="${CODEX_PGO_DIR:-${TMPDIR:-/tmp}/codex-pgo-m3}"
     rm -rf "$PGO_DIR"
     mkdir -p "$PGO_DIR"
-    LLVM_PROFDATA="$(command -v llvm-profdata || xcrun --find llvm-profdata)"
+    LLVM_PROFDATA="$(command -v llvm-profdata || true)"
+    if [ -z "$LLVM_PROFDATA" ]; then
+        RUST_HOST="$(rustc -vV | sed -n 's/^host: //p')"
+        RUST_LLVM_PROFDATA="$(rustc --print sysroot)/lib/rustlib/$RUST_HOST/bin/llvm-profdata"
+        if [ -x "$RUST_LLVM_PROFDATA" ]; then
+            LLVM_PROFDATA="$RUST_LLVM_PROFDATA"
+        fi
+    fi
+    if [ -z "$LLVM_PROFDATA" ] && command -v xcrun >/dev/null 2>&1; then
+        LLVM_PROFDATA="$(xcrun --find llvm-profdata 2>/dev/null || true)"
+    fi
+    if [ -z "$LLVM_PROFDATA" ]; then
+        echo "llvm-profdata not found; install llvm-tools-preview or add llvm-profdata to PATH" >&2
+        exit 127
+    fi
     EXTRA_FLAGS="${CODEX_PERF_EXTRA_FLAGS:-}"
     COMMON_RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=apple-m3${EXTRA_FLAGS:+ $EXTRA_FLAGS}"
     if [ -n "${CODEX_PERF_FEATURES:-}" ]; then
-        RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-generate=$PGO_DIR" \\
-            cargo build -p codex-cli --release --locked --features "$CODEX_PERF_FEATURES"
+        RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-generate=$PGO_DIR" cargo build -p codex-cli --release --locked --features "$CODEX_PERF_FEATURES"
     else
-        RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-generate=$PGO_DIR" \\
-            cargo build -p codex-cli --release --locked
+        RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-generate=$PGO_DIR" cargo build -p codex-cli --release --locked
     fi
     ./target/release/codex --help >/dev/null
     ./target/release/codex exec --help >/dev/null
@@ -182,11 +204,9 @@ perf-build-m3-pgo:
     if [ -n "${CODEX_PGO_TRAIN:-}" ]; then sh -lc "$CODEX_PGO_TRAIN"; fi
     "$LLVM_PROFDATA" merge -output="$PGO_DIR/merged.profdata" "$PGO_DIR"
     if [ -n "${CODEX_PERF_FEATURES:-}" ]; then
-        RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-use=$PGO_DIR/merged.profdata -C llvm-args=-pgo-warn-missing-function" \\
-            cargo build -p codex-cli --release --locked --features "$CODEX_PERF_FEATURES"
+        RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-use=$PGO_DIR/merged.profdata -C llvm-args=-pgo-warn-missing-function" cargo build -p codex-cli --release --locked --features "$CODEX_PERF_FEATURES"
     else
-        RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-use=$PGO_DIR/merged.profdata -C llvm-args=-pgo-warn-missing-function" \\
-            cargo build -p codex-cli --release --locked
+        RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-use=$PGO_DIR/merged.profdata -C llvm-args=-pgo-warn-missing-function" cargo build -p codex-cli --release --locked
     fi
 
 # Run the MCP server
