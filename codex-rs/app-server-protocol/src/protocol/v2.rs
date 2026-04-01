@@ -2966,6 +2966,44 @@ pub struct ThreadCompactStartParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadCompactStartResponse {}
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMemoryDropParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMemoryDropResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMemoryUpdateParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMemoryUpdateResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMemoryRecallParams {
+    pub thread_id: String,
+    #[ts(optional = nullable)]
+    pub query: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMemoryRecallResponse {}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case", export_to = "v2/")]
@@ -6484,6 +6522,39 @@ mod tests {
 
         let decoded = serde_json::from_value::<ThreadShellCommandResponse>(value)
             .expect("deserialize thread/shellCommand response");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn thread_memory_recall_params_round_trip() {
+        let params = ThreadMemoryRecallParams {
+            thread_id: "thr_123".to_string(),
+            query: Some("startup drift".to_string()),
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize thread/memory/recall params");
+        assert_eq!(
+            value,
+            json!({
+                "threadId": "thr_123",
+                "query": "startup drift",
+            })
+        );
+
+        let decoded = serde_json::from_value::<ThreadMemoryRecallParams>(value)
+            .expect("deserialize thread/memory/recall params");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn thread_memory_recall_response_round_trip() {
+        let response = ThreadMemoryRecallResponse {};
+        let value =
+            serde_json::to_value(&response).expect("serialize thread/memory/recall response");
+        assert_eq!(value, json!({}));
+
+        let decoded = serde_json::from_value::<ThreadMemoryRecallResponse>(value)
+            .expect("deserialize thread/memory/recall response");
         assert_eq!(decoded, response);
     }
 

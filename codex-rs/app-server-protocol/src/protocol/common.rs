@@ -292,6 +292,18 @@ client_request_definitions! {
         params: v2::ThreadCompactStartParams,
         response: v2::ThreadCompactStartResponse,
     },
+    ThreadMemoryDrop => "thread/memory/drop" {
+        params: v2::ThreadMemoryDropParams,
+        response: v2::ThreadMemoryDropResponse,
+    },
+    ThreadMemoryUpdate => "thread/memory/update" {
+        params: v2::ThreadMemoryUpdateParams,
+        response: v2::ThreadMemoryUpdateResponse,
+    },
+    ThreadMemoryRecall => "thread/memory/recall" {
+        params: v2::ThreadMemoryRecallParams,
+        response: v2::ThreadMemoryRecallResponse,
+    },
     ThreadShellCommand => "thread/shellCommand" {
         params: v2::ThreadShellCommandParams,
         response: v2::ThreadShellCommandResponse,

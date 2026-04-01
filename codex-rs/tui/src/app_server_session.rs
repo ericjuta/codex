@@ -34,6 +34,12 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
+use codex_app_server_protocol::ThreadMemoryDropParams;
+use codex_app_server_protocol::ThreadMemoryDropResponse;
+use codex_app_server_protocol::ThreadMemoryRecallParams;
+use codex_app_server_protocol::ThreadMemoryRecallResponse;
+use codex_app_server_protocol::ThreadMemoryUpdateParams;
+use codex_app_server_protocol::ThreadMemoryUpdateResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
@@ -520,6 +526,56 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/compact/start failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_memory_drop(&mut self, thread_id: ThreadId) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadMemoryDropResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadMemoryDrop {
+                request_id,
+                params: ThreadMemoryDropParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/memory/drop failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_memory_update(&mut self, thread_id: ThreadId) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadMemoryUpdateResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadMemoryUpdate {
+                request_id,
+                params: ThreadMemoryUpdateParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/memory/update failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_memory_recall(
+        &mut self,
+        thread_id: ThreadId,
+        query: Option<String>,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadMemoryRecallResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadMemoryRecall {
+                request_id,
+                params: ThreadMemoryRecallParams {
+                    thread_id: thread_id.to_string(),
+                    query,
+                },
+            })
+            .await
+            .wrap_err("thread/memory/recall failed in TUI")?;
         Ok(())
     }
 
