@@ -185,6 +185,8 @@ use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
+use codex_protocol::protocol::MemoryOperationEvent;
+use codex_protocol::protocol::MemoryOperationSource;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
@@ -2773,15 +2775,51 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn on_memory_operation(&mut self, event: MemoryOperationEvent) {
+        if self.try_complete_pending_memory_operation(&event) {
+            self.request_redraw();
+            return;
+        }
+        self.add_to_history(history_cell::new_memory_operation_event(event));
+        self.request_redraw();
+    }
+
+    fn show_pending_memory_operation(&mut self, cell: history_cell::MemoryHistoryCell) {
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(cell));
+        self.bump_active_cell_revision();
+        self.request_redraw();
+    }
+
+    fn try_complete_pending_memory_operation(&mut self, event: &MemoryOperationEvent) -> bool {
+        if event.source != MemoryOperationSource::Human {
+            return false;
+        }
+        let Some(active) = self.active_cell.as_mut() else {
+            return false;
+        };
+        let Some(memory) = active
+            .as_any_mut()
+            .downcast_mut::<history_cell::MemoryHistoryCell>()
+        else {
+            return false;
+        };
+        if !memory.is_human_pending_submission(event.operation, event.query.as_deref()) {
+            return false;
+        }
+        memory.apply_event(event.clone());
+        self.bump_active_cell_revision();
+        self.flush_active_cell();
+        true
+    }
+
     fn ensure_memory_recall_thread(&mut self) -> bool {
         if self.thread_id.is_some() {
             return true;
         }
 
-        self.add_error_message(
-            "Start a new chat or resume an existing thread before using /memory-recall."
-                .to_string(),
-        );
+        self.add_to_history(history_cell::new_memory_recall_thread_requirement());
+        self.request_redraw();
         self.bottom_pane.drain_pending_submission_state();
         false
     }
@@ -4731,6 +4769,14 @@ impl ChatWidget {
             last_non_retry_error: None,
         };
 
+        widget.prefetch_rate_limits();
+        widget.bottom_pane.set_voice_transcription_enabled(
+            widget.config.features.enabled(Feature::VoiceTranscription),
+        );
+        widget.bottom_pane.set_agentmemory_enabled(
+            widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory
+                && widget.config.features.enabled(Feature::MemoryTool),
+        );
         widget
             .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
@@ -5298,33 +5344,20 @@ impl ChatWidget {
                 self.clean_background_terminals();
             }
             SlashCommand::MemoryDrop => {
-                self.add_info_message(
-                    "Dropping stored memories...".to_string(),
-                    Some("Codex will report whether the memory store was cleared.".to_string()),
-                );
+                self.show_pending_memory_operation(history_cell::new_memory_drop_submission());
                 self.submit_op(Op::DropMemories);
             }
             SlashCommand::MemoryUpdate => {
-                self.add_info_message(
-                    "Triggering memory update...".to_string(),
-                    Some(
-                        "Codex will report when the memory refresh request has been accepted."
-                            .to_string(),
-                    ),
-                );
+                self.show_pending_memory_operation(history_cell::new_memory_update_submission());
                 self.submit_op(Op::UpdateMemories);
             }
             SlashCommand::MemoryRecall => {
                 if !self.ensure_memory_recall_thread() {
                     return;
                 }
-                self.add_info_message(
-                    "Recalling memory context...".to_string(),
-                    Some(
-                        "Recalled memory will be injected into the current thread and shown here."
-                            .to_string(),
-                    ),
-                );
+                self.show_pending_memory_operation(history_cell::new_memory_recall_submission(
+                    /*query*/ None,
+                ));
                 self.submit_op(Op::RecallMemories { query: None });
             }
             SlashCommand::Mcp => {
@@ -5512,13 +5545,9 @@ impl ChatWidget {
                 if !self.ensure_memory_recall_thread() {
                     return;
                 }
-                self.add_info_message(
-                    format!("Recalling memory context for: {trimmed}"),
-                    Some(
-                        "Recalled memory will be injected into the current thread and shown here."
-                            .to_string(),
-                    ),
-                );
+                self.show_pending_memory_operation(history_cell::new_memory_recall_submission(
+                    Some(trimmed.to_string()),
+                ));
                 self.submit_op(Op::RecallMemories {
                     query: Some(trimmed.to_string()),
                 });
@@ -6917,6 +6946,7 @@ impl ChatWidget {
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
+            EventMsg::MemoryOperation(event) => self.on_memory_operation(event),
             EventMsg::GuardianAssessment(ev) => self.on_guardian_assessment(ev),
             EventMsg::ModelReroute(_) => {}
             EventMsg::Error(ErrorEvent {
@@ -11148,4 +11178,6 @@ pub(crate) fn show_review_commit_picker_with_entries(
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+
 
