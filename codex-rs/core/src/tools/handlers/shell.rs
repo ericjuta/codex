@@ -216,7 +216,8 @@ impl ToolHandler for ShellHandler {
         invocation: &ToolInvocation,
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
-        let tool_response = result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
+        let tool_response =
+            result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
             tool_name: invocation.tool_name.clone(),
             command: shell_payload_command(&invocation.payload)?,
@@ -325,7 +326,8 @@ impl ToolHandler for ShellCommandHandler {
         invocation: &ToolInvocation,
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
-        let tool_response = result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
+        let tool_response =
+            result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
             tool_name: invocation.tool_name.clone(),
             command: shell_command_payload_command(&invocation.payload)?,

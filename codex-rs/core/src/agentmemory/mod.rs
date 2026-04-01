@@ -7,7 +7,6 @@ use serde::Serialize;
 use serde_json::json;
 use std::path::Path;
 use std::sync::OnceLock;
-use serde_json::json;
 
 /// A placeholder adapter struct for agentmemory integration.
 #[derive(Debug, Default, Clone)]
@@ -28,9 +27,7 @@ pub(crate) struct MemoryRecallResult {
 }
 
 fn get_client() -> &'static reqwest::Client {
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder().build().unwrap_or_default()
-    })
+    CLIENT.get_or_init(|| reqwest::Client::builder().build().unwrap_or_default())
 }
 
 impl AgentmemoryAdapter {
@@ -68,9 +65,6 @@ impl AgentmemoryAdapter {
         });
 
         let context_result = client.post(&url).json(&request_body).send().await;
-        
-        let mut instructions = "Use the `AgentMemory` tools to search and retrieve relevant memory.\n\
-             Your context is bounded; use targeted queries to expand details as needed.".to_string();
 
         let mut instructions =
             "Use the `memory_recall` tool when the user asks about prior work, earlier decisions, previous failures, resumed threads, or other historical context that is not fully present in the current thread.\n\
@@ -129,18 +123,25 @@ impl AgentmemoryAdapter {
                 }
             }
         }
-        
-        Some(instructions)
+        (files, search_terms)
     }
 
-    /// Transforms Codex's internal hook payloads into Claude-parity structures 
+    /// Transforms Codex's internal hook payloads into Claude-parity structures
     /// expected by the `agentmemory` REST API. This provides a central, malleable
     /// place to adjust mapping logic in the future without touching the hooks engine.
-    fn format_claude_parity_payload(&self, event_name: &str, payload: serde_json::Value) -> serde_json::Value {
-        let session_id = payload.get("session_id").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-        
+    fn format_claude_parity_payload(
+        &self,
+        event_name: &str,
+        payload: serde_json::Value,
+    ) -> serde_json::Value {
+        let session_id = payload
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
         let timestamp = chrono::Utc::now().to_rfc3339();
-        
+
         json!({
             "sessionId": session_id,
             "hookType": event_name,
@@ -156,15 +157,17 @@ impl AgentmemoryAdapter {
     pub async fn capture_event(&self, event_name: &str, payload_json: serde_json::Value) {
         let url = format!("{}/agentmemory/observe", self.api_base());
         let client = get_client();
-        
+
         let body = self.format_claude_parity_payload(event_name, payload_json);
-        
+
         if let Err(e) = client.post(&url).json(&body).send().await {
             // Log a warning instead of failing silently. This won't crash the session,
             // but will alert developers that memory observation is degraded.
             tracing::warn!(
                 "Agentmemory observation failed: could not send {} event to {}: {}",
-                event_name, url, e
+                event_name,
+                url,
+                e
             );
         }
     }
@@ -293,7 +296,12 @@ impl AgentmemoryAdapter {
     pub async fn drop_memories(&self) -> Result<(), String> {
         let url = format!("{}/agentmemory/forget", self.api_base());
         let client = get_client();
-        let res = client.post(&url).json(&json!({"all": true})).send().await.map_err(|e| e.to_string())?;
+        let res = client
+            .post(&url)
+            .json(&json!({"all": true}))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
         if !res.status().is_success() {
             return Err(format!("Forget failed with status {}", res.status()));
         }
@@ -416,9 +424,9 @@ mod tests {
             "turn_id": "turn-5",
             "command": "echo hello"
         });
-        
+
         let formatted = adapter.format_claude_parity_payload("PreToolUse", raw_payload.clone());
-        
+
         assert_eq!(formatted["sessionId"], "1234");
         assert_eq!(formatted["hookType"], "PreToolUse");
         assert!(formatted.get("timestamp").is_some());

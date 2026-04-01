@@ -1,3 +1,4 @@
+use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::config::types::MemoryBackend;
 use crate::shell::Shell;
