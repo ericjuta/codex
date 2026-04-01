@@ -153,7 +153,8 @@ impl ToolHandler for UnifiedExecHandler {
             return None;
         }
 
-        let tool_response = result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
+        let tool_response =
+            result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
             tool_name: invocation.tool_name.clone(),
             command: args.cmd,

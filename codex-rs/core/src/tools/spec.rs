@@ -1,3 +1,4 @@
+use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
 use crate::config::types::MemoryBackend;
@@ -84,6 +85,8 @@ use codex_tools::tool_spec_to_code_mode_tool_definition;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value as JsonValue;
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
