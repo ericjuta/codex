@@ -347,6 +347,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             if let ApiVersion::V2 = api_version {
                 let notification = MemoryOperationNotification {
                     thread_id: conversation_id.to_string(),
+                    source: event.source.into(),
                     operation: event.operation.into(),
                     status: event.status.into(),
                     query: event.query,
