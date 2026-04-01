@@ -152,6 +152,7 @@ consolidation_model = "gpt-5"
         toml::from_str::<ConfigToml>(memories).expect("TOML deserialization should succeed");
     assert_eq!(
         Some(MemoriesToml {
+            backend: None,
             no_memories_if_mcp_or_web_search: Some(true),
             generate_memories: Some(false),
             use_memories: Some(false),
@@ -175,6 +176,7 @@ consolidation_model = "gpt-5"
     assert_eq!(
         config.memories,
         MemoriesConfig {
+            backend: crate::config::types::MemoryBackend::default(),
             no_memories_if_mcp_or_web_search: true,
             generate_memories: false,
             use_memories: false,

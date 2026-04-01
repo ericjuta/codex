@@ -18,7 +18,7 @@ use crate::engine::output_parser;
 use crate::schema::PostToolUseCommandInput;
 use crate::schema::PostToolUseToolInput;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PostToolUseRequest {
     pub session_id: ThreadId,
     pub turn_id: String,
