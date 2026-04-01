@@ -62,13 +62,13 @@ Do not use the original commit as the source of truth for:
 
 After the replay pass, `openai/main` moved again.
 
-At the time of this note:
+At the time this note was first written:
 
 - replay branch: `scratch/replay-enact-openai-20260401`
 - upstream head: `c846a57d032b`
 - relation: `ahead 6`, `behind 6`
 
-Current upstream-only commits are:
+The upstream-only commits at that point were:
 
 1. `3152d1a55` - `Use message string in v2 assign_task (#16419)`
 2. `0c776c433` - `feat: tasks can't be assigned to root agent (#16424)`
@@ -76,6 +76,21 @@ Current upstream-only commits are:
 4. `609ac0c7a` - `chore: interrupted as state (#16426)`
 5. `5bbfee69b` - `nit: deny field v2 (#16427)`
 6. `c846a57d0` - `chore: drop log DB (#16433)`
+
+Those upstream commits have since been absorbed into the replay branch by cherry-pick-equivalent commits, so they should no longer be treated as pending replay work.
+
+## Upstream Drift Status After Absorbing The Six Commits
+
+The replay branch now includes patch-equivalent versions of:
+
+1. `3152d1a55` - `Use message string in v2 assign_task (#16419)`
+2. `0c776c433` - `feat: tasks can't be assigned to root agent (#16424)`
+3. `df5f79da3` - `nit: update wait v2 desc (#16425)`
+4. `609ac0c7a` - `chore: interrupted as state (#16426)`
+5. `5bbfee69b` - `nit: deny field v2 (#16427)`
+6. `c846a57d0` - `chore: drop log DB (#16433)`
+
+Because they were cherry-picked, raw ahead/behind counts still show divergence by SHA, but `git cherry` confirms these upstream patches are represented on the replay branch.
 
 ## Recommendation
 
