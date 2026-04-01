@@ -1,3 +1,5 @@
+use crate::client_common::tools::ToolSpec;
+use crate::config::types::MemoryBackend;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::handlers::agent_jobs::BatchJobHandler;
@@ -9,6 +11,8 @@ use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::DiscoverableTool;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
 use codex_tools::ToolHandlerKind;
 use codex_tools::ToolNamespace;
 use codex_tools::ToolRegistryPlanAppTool;
@@ -17,6 +21,8 @@ use codex_tools::ToolUserShellType;
 use codex_tools::ToolsConfig;
 use codex_tools::WaitAgentTimeoutOptions;
 use codex_tools::build_tool_registry_plan;
+use serde_json::Value as JsonValue;
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -28,6 +34,50 @@ pub(crate) fn tool_user_shell_type(user_shell: &Shell) -> ToolUserShellType {
         ShellType::Sh => ToolUserShellType::Sh,
         ShellType::Cmd => ToolUserShellType::Cmd,
     }
+}
+
+fn memory_recall_output_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "recalled": {
+                "type": "boolean",
+                "description": "Whether agentmemory returned any context for this request."
+            },
+            "context": {
+                "type": "string",
+                "description": "Recalled memory context. Empty when nothing relevant was found."
+            }
+        },
+        "required": ["recalled", "context"],
+        "additionalProperties": false
+    })
+}
+
+fn create_memory_recall_tool() -> ToolSpec {
+    let properties = std::collections::BTreeMap::from([(
+        "query".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional targeted memory recall query. When omitted, recall uses the current thread and project context only."
+                    .to_string(),
+            ),
+        },
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "memory_recall".to_string(),
+        description: "Recall relevant agentmemory context for the current thread and project. Use this when prior work, design rationale, earlier failures, or cross-session continuity matter and the current thread does not already contain enough context. Prefer targeted queries naming the feature, file, bug, or decision you need."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(memory_recall_output_schema()),
+    })
 }
 
 pub(crate) fn build_specs_with_discoverable_tools(
@@ -47,6 +97,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
+    use crate::tools::handlers::MemoryRecallHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
     use crate::tools::handlers::RequestUserInputHandler;
@@ -114,6 +165,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let request_user_input_handler = Arc::new(RequestUserInputHandler {
         default_mode_request_user_input: config.default_mode_request_user_input,
     });
+    let memory_recall_handler = Arc::new(MemoryRecallHandler);
     let mut tool_search_handler = None;
     let tool_suggest_handler = Arc::new(ToolSuggestHandler);
     let code_mode_handler = Arc::new(CodeModeExecuteHandler);
@@ -234,6 +286,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 builder.register_handler(handler.name, Arc::new(WaitAgentHandlerV2));
             }
         }
+    }
+    if config.memory_tool_enabled && config.memory_backend == MemoryBackend::Agentmemory {
+        builder.push_spec(create_memory_recall_tool());
+        builder.register_handler("memory_recall", memory_recall_handler);
     }
     builder
 }
