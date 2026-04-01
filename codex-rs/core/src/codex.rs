@@ -4811,6 +4811,8 @@ mod handlers {
     use codex_protocol::config_types::Settings;
     use codex_protocol::dynamic_tools::DynamicToolResponse;
     use codex_protocol::mcp::RequestId as ProtocolRequestId;
+    use codex_protocol::models::DeveloperInstructions;
+    use codex_protocol::models::ResponseItem;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
@@ -6407,11 +6409,18 @@ pub(crate) async fn run_turn(
                         last_assistant_message: last_agent_message.clone(),
                     };
 
-                    if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
+                    if turn_context.config.memories.backend
+                        == crate::config::types::MemoryBackend::Agentmemory
+                    {
                         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
                         let payload = stop_request.clone();
                         tokio::spawn(async move {
-                            adapter.capture_event("Stop", serde_json::to_value(&payload).unwrap_or_default()).await;
+                            adapter
+                                .capture_event(
+                                    "Stop",
+                                    serde_json::to_value(&payload).unwrap_or_default(),
+                                )
+                                .await;
                         });
                     }
 
