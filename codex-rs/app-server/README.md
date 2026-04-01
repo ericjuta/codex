@@ -464,7 +464,7 @@ Use the thread-scoped memory methods to mirror the legacy TUI slash commands:
 - `thread/memory/update` triggers a backend-specific sync/consolidation pass.
 - `thread/memory/recall` retrieves memory context and injects it into the thread as developer instructions.
 
-All three requests return immediately with `{}`. Result details surface through the thread event stream as `thread/memory/operation` notifications carrying the structured operation, status, optional query, summary, optional detail, and whether recalled context was injected into the thread.
+All three requests return immediately with `{}`. Result details surface through the thread event stream as `thread/memory/operation` notifications carrying the structured source, operation, status, optional query, summary, optional detail, and whether recalled context was injected into the thread.
 
 ```json
 { "method": "thread/memory/drop", "id": 27, "params": { "threadId": "thr_b" } }
@@ -986,7 +986,7 @@ All items emit shared lifecycle events:
 - `item/completed` — sends the final `item` once that work itself finishes (for example, after a tool call or message completes); treat this as the authoritative execution/result state.
 - `item/autoApprovalReview/started` — [UNSTABLE] temporary guardian notification carrying `{threadId, turnId, targetItemId, review, action}` when guardian approval review begins. This shape is expected to change soon.
 - `item/autoApprovalReview/completed` — [UNSTABLE] temporary guardian notification carrying `{threadId, turnId, targetItemId, review, action}` when guardian approval review resolves. This shape is expected to change soon.
-- `thread/memory/operation` — sends structured outcomes for `thread/memory/drop`, `thread/memory/update`, and `thread/memory/recall` with `{threadId, operation, status, query?, summary, detail?, contextInjected}`.
+- `thread/memory/operation` — sends structured outcomes for `thread/memory/drop`, `thread/memory/update`, and `thread/memory/recall` with `{threadId, source, operation, status, query?, summary, detail?, contextInjected}`.
 
 `review` is [UNSTABLE] and currently has `{status, riskScore?, riskLevel?, rationale?}`, where `status` is one of `inProgress`, `approved`, `denied`, or `aborted`. `action` is a tagged union with `type: "command" | "execve" | "applyPatch" | "networkAccess" | "mcpToolCall"`. Command-like actions include a `source` discriminator (`"shell"` or `"unifiedExec"`). These notifications are separate from the target item's own `item/completed` lifecycle and are intentionally temporary while the guardian app protocol is still being designed.
 
