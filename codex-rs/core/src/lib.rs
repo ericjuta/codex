@@ -52,6 +52,7 @@ pub use codex_mcp::mcp_connection_manager::MCP_SANDBOX_STATE_METHOD;
 pub use codex_mcp::mcp_connection_manager::SandboxState;
 mod mcp_tool_call;
 mod memories;
+pub mod agentmemory;
 pub mod mention_syntax;
 pub mod message_history;
 pub mod utils;

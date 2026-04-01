@@ -1,6 +1,7 @@
 use crate::can_request_original_image_detail;
 use codex_features::Feature;
 use codex_features::Features;
+use codex_protocol::config_types::MemoryBackend;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -83,6 +84,8 @@ impl UnifiedExecShellMode {
 #[derive(Debug, Clone)]
 pub struct ToolsConfig {
     pub available_models: Vec<ModelPreset>,
+    pub memory_backend: MemoryBackend,
+    pub memory_tool_enabled: bool,
     pub shell_type: ConfigShellToolType,
     pub shell_command_backend: ShellCommandBackendConfig,
     pub unified_exec_shell_mode: UnifiedExecShellMode,
@@ -197,6 +200,8 @@ impl ToolsConfig {
 
         Self {
             available_models: available_models.to_vec(),
+            memory_backend: MemoryBackend::Native,
+            memory_tool_enabled: features.enabled(Feature::MemoryTool),
             shell_type,
             shell_command_backend,
             unified_exec_shell_mode: UnifiedExecShellMode::Direct,
@@ -224,6 +229,11 @@ impl ToolsConfig {
             agent_jobs_worker_tools,
             agent_type_description: String::new(),
         }
+    }
+
+    pub fn with_memory_backend(mut self, memory_backend: MemoryBackend) -> Self {
+        self.memory_backend = memory_backend;
+        self
     }
 
     pub fn with_agent_type_description(mut self, agent_type_description: String) -> Self {
