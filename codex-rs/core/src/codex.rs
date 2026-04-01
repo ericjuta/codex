@@ -4792,6 +4792,7 @@ mod handlers {
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
     use codex_protocol::protocol::MemoryOperationEvent;
+    use codex_protocol::protocol::MemoryOperationSource;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
@@ -5279,19 +5280,34 @@ mod handlers {
         .await;
     }
 
-    async fn send_memory_operation_event(
-        sess: &Session,
-        sub_id: &str,
+    struct MemoryOperationEventArgs {
+        source: MemoryOperationSource,
         operation: MemoryOperationKind,
         status: MemoryOperationStatus,
         query: Option<String>,
         summary: String,
         detail: Option<String>,
         context_injected: bool,
+    }
+
+    async fn send_memory_operation_event(
+        sess: &Session,
+        sub_id: &str,
+        args: MemoryOperationEventArgs,
     ) {
+        let MemoryOperationEventArgs {
+            source,
+            operation,
+            status,
+            query,
+            summary,
+            detail,
+            context_injected,
+        } = args;
         sess.send_event_raw(Event {
             id: sub_id.to_string(),
             msg: EventMsg::MemoryOperation(MemoryOperationEvent {
+                source,
                 operation,
                 status,
                 query,
@@ -5310,12 +5326,15 @@ mod handlers {
                 send_memory_operation_event(
                     sess,
                     &sub_id,
-                    MemoryOperationKind::Drop,
-                    MemoryOperationStatus::Error,
-                    /*query*/ None,
-                    "Memory drop failed.".to_string(),
-                    Some(e.to_string()),
-                    /*context_injected*/ false,
+                    MemoryOperationEventArgs {
+                        source: MemoryOperationSource::Human,
+                        operation: MemoryOperationKind::Drop,
+                        status: MemoryOperationStatus::Error,
+                        query: None,
+                        summary: "Memory drop failed.".to_string(),
+                        detail: Some(e.to_string()),
+                        context_injected: false,
+                    },
                 )
                 .await;
                 return;
@@ -5323,12 +5342,15 @@ mod handlers {
             send_memory_operation_event(
                 sess,
                 &sub_id,
-                MemoryOperationKind::Drop,
-                MemoryOperationStatus::Ready,
-                /*query*/ None,
-                "Cleared Agentmemory contents.".to_string(),
-                /*detail*/ None,
-                /*context_injected*/ false,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Drop,
+                    status: MemoryOperationStatus::Ready,
+                    query: None,
+                    summary: "Cleared Agentmemory contents.".to_string(),
+                    detail: None,
+                    context_injected: false,
+                },
             )
             .await;
             return;
@@ -5356,15 +5378,18 @@ mod handlers {
             send_memory_operation_event(
                 sess,
                 &sub_id,
-                MemoryOperationKind::Drop,
-                MemoryOperationStatus::Ready,
-                /*query*/ None,
-                "Dropped stored memories for this workspace.".to_string(),
-                Some(format!(
-                    "Cleared memory rows from the state db and removed stored memory files at {}.",
-                    memory_root.display()
-                )),
-                /*context_injected*/ false,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Drop,
+                    status: MemoryOperationStatus::Ready,
+                    query: None,
+                    summary: "Dropped stored memories for this workspace.".to_string(),
+                    detail: Some(format!(
+                        "Cleared memory rows from the state db and removed stored memory files at {}.",
+                        memory_root.display()
+                    )),
+                    context_injected: false,
+                },
             )
             .await;
             return;
@@ -5373,12 +5398,15 @@ mod handlers {
         send_memory_operation_event(
             sess,
             &sub_id,
-            MemoryOperationKind::Drop,
-            MemoryOperationStatus::Error,
-            /*query*/ None,
-            "Memory drop completed with errors.".to_string(),
-            Some(errors.join("; ")),
-            /*context_injected*/ false,
+            MemoryOperationEventArgs {
+                source: MemoryOperationSource::Human,
+                operation: MemoryOperationKind::Drop,
+                status: MemoryOperationStatus::Error,
+                query: None,
+                summary: "Memory drop completed with errors.".to_string(),
+                detail: Some(errors.join("; ")),
+                context_injected: false,
+            },
         )
         .await;
     }
@@ -5395,12 +5423,15 @@ mod handlers {
                 send_memory_operation_event(
                     sess,
                     &sub_id,
-                    MemoryOperationKind::Update,
-                    MemoryOperationStatus::Error,
-                    /*query*/ None,
-                    "Memory update failed.".to_string(),
-                    Some(e.to_string()),
-                    /*context_injected*/ false,
+                    MemoryOperationEventArgs {
+                        source: MemoryOperationSource::Human,
+                        operation: MemoryOperationKind::Update,
+                        status: MemoryOperationStatus::Error,
+                        query: None,
+                        summary: "Memory update failed.".to_string(),
+                        detail: Some(e.to_string()),
+                        context_injected: false,
+                    },
                 )
                 .await;
                 return;
@@ -5408,14 +5439,17 @@ mod handlers {
             send_memory_operation_event(
                 sess,
                 &sub_id,
-                MemoryOperationKind::Update,
-                MemoryOperationStatus::Ready,
-                /*query*/ None,
-                "Agentmemory sync triggered.".to_string(),
-                Some(
-                    "Updated observations will appear in future memory recalls once consolidation completes.".to_string(),
-                ),
-                /*context_injected*/ false,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Update,
+                    status: MemoryOperationStatus::Ready,
+                    query: None,
+                    summary: "Agentmemory sync triggered.".to_string(),
+                    detail: Some(
+                        "Updated observations will appear in future memory recalls once consolidation completes.".to_string(),
+                    ),
+                    context_injected: false,
+                },
             )
             .await;
             return;
@@ -5428,12 +5462,15 @@ mod handlers {
         send_memory_operation_event(
             sess,
             &sub_id,
-            MemoryOperationKind::Update,
-            MemoryOperationStatus::Ready,
-            /*query*/ None,
-            "Memory update triggered.".to_string(),
-            Some("Consolidation is running in the background.".to_string()),
-            /*context_injected*/ false,
+            MemoryOperationEventArgs {
+                source: MemoryOperationSource::Human,
+                operation: MemoryOperationKind::Update,
+                status: MemoryOperationStatus::Ready,
+                query: None,
+                summary: "Memory update triggered.".to_string(),
+                detail: Some("Consolidation is running in the background.".to_string()),
+                context_injected: false,
+            },
         )
         .await;
     }
@@ -5448,12 +5485,15 @@ mod handlers {
             send_memory_operation_event(
                 sess,
                 &sub_id,
-                MemoryOperationKind::Recall,
-                MemoryOperationStatus::Error,
-                query,
-                "Memory recall requires agentmemory backend.".to_string(),
-                /*detail*/ None,
-                /*context_injected*/ false,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Recall,
+                    status: MemoryOperationStatus::Error,
+                    query,
+                    summary: "Memory recall requires agentmemory backend.".to_string(),
+                    detail: None,
+                    context_injected: false,
+                },
             )
             .await;
             return;
@@ -5478,12 +5518,16 @@ mod handlers {
                 send_memory_operation_event(
                     sess,
                     &sub_id,
-                    MemoryOperationKind::Recall,
-                    MemoryOperationStatus::Ready,
-                    query,
-                    "Recalled memory context and injected it into the current thread.".to_string(),
-                    Some(context),
-                    /*context_injected*/ true,
+                    MemoryOperationEventArgs {
+                        source: MemoryOperationSource::Human,
+                        operation: MemoryOperationKind::Recall,
+                        status: MemoryOperationStatus::Ready,
+                        query,
+                        summary: "Recalled memory context and injected it into the current thread."
+                            .to_string(),
+                        detail: Some(context),
+                        context_injected: true,
+                    },
                 )
                 .await;
             }
@@ -5491,12 +5535,15 @@ mod handlers {
                 send_memory_operation_event(
                     sess,
                     &sub_id,
-                    MemoryOperationKind::Recall,
-                    MemoryOperationStatus::Empty,
-                    query,
-                    "No relevant memory context was found.".to_string(),
-                    /*detail*/ None,
-                    /*context_injected*/ false,
+                    MemoryOperationEventArgs {
+                        source: MemoryOperationSource::Human,
+                        operation: MemoryOperationKind::Recall,
+                        status: MemoryOperationStatus::Empty,
+                        query,
+                        summary: "No relevant memory context was found.".to_string(),
+                        detail: None,
+                        context_injected: false,
+                    },
                 )
                 .await;
             }
@@ -5504,12 +5551,15 @@ mod handlers {
                 send_memory_operation_event(
                     sess,
                     &sub_id,
-                    MemoryOperationKind::Recall,
-                    MemoryOperationStatus::Error,
-                    query,
-                    "Memory recall failed.".to_string(),
-                    Some(e.to_string()),
-                    /*context_injected*/ false,
+                    MemoryOperationEventArgs {
+                        source: MemoryOperationSource::Human,
+                        operation: MemoryOperationKind::Recall,
+                        status: MemoryOperationStatus::Error,
+                        query,
+                        summary: "Memory recall failed.".to_string(),
+                        detail: Some(e.to_string()),
+                        context_injected: false,
+                    },
                 )
                 .await;
             }
