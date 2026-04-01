@@ -58,6 +58,23 @@ Do not use the original commit as the source of truth for:
 3. test module layout
 4. broad workflow or script changes
 
+## Narrow Leftover Check
+
+A follow-up narrow pass checked the likely small integration-glue files that would have been the only realistic candidates for surgical extraction from `8c2cb3df5`.
+
+That pass did not find meaningful remaining deltas in the replay branch for:
+
+1. CLI entrypoint glue
+2. slash-command wiring
+3. bottom-pane or command-popup integration glue
+4. core tool registry or tool spec glue
+5. protocol schema fixture files tied to the replayed memory and hook surfaces
+6. TUI status/footer snapshot surfaces that looked plausibly replay-related
+
+Practical conclusion:
+
+There is no obvious small product fix still hiding inside `8c2cb3df5` that needs to be extracted immediately. The remaining differences between the old scratch branch and the replay branch are best understood as upstream divergence, policy churn, test-layout churn, or unrelated subsystem changes rather than a missing replay-critical integration patch.
+
 ## Upstream Drift After Replay
 
 After the replay pass, `openai/main` moved again.
