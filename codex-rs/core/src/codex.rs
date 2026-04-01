@@ -999,6 +999,8 @@ impl TurnContext {
         .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
+        .with_memory_backend(config.memories.backend.clone())
+        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &config.agent_roles,
         ));
 
@@ -1563,6 +1565,7 @@ impl Session {
         .with_spawn_agent_usage_hint(per_turn_config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(per_turn_config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(per_turn_config.multi_agent_v2.hide_spawn_agent_metadata)
+        .with_memory_backend(per_turn_config.memories.backend.clone())
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &per_turn_config.agent_roles,
         ));
@@ -2244,11 +2247,13 @@ impl Session {
             state.set_pending_session_start_source(Some(session_start_source));
         }
 
-        memories::start_memories_startup_task(
-            &sess,
-            Arc::clone(&config),
-            &session_configuration.session_source,
-        );
+        if config.memories.backend == crate::config::types::MemoryBackend::Native {
+            memories::start_memories_startup_task(
+                &sess,
+                Arc::clone(&config),
+                &session_configuration.session_source,
+            );
+        }
 
         Ok(sess)
     }
@@ -3802,11 +3807,25 @@ impl Session {
         }
         // Add developer instructions for memories.
         if turn_context.features.enabled(Feature::MemoryTool)
-            && turn_context.config.memories.use_memories
-            && let Some(memory_prompt) =
-                build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
+            && (turn_context.config.memories.use_memories
+                || turn_context.config.memories.backend
+                    == crate::config::types::MemoryBackend::Agentmemory)
         {
-            developer_sections.push(memory_prompt);
+            let memory_prompt_opt = match turn_context.config.memories.backend {
+                crate::config::types::MemoryBackend::Agentmemory => {
+                    let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+                    // Provide a default explicit token budget for the startup query context
+                    adapter
+                        .build_startup_developer_instructions(&turn_context.config.codex_home, 2000)
+                        .await
+                }
+                crate::config::types::MemoryBackend::Native => {
+                    build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
+                }
+            };
+            if let Some(memory_prompt) = memory_prompt_opt {
+                developer_sections.push(memory_prompt);
+            }
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if let Some(collab_instructions) =
@@ -5531,7 +5550,7 @@ mod handlers {
                 id: sub_id,
                 msg: EventMsg::Warning(WarningEvent {
                     message: format!(
-                        "Dropped memories at {} and cleared memory rows from state db.",
+                        "Memory drop completed. Cleared memory rows from the state db and removed stored memory files at {}.",
                         memory_root.display()
                     ),
                 }),
@@ -5556,15 +5575,118 @@ mod handlers {
             state.session_configuration.session_source.clone()
         };
 
-        crate::memories::start_memories_startup_task(sess, Arc::clone(config), &session_source);
+        if config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
+            let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+            if let Err(e) = adapter.update_memories().await {
+                sess.send_event_raw(Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: format!("Agentmemory sync failed: {e}"),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                })
+                .await;
+                return;
+            }
+            sess.send_event_raw(Event {
+                id: sub_id.clone(),
+                msg: EventMsg::Warning(WarningEvent {
+                    message: "Agentmemory sync triggered. Updated observations will appear in future memory recalls once consolidation completes.".to_string(),
+                }),
+            })
+            .await;
+            return;
+        }
+
+        if config.memories.backend == crate::config::types::MemoryBackend::Native {
+            crate::memories::start_memories_startup_task(sess, Arc::clone(config), &session_source);
+        }
 
         sess.send_event_raw(Event {
             id: sub_id.clone(),
             msg: EventMsg::Warning(WarningEvent {
-                message: "Memory update triggered.".to_string(),
+                message: "Memory update triggered. Consolidation is running in the background."
+                    .to_string(),
             }),
         })
         .await;
+    }
+
+    pub async fn recall_memories(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        query: Option<String>,
+    ) {
+        if config.memories.backend != crate::config::types::MemoryBackend::Agentmemory {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Warning(WarningEvent {
+                    message: "Memory recall requires agentmemory backend.".to_string(),
+                }),
+            })
+            .await;
+            return;
+        }
+
+        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+        let session_id = sess.conversation_id.to_string();
+
+        match adapter
+            .recall_for_runtime(&session_id, config.cwd.as_ref(), query.as_deref())
+            .await
+        {
+            Ok(result) if result.recalled => {
+                let context = result.context;
+                let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
+                let message: ResponseItem = DeveloperInstructions::new(format!(
+                    "<agentmemory-recall>\n{context}\n</agentmemory-recall>"
+                ))
+                .into();
+                sess.record_conversation_items(&turn_context, std::slice::from_ref(&message))
+                    .await;
+                let query_summary = query
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|query| !query.is_empty())
+                    .map(|query| format!(" for query: {query}"))
+                    .unwrap_or_default();
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Warning(WarningEvent {
+                        message: format!(
+                            "Memory context recalled{query_summary} and injected into this thread:\n\n{context}"
+                        ),
+                    }),
+                })
+                .await;
+            }
+            Ok(_) => {
+                let query_summary = query
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|query| !query.is_empty())
+                    .map(|query| format!(" for query: {query}"))
+                    .unwrap_or_default();
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Warning(WarningEvent {
+                        message: format!("No relevant memory context found{query_summary}."),
+                    }),
+                })
+                .await;
+            }
+            Err(e) => {
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: format!("Memory recall failed: {e}"),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                })
+                .await;
+            }
+        }
     }
 
     pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) {
@@ -5945,6 +6067,7 @@ async fn spawn_review_thread(
         sess.services.main_execve_wrapper_exe.as_ref(),
     )
     .with_web_search_config(/*web_search_config*/ None)
+    .with_memory_backend(config.memories.backend.clone())
     .with_allow_login_shell(config.permissions.allow_login_shell)
     .with_has_environment(parent_turn_context.environment.is_some())
     .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
@@ -6515,6 +6638,15 @@ pub(crate) async fn run_turn(
                         stop_hook_active,
                         last_assistant_message: last_agent_message.clone(),
                     };
+
+                    if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
+                        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+                        let payload = stop_request.clone();
+                        tokio::spawn(async move {
+                            adapter.capture_event("Stop", serde_json::to_value(&payload).unwrap_or_default()).await;
+                        });
+                    }
+
                     for run in sess.hooks().preview_stop(&stop_request) {
                         sess.send_event(
                             &turn_context,

@@ -834,6 +834,14 @@
       "additionalProperties": false,
       "description": "Memories settings loaded from config.toml.",
       "properties": {
+        "backend": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MemoryBackend"
+            }
+          ],
+          "description": "The backend to use for memories."
+        },
         "consolidation_model": {
           "description": "Model used for memory consolidation.",
           "type": "string"
@@ -883,6 +891,13 @@
         }
       },
       "type": "object"
+    },
+    "MemoryBackend": {
+      "enum": [
+        "native",
+        "agentmemory"
+      ],
+      "type": "string"
     },
     "ModelAvailabilityNuxConfig": {
       "additionalProperties": {

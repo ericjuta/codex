@@ -102,6 +102,15 @@ pub(crate) async fn run_pending_session_start_hooks(
         permission_mode: hook_permission_mode(turn_context),
         source: session_start_source,
     };
+
+    if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
+        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+        let payload = request.clone();
+        tokio::spawn(async move {
+            adapter.capture_event("SessionStart", serde_json::to_value(&payload).unwrap_or_default()).await;
+        });
+    }
+
     let preview_runs = sess.hooks().preview_session_start(&request);
     run_context_injecting_hook(
         sess,
@@ -118,6 +127,7 @@ pub(crate) async fn run_pending_session_start_hooks(
 pub(crate) async fn run_pre_tool_use_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    tool_name: String,
     tool_use_id: String,
     command: String,
 ) -> Option<String> {
@@ -128,10 +138,19 @@ pub(crate) async fn run_pre_tool_use_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        tool_name: "Bash".to_string(),
+        tool_name,
         tool_use_id,
         command,
     };
+
+    if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
+        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+        let payload = request.clone();
+        tokio::spawn(async move {
+            adapter.capture_event("PreToolUse", serde_json::to_value(&payload).unwrap_or_default()).await;
+        });
+    }
+
     let preview_runs = sess.hooks().preview_pre_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
@@ -148,6 +167,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
 pub(crate) async fn run_post_tool_use_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    tool_name: String,
     tool_use_id: String,
     command: String,
     tool_response: Value,
@@ -159,17 +179,56 @@ pub(crate) async fn run_post_tool_use_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        tool_name: "Bash".to_string(),
+        tool_name,
         tool_use_id,
         command,
         tool_response,
     };
+
+    if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
+        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+        let payload = request.clone();
+        tokio::spawn(async move {
+            adapter.capture_event("PostToolUse", serde_json::to_value(&payload).unwrap_or_default()).await;
+        });
+    }
+
     let preview_runs = sess.hooks().preview_post_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
     let outcome = sess.hooks().run_post_tool_use(request).await;
     emit_hook_completed_events(sess, turn_context, outcome.hook_events.clone()).await;
     outcome
+}
+
+pub(crate) async fn run_post_tool_use_failure_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    tool_name: String,
+    tool_use_id: String,
+    command: String,
+    error_message: String,
+) {
+    let request = PostToolUseRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.to_path_buf(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        tool_name,
+        tool_use_id,
+        command,
+        tool_response: serde_json::json!({ "error": error_message }),
+    };
+
+    if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
+        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+        let payload = request.clone();
+        tokio::spawn(async move {
+            adapter.capture_event("PostToolUseFailure", serde_json::to_value(&payload).unwrap_or_default()).await;
+        });
+    }
 }
 
 pub(crate) async fn run_user_prompt_submit_hooks(
@@ -186,6 +245,15 @@ pub(crate) async fn run_user_prompt_submit_hooks(
         permission_mode: hook_permission_mode(turn_context),
         prompt,
     };
+
+    if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
+        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+        let payload = request.clone();
+        tokio::spawn(async move {
+            adapter.capture_event("UserPromptSubmit", serde_json::to_value(&payload).unwrap_or_default()).await;
+        });
+    }
+
     let preview_runs = sess.hooks().preview_user_prompt_submit(&request);
     run_context_injecting_hook(
         sess,
