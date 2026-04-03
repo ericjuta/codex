@@ -3,9 +3,11 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use std::sync::atomic::Ordering;
 
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
@@ -445,6 +447,10 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
+const DIRECT_APP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
+const AGENTMEMORY_SESSION_LIFECYCLE_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_millis(500);
+
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub(crate) async fn spawn(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
@@ -858,6 +864,7 @@ pub(crate) struct Session {
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
+    agentmemory_session_ended: AtomicBool,
     next_internal_sub_id: AtomicU64,
 }
 
@@ -2117,6 +2124,7 @@ impl Session {
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
             js_repl,
+            agentmemory_session_ended: AtomicBool::new(false),
             next_internal_sub_id: AtomicU64::new(0),
         });
         if let Some(network_policy_decider_session) = network_policy_decider_session {
@@ -2150,6 +2158,28 @@ impl Session {
         .chain(post_session_configured_events.into_iter());
         for event in events {
             sess.send_event_raw(event).await;
+        }
+
+        if config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
+            let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+            let session_id = conversation_id.to_string();
+            let project = get_git_repo_root(&session_configuration.cwd)
+                .unwrap_or_else(|| session_configuration.cwd.to_path_buf());
+            let cwd = session_configuration.cwd.to_path_buf();
+            match tokio::time::timeout(
+                AGENTMEMORY_SESSION_LIFECYCLE_TIMEOUT,
+                adapter.start_session(&session_id, project.as_path(), cwd.as_path()),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    warn!("failed to register agentmemory session {session_id}: {err}");
+                }
+                Err(_) => {
+                    warn!("timed out registering agentmemory session {session_id}");
+                }
+            }
         }
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
@@ -4892,6 +4922,26 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
     }
     // Also drain cached guardian state if the submission loop exits because
     // the channel closed without receiving an explicit shutdown op.
+    if config.memories.backend == crate::config::types::MemoryBackend::Agentmemory
+        && !sess.agentmemory_session_ended.swap(true, Ordering::SeqCst)
+    {
+        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+        let session_id = sess.conversation_id.to_string();
+        match tokio::time::timeout(
+            AGENTMEMORY_SESSION_LIFECYCLE_TIMEOUT,
+            adapter.end_session(&session_id),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                warn!("failed to end agentmemory session {session_id}: {err}");
+            }
+            Err(_) => {
+                warn!("timed out ending agentmemory session {session_id}");
+            }
+        }
+    }
     sess.guardian_review_session.shutdown().await;
     debug!("Agent loop exited");
 }
