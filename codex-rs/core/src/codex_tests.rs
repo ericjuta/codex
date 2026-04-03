@@ -118,10 +118,17 @@ use rmcp::model::JsonObject;
 use rmcp::model::Tool;
 use serde::Deserialize;
 use serde_json::json;
+use serial_test::serial;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration as StdDuration;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 #[path = "codex_tests_guardian.rs"]
 mod guardian_tests;
@@ -2381,6 +2388,34 @@ async fn build_test_config(codex_home: &Path) -> Config {
         .expect("load default test config")
 }
 
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match self.original.take() {
+            Some(value) => unsafe {
+                std::env::set_var(self.key, value);
+            },
+            None => unsafe {
+                std::env::remove_var(self.key);
+            },
+        }
+    }
+}
+
 fn session_telemetry(
     conversation_id: ThreadId,
     config: &Config,
@@ -3812,6 +3847,63 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
     async_channel::Receiver<Event>,
 ) {
     make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(agentmemory_env)]
+async fn update_memories_emits_empty_event_for_insufficient_observations() {
+    let agentmemory_server = MockServer::start().await;
+    let _agentmemory_url_guard = EnvVarGuard::set("AGENTMEMORY_URL", &agentmemory_server.uri());
+
+    Mock::given(method("POST"))
+        .and(path("/agentmemory/consolidate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "consolidated": 0,
+            "reason": "insufficient_observations",
+            "scannedSessions": 4,
+            "totalObservations": 0
+        })))
+        .expect(1)
+        .mount(&agentmemory_server)
+        .await;
+
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let mut config = build_test_config(codex_home.path()).await;
+    config.memories.backend = crate::config::types::MemoryBackend::Agentmemory;
+    let config = Arc::new(config);
+    let (sess, _tc, rx) = make_session_and_context_with_rx().await;
+
+    handlers::update_memories(&sess, &config, "sub-id".to_string()).await;
+
+    let event = tokio::time::timeout(StdDuration::from_secs(1), async {
+        loop {
+            let event = rx.recv().await.expect("event");
+            if let EventMsg::MemoryOperation(event) = event.msg {
+                break event;
+            }
+        }
+    })
+    .await
+    .expect("timeout waiting for memory operation event");
+
+    assert_eq!(
+        event.operation,
+        codex_protocol::items::MemoryOperationKind::Update
+    );
+    assert_eq!(
+        event.status,
+        codex_protocol::items::MemoryOperationStatus::Empty
+    );
+    assert_eq!(
+        event.summary,
+        "Not enough observations yet to consolidate agentmemory."
+    );
+    assert_eq!(
+        event.detail,
+        Some(
+            "Agentmemory returned reason 'insufficient_observations' after scanning 4 sessions and considering 0 candidate observations.".to_string()
+        )
+    );
 }
 
 #[tokio::test]
