@@ -437,6 +437,8 @@ pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
 const DIRECT_APP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
+const AGENTMEMORY_SESSION_SUMMARIZE_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(30);
 const AGENTMEMORY_SESSION_LIFECYCLE_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(500);
 
@@ -4820,6 +4822,29 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
         let session_id = sess.conversation_id.to_string();
         match tokio::time::timeout(
+            AGENTMEMORY_SESSION_SUMMARIZE_TIMEOUT,
+            adapter.summarize_session(&session_id),
+        )
+        .await
+        {
+            Ok(Ok(result)) => {
+                if !result.success && result.error.as_deref() != Some("no_observations") {
+                    warn!(
+                        "agentmemory summarize returned unsuccessful result for {session_id}: {}",
+                        result
+                            .error
+                            .unwrap_or_else(|| "unknown summarize error".to_string())
+                    );
+                }
+            }
+            Ok(Err(err)) => {
+                warn!("failed to summarize agentmemory session {session_id}: {err}");
+            }
+            Err(_) => {
+                warn!("timed out summarizing agentmemory session {session_id}");
+            }
+        }
+        match tokio::time::timeout(
             AGENTMEMORY_SESSION_LIFECYCLE_TIMEOUT,
             adapter.end_session(&session_id),
         )
@@ -5532,35 +5557,62 @@ mod handlers {
 
         if config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
             let adapter = crate::agentmemory::AgentmemoryAdapter::new();
-            if let Err(e) = adapter.update_memories().await {
-                send_memory_operation_event(
-                    sess,
-                    &sub_id,
-                    MemoryOperationEventArgs {
-                        source: MemoryOperationSource::Human,
-                        operation: MemoryOperationKind::Update,
-                        status: MemoryOperationStatus::Error,
-                        query: None,
-                        summary: "Memory update failed.".to_string(),
-                        detail: Some(e.to_string()),
-                        context_injected: false,
-                    },
-                )
-                .await;
-                return;
-            }
+            let result = match adapter.update_memories().await {
+                Ok(result) => result,
+                Err(e) => {
+                    send_memory_operation_event(
+                        sess,
+                        &sub_id,
+                        MemoryOperationEventArgs {
+                            source: MemoryOperationSource::Human,
+                            operation: MemoryOperationKind::Update,
+                            status: MemoryOperationStatus::Error,
+                            query: None,
+                            summary: "Memory update failed.".to_string(),
+                            detail: Some(e.to_string()),
+                            context_injected: false,
+                        },
+                    )
+                    .await;
+                    return;
+                }
+            };
+            let status = if result.consolidated > 0 {
+                MemoryOperationStatus::Ready
+            } else {
+                MemoryOperationStatus::Empty
+            };
+            let summary = if result.consolidated > 0 {
+                format!("Consolidated {} new memory entries.", result.consolidated)
+            } else if result.reason.as_deref() == Some("insufficient_observations") {
+                "Not enough observations yet to consolidate agentmemory.".to_string()
+            } else {
+                "Memory update completed without new consolidated memories.".to_string()
+            };
+            let detail = match (
+                result.reason.as_deref(),
+                result.scanned_sessions,
+                result.total_observations,
+            ) {
+                (Some(reason), Some(scanned_sessions), Some(total_observations)) => Some(format!(
+                    "Agentmemory returned reason '{reason}' after scanning {scanned_sessions} sessions and considering {total_observations} candidate observations."
+                )),
+                (Some(reason), _, _) => Some(format!("Agentmemory returned reason '{reason}'.")),
+                (None, Some(scanned_sessions), Some(total_observations)) => Some(format!(
+                    "Agentmemory scanned {scanned_sessions} sessions and considered {total_observations} candidate observations."
+                )),
+                _ => None,
+            };
             send_memory_operation_event(
                 sess,
                 &sub_id,
                 MemoryOperationEventArgs {
                     source: MemoryOperationSource::Human,
                     operation: MemoryOperationKind::Update,
-                    status: MemoryOperationStatus::Ready,
+                    status,
                     query: None,
-                    summary: "Agentmemory sync triggered.".to_string(),
-                    detail: Some(
-                        "Updated observations will appear in future memory recalls once consolidation completes.".to_string(),
-                    ),
+                    summary,
+                    detail,
                     context_injected: false,
                 },
             )

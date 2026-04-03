@@ -65,6 +65,15 @@ async fn agentmemory_session_lifecycle_is_registered_end_to_end() -> Result<()> 
         .expect(1)
         .mount(&agentmemory_server)
         .await;
+    Mock::given(method("POST"))
+        .and(path("/agentmemory/summarize"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": false,
+            "error": "no_observations"
+        })))
+        .expect(1)
+        .mount(&agentmemory_server)
+        .await;
 
     let mut builder = test_codex().with_config(|config| {
         config.memories.backend = MemoryBackend::Agentmemory;
@@ -87,6 +96,9 @@ async fn agentmemory_session_lifecycle_is_registered_end_to_end() -> Result<()> 
     let expected_end = json!({
         "sessionId": session_id,
     });
+    let expected_summarize = json!({
+        "sessionId": session_id,
+    });
 
     let request_summaries = requests
         .iter()
@@ -103,6 +115,7 @@ async fn agentmemory_session_lifecycle_is_registered_end_to_end() -> Result<()> 
         request_summaries,
         vec![
             ("/agentmemory/session/start".to_string(), expected_start),
+            ("/agentmemory/summarize".to_string(), expected_summarize),
             ("/agentmemory/session/end".to_string(), expected_end),
         ]
     );
