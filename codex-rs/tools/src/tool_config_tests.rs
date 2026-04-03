@@ -1,7 +1,7 @@
 use super::*;
+use codex_config::types::MemoryBackend;
 use codex_features::Feature;
 use codex_features::Features;
-use codex_protocol::config_types::MemoryBackend;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::openai_models::ConfigShellToolType;
