@@ -3,6 +3,8 @@
 //! This module provides the seam for integrating the `agentmemory` service
 //! as a replacement for Codex's native memory engine.
 
+use codex_git_utils::get_git_repo_root;
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
 use std::path::Path;
@@ -26,8 +28,47 @@ pub(crate) struct MemoryRecallResult {
     pub(crate) context: String,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub(crate) struct AgentmemoryConsolidateResult {
+    pub(crate) consolidated: usize,
+    pub(crate) reason: Option<String>,
+    #[serde(rename = "scannedSessions")]
+    pub(crate) scanned_sessions: Option<usize>,
+    #[serde(rename = "totalObservations")]
+    pub(crate) total_observations: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub(crate) struct AgentmemorySummarizeResult {
+    #[serde(default)]
+    pub(crate) success: bool,
+    pub(crate) error: Option<String>,
+}
+
 fn get_client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| reqwest::Client::builder().build().unwrap_or_default())
+}
+
+fn extract_project_and_cwd(payload: &serde_json::Value) -> (String, String) {
+    let cwd = payload
+        .get("cwd")
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned())
+        })
+        .unwrap_or_default();
+    let project = if cwd.is_empty() {
+        String::new()
+    } else {
+        get_git_repo_root(Path::new(&cwd))
+            .unwrap_or_else(|| Path::new(&cwd).to_path_buf())
+            .to_string_lossy()
+            .into_owned()
+    };
+    (project, cwd)
 }
 
 impl AgentmemoryAdapter {
@@ -139,6 +180,7 @@ impl AgentmemoryAdapter {
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();
+        let (project, cwd) = extract_project_and_cwd(&payload);
 
         let timestamp = chrono::Utc::now().to_rfc3339();
         let hook_type = normalize_hook_type(event_name);
@@ -146,6 +188,8 @@ impl AgentmemoryAdapter {
         json!({
             "sessionId": session_id,
             "hookType": hook_type,
+            "project": project,
+            "cwd": cwd,
             "timestamp": timestamp,
             "data": payload,
         })
@@ -298,14 +342,39 @@ impl AgentmemoryAdapter {
     }
 
     /// Asynchronously triggers a memory refresh/update operation in `agentmemory`.
-    pub async fn update_memories(&self) -> Result<(), String> {
+    pub(crate) async fn update_memories(&self) -> Result<AgentmemoryConsolidateResult, String> {
         let url = format!("{}/agentmemory/consolidate", self.api_base());
         let client = get_client();
         let res = client.post(&url).send().await.map_err(|e| e.to_string())?;
         if !res.status().is_success() {
             return Err(format!("Consolidate failed with status {}", res.status()));
         }
-        Ok(())
+        res.json::<AgentmemoryConsolidateResult>()
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Best-effort end-of-session summarization so later recalls can use durable
+    /// cross-session summaries.
+    pub(crate) async fn summarize_session(
+        &self,
+        session_id: &str,
+    ) -> Result<AgentmemorySummarizeResult, String> {
+        let url = format!("{}/agentmemory/summarize", self.api_base());
+        let client = get_client();
+        let body = json!({ "sessionId": session_id });
+        let res = client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if !res.status().is_success() {
+            return Err(format!("Summarize failed with status {}", res.status()));
+        }
+        res.json::<AgentmemorySummarizeResult>()
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Asynchronously drops/clears the memory store in `agentmemory`.
@@ -419,6 +488,42 @@ mod tests {
 
     #[tokio::test]
     #[serial_test::serial(agentmemory_env)]
+    async fn update_memories_returns_consolidate_payload() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _agentmemory_url_guard = EnvVarGuard::set("AGENTMEMORY_URL", server.uri().as_str());
+
+        Mock::given(method("POST"))
+            .and(path("/agentmemory/consolidate"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "consolidated": 0,
+                "reason": "insufficient_observations",
+                "scannedSessions": 4,
+                "totalObservations": 0
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let result = adapter
+            .update_memories()
+            .await
+            .expect("consolidate result should parse");
+
+        assert_eq!(
+            result,
+            AgentmemoryConsolidateResult {
+                consolidated: 0,
+                reason: Some("insufficient_observations".to_string()),
+                scanned_sessions: Some(4),
+                total_observations: Some(0),
+            }
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
     async fn test_startup_instructions_append_retrieved_context() {
         let server = MockServer::start().await;
         let adapter = AgentmemoryAdapter::new();
@@ -448,6 +553,7 @@ mod tests {
         let raw_payload = json!({
             "session_id": "1234",
             "turn_id": "turn-5",
+            "cwd": "/tmp/project",
             "command": "echo hello"
         });
 
@@ -455,6 +561,8 @@ mod tests {
 
         assert_eq!(formatted["sessionId"], "1234");
         assert_eq!(formatted["hookType"], "pre_tool_use");
+        assert_eq!(formatted["project"], "/tmp/project");
+        assert_eq!(formatted["cwd"], "/tmp/project");
         assert!(formatted.get("timestamp").is_some());
         assert_eq!(formatted["data"], raw_payload);
     }
