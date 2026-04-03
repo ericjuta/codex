@@ -28,6 +28,7 @@ mod abort_tasks;
 mod agent_jobs;
 mod agent_websocket;
 mod agents_md;
+mod agentmemory_session_lifecycle;
 mod apply_patch_cli;
 #[cfg(not(target_os = "windows"))]
 mod approvals;
