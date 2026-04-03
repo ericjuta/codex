@@ -141,10 +141,11 @@ impl AgentmemoryAdapter {
             .to_string();
 
         let timestamp = chrono::Utc::now().to_rfc3339();
+        let hook_type = normalize_hook_type(event_name);
 
         json!({
             "sessionId": session_id,
-            "hookType": event_name,
+            "hookType": hook_type,
             "timestamp": timestamp,
             "data": payload,
         })
@@ -160,15 +161,30 @@ impl AgentmemoryAdapter {
 
         let body = self.format_claude_parity_payload(event_name, payload_json);
 
-        if let Err(e) = client.post(&url).json(&body).send().await {
-            // Log a warning instead of failing silently. This won't crash the session,
-            // but will alert developers that memory observation is degraded.
-            tracing::warn!(
-                "Agentmemory observation failed: could not send {} event to {}: {}",
-                event_name,
-                url,
-                e
-            );
+        match client.post(&url).json(&body).send().await {
+            Ok(response) => {
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    tracing::warn!(
+                        "Agentmemory observation failed: {} event to {} returned {}: {}",
+                        event_name,
+                        url,
+                        status,
+                        body
+                    );
+                }
+            }
+            Err(e) => {
+                // Log a warning instead of failing silently. This won't crash the session,
+                // but will alert developers that memory observation is degraded.
+                tracing::warn!(
+                    "Agentmemory observation failed: could not send {} event to {}: {}",
+                    event_name,
+                    url,
+                    e
+                );
+            }
         }
     }
 
@@ -312,6 +328,7 @@ impl AgentmemoryAdapter {
 #[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::ffi::OsString;
     use std::sync::Mutex;
@@ -382,6 +399,24 @@ mod tests {
         assert!(instructions.contains("Do not call `memory_recall` on every turn"));
     }
 
+    #[test]
+    fn format_claude_parity_payload_normalizes_codex_hook_names() {
+        let adapter = AgentmemoryAdapter::new();
+        let payload = json!({ "session_id": "session-123" });
+
+        let prompt_submit =
+            adapter.format_claude_parity_payload("UserPromptSubmit", payload.clone());
+        assert_eq!(prompt_submit["hookType"], json!("prompt_submit"));
+        assert_eq!(prompt_submit["sessionId"], json!("session-123"));
+
+        let post_tool_failure =
+            adapter.format_claude_parity_payload("PostToolUseFailure", payload.clone());
+        assert_eq!(post_tool_failure["hookType"], json!("post_tool_failure"));
+
+        let stop = adapter.format_claude_parity_payload("Stop", payload);
+        assert_eq!(stop["hookType"], json!("stop"));
+    }
+
     #[tokio::test]
     #[serial_test::serial(agentmemory_env)]
     async fn test_startup_instructions_append_retrieved_context() {
@@ -419,8 +454,24 @@ mod tests {
         let formatted = adapter.format_claude_parity_payload("PreToolUse", raw_payload.clone());
 
         assert_eq!(formatted["sessionId"], "1234");
-        assert_eq!(formatted["hookType"], "PreToolUse");
+        assert_eq!(formatted["hookType"], "pre_tool_use");
         assert!(formatted.get("timestamp").is_some());
         assert_eq!(formatted["data"], raw_payload);
+    }
+}
+fn normalize_hook_type(event_name: &str) -> &str {
+    match event_name {
+        "SessionStart" => "session_start",
+        "UserPromptSubmit" => "prompt_submit",
+        "PreToolUse" => "pre_tool_use",
+        "PostToolUse" => "post_tool_use",
+        "PostToolUseFailure" => "post_tool_failure",
+        "AssistantResult" => "assistant_result",
+        "SubagentStart" => "subagent_start",
+        "SubagentStop" => "subagent_stop",
+        "Stop" => "stop",
+        "Notification" => "notification",
+        "TaskCompleted" => "task_completed",
+        _ => event_name,
     }
 }
