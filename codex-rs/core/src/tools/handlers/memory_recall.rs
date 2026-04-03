@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MemoryOperationEvent;
 use codex_protocol::protocol::MemoryOperationSource;
@@ -23,7 +22,6 @@ struct MemoryRecallArgs {
 
 pub struct MemoryRecallHandler;
 
-#[async_trait]
 impl ToolHandler for MemoryRecallHandler {
     type Output = FunctionToolOutput;
 
