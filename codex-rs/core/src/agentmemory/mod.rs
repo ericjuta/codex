@@ -36,8 +36,8 @@ impl AgentmemoryAdapter {
     }
 
     fn api_base(&self) -> String {
-        std::env::var("III_REST_PORT")
-            .map(|p| format!("http://127.0.0.1:{p}"))
+        std::env::var("AGENTMEMORY_URL")
+            .or_else(|_| std::env::var("III_REST_PORT").map(|p| format!("http://127.0.0.1:{p}")))
             .unwrap_or_else(|_| "http://127.0.0.1:3111".to_string())
     }
 
@@ -101,7 +101,7 @@ impl AgentmemoryAdapter {
     /// so that Agentmemory observations mention the relevant paths and queries.
     fn extract_file_enrichment(tool_input: &serde_json::Value) -> (Vec<String>, Vec<String>) {
         let mut files: Vec<String> = Vec::new();
-        let mut search_terms: Vec<String> = Vec::new();
+        let search_terms: Vec<String> = Vec::new();
 
         if let Some(obj) = tool_input.as_object() {
             // File path fields
@@ -318,7 +318,6 @@ mod tests {
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
-    use wiremock::matchers::body_json;
     use wiremock::matchers::method;
     use wiremock::matchers::path;
 
@@ -334,14 +333,6 @@ mod tests {
             let original = std::env::var_os(key);
             unsafe {
                 std::env::set_var(key, value);
-            }
-            Self { key, original }
-        }
-
-        fn unset(key: &'static str) -> Self {
-            let original = std::env::var_os(key);
-            unsafe {
-                std::env::remove_var(key);
             }
             Self { key, original }
         }
