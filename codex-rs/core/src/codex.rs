@@ -959,7 +959,7 @@ impl TurnContext {
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
         .with_memory_backend(config.memories.backend.clone())
-        .with_agent_roles(crate::agent::role::spawn_tool_spec::build(
+        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &config.agent_roles,
         ));
 
@@ -1441,7 +1441,7 @@ impl Session {
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
         .with_memory_backend(per_turn_config.memories.backend.clone())
-        .with_agent_roles(crate::agent::role::spawn_tool_spec::build(
+        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &per_turn_config.agent_roles,
         ));
 
