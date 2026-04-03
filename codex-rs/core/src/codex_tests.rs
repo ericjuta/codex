@@ -114,6 +114,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration as StdDuration;
 
 #[path = "codex_tests_guardian.rs"]
@@ -2957,6 +2958,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
+        agentmemory_session_ended: AtomicBool::new(false),
         next_internal_sub_id: AtomicU64::new(0),
     };
 
@@ -3799,6 +3801,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
+        agentmemory_session_ended: AtomicBool::new(false),
         next_internal_sub_id: AtomicU64::new(0),
     });
 
