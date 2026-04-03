@@ -37,8 +37,8 @@ impl AgentmemoryAdapter {
 
     fn api_base(&self) -> String {
         std::env::var("III_REST_PORT")
-            .map(|p| format!("http://localhost:{}", p))
-            .unwrap_or_else(|_| "http://localhost:3111".to_string())
+            .map(|p| format!("http://127.0.0.1:{p}"))
+            .unwrap_or_else(|_| "http://127.0.0.1:3111".to_string())
     }
 
     /// Builds the developer instructions for startup memory injection
