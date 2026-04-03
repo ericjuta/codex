@@ -1,5 +1,3 @@
-use crate::client_common::tools::ResponsesApiTool;
-use crate::client_common::tools::ToolSpec;
 use crate::config::types::MemoryBackend;
 use crate::shell::Shell;
 use crate::shell::ShellType;
@@ -18,6 +16,7 @@ use codex_tools::ToolHandlerKind;
 use codex_tools::ToolNamespace;
 use codex_tools::ToolRegistryPlanAppTool;
 use codex_tools::ToolRegistryPlanParams;
+use codex_tools::ToolSpec;
 use codex_tools::ToolUserShellType;
 use codex_tools::ToolsConfig;
 use codex_tools::WaitAgentTimeoutOptions;
