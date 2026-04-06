@@ -4707,6 +4707,10 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::update_memories(&sess, &config, sub.id.clone()).await;
                     false
                 }
+                Op::RecallMemories { query } => {
+                    handlers::recall_memories(&sess, &config, sub.id.clone(), query).await;
+                    false
+                }
                 Op::ThreadRollback { num_turns } => {
                     handlers::thread_rollback(&sess, sub.id.clone(), num_turns).await;
                     false
