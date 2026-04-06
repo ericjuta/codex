@@ -2342,6 +2342,7 @@ impl HistoryCell for MemoryHistoryCell {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn new_memory_recall_submission(query: Option<String>) -> MemoryHistoryCell {
     MemoryHistoryCell::new(
         MemoryOperationSource::Human,
@@ -2349,39 +2350,6 @@ pub(crate) fn new_memory_recall_submission(query: Option<String>) -> MemoryHisto
         MemoryOperationStatus::Pending,
         query,
         "Recalling memory context for the current thread.".to_string(),
-        /*detail*/ None,
-    )
-}
-
-pub(crate) fn new_memory_update_submission() -> MemoryHistoryCell {
-    MemoryHistoryCell::new(
-        MemoryOperationSource::Human,
-        MemoryOperationKind::Update,
-        MemoryOperationStatus::Pending,
-        /*query*/ None,
-        "Requesting a memory refresh.".to_string(),
-        /*detail*/ None,
-    )
-}
-
-pub(crate) fn new_memory_drop_submission() -> MemoryHistoryCell {
-    MemoryHistoryCell::new(
-        MemoryOperationSource::Human,
-        MemoryOperationKind::Drop,
-        MemoryOperationStatus::Pending,
-        /*query*/ None,
-        "Dropping stored memories for this workspace.".to_string(),
-        /*detail*/ None,
-    )
-}
-
-pub(crate) fn new_memory_recall_thread_requirement() -> MemoryHistoryCell {
-    MemoryHistoryCell::new(
-        MemoryOperationSource::Human,
-        MemoryOperationKind::Recall,
-        MemoryOperationStatus::Error,
-        /*query*/ None,
-        "Start a new chat or resume an existing thread before using /memory-recall.".to_string(),
         /*detail*/ None,
     )
 }
