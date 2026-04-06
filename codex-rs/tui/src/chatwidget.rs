@@ -2855,13 +2855,6 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn show_pending_memory_operation(&mut self, cell: history_cell::MemoryHistoryCell) {
-        self.flush_active_cell();
-        self.active_cell = Some(Box::new(cell));
-        self.bump_active_cell_revision();
-        self.request_redraw();
-    }
-
     fn try_complete_pending_memory_operation(&mut self, event: &MemoryOperationEvent) -> bool {
         if event.source != MemoryOperationSource::Human {
             return false;
@@ -2882,17 +2875,6 @@ impl ChatWidget {
         self.bump_active_cell_revision();
         self.flush_active_cell();
         true
-    }
-
-    fn ensure_memory_recall_thread(&mut self) -> bool {
-        if self.thread_id.is_some() {
-            return true;
-        }
-
-        self.add_to_history(history_cell::new_memory_recall_thread_requirement());
-        self.request_redraw();
-        self.bottom_pane.drain_pending_submission_state();
-        false
     }
 
     /// Record one MCP startup update, promoting it into either the active startup
@@ -4938,9 +4920,6 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
-        widget.bottom_pane.set_voice_transcription_enabled(
-            widget.config.features.enabled(Feature::VoiceTranscription),
-        );
         widget.bottom_pane.set_agentmemory_enabled(
             widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory
                 && widget.config.features.enabled(Feature::MemoryTool),
@@ -5518,21 +5497,10 @@ impl ChatWidget {
                 self.clean_background_terminals();
             }
             SlashCommand::MemoryDrop => {
-                self.show_pending_memory_operation(history_cell::new_memory_drop_submission());
-                self.submit_op(Op::DropMemories);
+                self.add_app_server_stub_message("Memory maintenance");
             }
             SlashCommand::MemoryUpdate => {
-                self.show_pending_memory_operation(history_cell::new_memory_update_submission());
-                self.submit_op(Op::UpdateMemories);
-            }
-            SlashCommand::MemoryRecall => {
-                if !self.ensure_memory_recall_thread() {
-                    return;
-                }
-                self.show_pending_memory_operation(history_cell::new_memory_recall_submission(
-                    /*query*/ None,
-                ));
-                self.submit_op(Op::RecallMemories { query: None });
+                self.add_app_server_stub_message("Memory maintenance");
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
@@ -5722,18 +5690,6 @@ impl ChatWidget {
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
                         path: prepared_args,
                     });
-                self.bottom_pane.drain_pending_submission_state();
-            }
-            SlashCommand::MemoryRecall if !trimmed.is_empty() => {
-                if !self.ensure_memory_recall_thread() {
-                    return;
-                }
-                self.show_pending_memory_operation(history_cell::new_memory_recall_submission(
-                    Some(trimmed.to_string()),
-                ));
-                self.submit_op(Op::RecallMemories {
-                    query: Some(trimmed.to_string()),
-                });
                 self.bottom_pane.drain_pending_submission_state();
             }
             _ => self.dispatch_command(cmd),
@@ -6601,6 +6557,47 @@ impl ChatWidget {
             }
             ServerNotification::ItemCompleted(notification) => {
                 self.handle_item_completed_notification(notification, replay_kind);
+            }
+            ServerNotification::MemoryOperation(notification) => {
+                self.on_memory_operation(MemoryOperationEvent {
+                    source: match notification.source {
+                        codex_app_server_protocol::MemoryOperationSource::Human => {
+                            MemoryOperationSource::Human
+                        }
+                        codex_app_server_protocol::MemoryOperationSource::Assistant => {
+                            MemoryOperationSource::Assistant
+                        }
+                    },
+                    operation: match notification.operation {
+                        codex_app_server_protocol::MemoryOperationKind::Recall => {
+                            codex_protocol::items::MemoryOperationKind::Recall
+                        }
+                        codex_app_server_protocol::MemoryOperationKind::Update => {
+                            codex_protocol::items::MemoryOperationKind::Update
+                        }
+                        codex_app_server_protocol::MemoryOperationKind::Drop => {
+                            codex_protocol::items::MemoryOperationKind::Drop
+                        }
+                    },
+                    status: match notification.status {
+                        codex_app_server_protocol::MemoryOperationStatus::Pending => {
+                            codex_protocol::items::MemoryOperationStatus::Pending
+                        }
+                        codex_app_server_protocol::MemoryOperationStatus::Ready => {
+                            codex_protocol::items::MemoryOperationStatus::Ready
+                        }
+                        codex_app_server_protocol::MemoryOperationStatus::Empty => {
+                            codex_protocol::items::MemoryOperationStatus::Empty
+                        }
+                        codex_app_server_protocol::MemoryOperationStatus::Error => {
+                            codex_protocol::items::MemoryOperationStatus::Error
+                        }
+                    },
+                    query: notification.query,
+                    summary: notification.summary,
+                    detail: notification.detail,
+                    context_injected: notification.context_injected,
+                })
             }
             ServerNotification::AgentMessageDelta(notification) => {
                 self.on_agent_message_delta(notification.delta);
