@@ -503,23 +503,14 @@ async fn slash_clear_is_disabled_while_task_running() {
 }
 
 #[tokio::test]
-async fn slash_memory_drop_reports_stubbed_feature() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+async fn slash_memory_drop_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.dispatch_command(SlashCommand::MemoryDrop);
 
-    let event = rx.try_recv().expect("expected unsupported-feature error");
-    match event {
-        AppEvent::InsertHistoryCell(cell) => {
-            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
-            assert!(rendered.contains("Memory maintenance: Not available in TUI yet."));
-        }
-        other => panic!("expected InsertHistoryCell error, got {other:?}"),
-    }
-    assert!(
-        op_rx.try_recv().is_err(),
-        "expected no memory op to be sent"
-    );
+    assert!(active_blob(&chat).contains("Memory Drop Pending"));
+    assert!(active_blob(&chat).contains("Dropping stored memories for this workspace."));
+    assert_matches!(op_rx.try_recv(), Ok(Op::DropMemories));
 }
 
 #[tokio::test]
@@ -534,23 +525,43 @@ async fn slash_mcp_requests_inventory_via_app_server() {
 }
 
 #[tokio::test]
-async fn slash_memory_update_reports_stubbed_feature() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+async fn slash_memory_update_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.dispatch_command(SlashCommand::MemoryUpdate);
 
-    let event = rx.try_recv().expect("expected unsupported-feature error");
-    match event {
-        AppEvent::InsertHistoryCell(cell) => {
-            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
-            assert!(rendered.contains("Memory maintenance: Not available in TUI yet."));
-        }
-        other => panic!("expected InsertHistoryCell error, got {other:?}"),
-    }
+    assert!(active_blob(&chat).contains("Memory Update Pending"));
+    assert!(active_blob(&chat).contains("Requesting a memory refresh."));
+    assert_matches!(op_rx.try_recv(), Ok(Op::UpdateMemories));
+}
+
+#[tokio::test]
+async fn slash_memory_recall_requires_thread() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryRecall);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected thread requirement message");
+    let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        op_rx.try_recv().is_err(),
-        "expected no memory op to be sent"
+        rendered
+            .contains("Start a new chat or resume an existing thread before using /memory-recall."),
+        "expected thread requirement message, got {rendered:?}"
     );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn slash_memory_recall_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.dispatch_command(SlashCommand::MemoryRecall);
+
+    assert!(active_blob(&chat).contains("Memory Recall Pending"));
+    assert!(active_blob(&chat).contains("Recalling memory context for the current thread."));
+    assert_matches!(op_rx.try_recv(), Ok(Op::RecallMemories { query: None }));
 }
 
 #[tokio::test]
