@@ -2855,6 +2855,13 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn show_pending_memory_operation(&mut self, cell: history_cell::MemoryHistoryCell) {
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(cell));
+        self.bump_active_cell_revision();
+        self.request_redraw();
+    }
+
     fn try_complete_pending_memory_operation(&mut self, event: &MemoryOperationEvent) -> bool {
         if event.source != MemoryOperationSource::Human {
             return false;
@@ -2875,6 +2882,19 @@ impl ChatWidget {
         self.bump_active_cell_revision();
         self.flush_active_cell();
         true
+    }
+
+    fn ensure_memory_recall_thread(&mut self) -> bool {
+        if self.thread_id.is_some() {
+            return true;
+        }
+
+        self.add_error_message(
+            "Start a new chat or resume an existing thread before using /memory-recall."
+                .to_string(),
+        );
+        self.bottom_pane.drain_pending_submission_state();
+        false
     }
 
     /// Record one MCP startup update, promoting it into either the active startup
@@ -5496,11 +5516,22 @@ impl ChatWidget {
             SlashCommand::Stop => {
                 self.clean_background_terminals();
             }
+            SlashCommand::MemoryRecall => {
+                if !self.ensure_memory_recall_thread() {
+                    return;
+                }
+                self.show_pending_memory_operation(history_cell::new_memory_recall_submission(
+                    /*query*/ None,
+                ));
+                self.submit_op(Op::RecallMemories { query: None });
+            }
             SlashCommand::MemoryDrop => {
-                self.add_app_server_stub_message("Memory maintenance");
+                self.show_pending_memory_operation(history_cell::new_memory_drop_submission());
+                self.submit_op(Op::DropMemories);
             }
             SlashCommand::MemoryUpdate => {
-                self.add_app_server_stub_message("Memory maintenance");
+                self.show_pending_memory_operation(history_cell::new_memory_update_submission());
+                self.submit_op(Op::UpdateMemories);
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
@@ -5690,6 +5721,18 @@ impl ChatWidget {
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
                         path: prepared_args,
                     });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryRecall if !trimmed.is_empty() => {
+                if !self.ensure_memory_recall_thread() {
+                    return;
+                }
+                self.show_pending_memory_operation(history_cell::new_memory_recall_submission(
+                    Some(trimmed.to_string()),
+                ));
+                self.submit_op(Op::RecallMemories {
+                    query: Some(trimmed.to_string()),
+                });
                 self.bottom_pane.drain_pending_submission_state();
             }
             _ => self.dispatch_command(cmd),
@@ -10239,11 +10282,6 @@ impl ChatWidget {
     pub(crate) fn add_error_message(&mut self, message: String) {
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
-    }
-
-    fn add_app_server_stub_message(&mut self, feature: &str) {
-        warn!(feature, "stubbed unsupported TUI feature");
-        self.add_error_message(format!("{feature}: {TUI_STUB_MESSAGE}"));
     }
 
     fn rename_confirmation_cell(name: &str, thread_id: Option<ThreadId>) -> PlainHistoryCell {

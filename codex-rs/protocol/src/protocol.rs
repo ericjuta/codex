@@ -633,6 +633,12 @@ pub enum Op {
     /// Trigger a single pass of the startup memory pipeline.
     UpdateMemories,
 
+    /// Recall memory context for the current thread and inject it as developer instructions.
+    RecallMemories {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+
     /// Set a user-facing thread name in the persisted rollout metadata.
     /// This is a local-only operation handled by codex-core; it does not
     /// involve the model.
@@ -756,6 +762,7 @@ impl Op {
             Self::Compact => "compact",
             Self::DropMemories => "drop_memories",
             Self::UpdateMemories => "update_memories",
+            Self::RecallMemories { .. } => "recall_memories",
             Self::SetThreadName { .. } => "set_thread_name",
             Self::Undo => "undo",
             Self::ThreadRollback { .. } => "thread_rollback",
