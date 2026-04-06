@@ -60,9 +60,11 @@ pub enum SlashCommand {
     #[strum(serialize = "subagents")]
     MultiAgents,
     // Debugging commands.
-    #[strum(serialize = "debug-m-drop")]
+    #[strum(serialize = "memory-recall")]
+    MemoryRecall,
+    #[strum(to_string = "memory-drop", serialize = "debug-m-drop")]
     MemoryDrop,
-    #[strum(serialize = "debug-m-update")]
+    #[strum(to_string = "memory-update", serialize = "debug-m-update")]
     MemoryUpdate,
 }
 
@@ -92,8 +94,9 @@ impl SlashCommand {
             SlashCommand::Theme => "choose a syntax highlighting theme",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Stop => "stop all background terminals",
-            SlashCommand::MemoryDrop => "DO NOT USE",
-            SlashCommand::MemoryUpdate => "DO NOT USE",
+            SlashCommand::MemoryRecall => "recall relevant memory into the current thread",
+            SlashCommand::MemoryDrop => "clear stored memories for this workspace",
+            SlashCommand::MemoryUpdate => "refresh stored memories for this workspace",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Fast => "toggle Fast mode to enable fastest inference at 2X plan usage",
             SlashCommand::Personality => "choose a communication style for Codex",
@@ -134,6 +137,7 @@ impl SlashCommand {
                 | SlashCommand::Fast
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
+                | SlashCommand::MemoryRecall
         )
     }
 
@@ -158,6 +162,7 @@ impl SlashCommand {
             | SlashCommand::Plan
             | SlashCommand::Clear
             | SlashCommand::Logout
+            | SlashCommand::MemoryRecall
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff
