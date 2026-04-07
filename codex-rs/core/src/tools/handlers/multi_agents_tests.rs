@@ -3212,6 +3212,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         .expect("approval policy set");
 
     let config = build_agent_spawn_config(Some(&base_instructions), &turn).expect("spawn config");
+    let config = build_agent_spawn_config(Some(&base_instructions), &turn).expect("spawn config");
     let mut expected = (*turn.config).clone();
     expected.base_instructions = Some(Some(base_instructions.text));
     expected.model = Some(turn.model_info.slug.clone());
@@ -3249,6 +3250,7 @@ async fn build_agent_spawn_config_preserves_base_user_instructions() {
         text: "base".to_string(),
     };
 
+    let config = build_agent_spawn_config(Some(&base_instructions), &turn).expect("spawn config");
     let config = build_agent_spawn_config(Some(&base_instructions), &turn).expect("spawn config");
 
     assert_eq!(config.user_instructions, base_config.user_instructions);

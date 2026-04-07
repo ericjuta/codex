@@ -205,8 +205,9 @@ pub(crate) fn build_agent_spawn_config(
     turn: &TurnContext,
 ) -> Result<Config, FunctionCallError> {
     let mut config = build_agent_shared_config(turn)?;
-    config.base_instructions =
-        Some(base_instructions.map(|base_instructions| base_instructions.text.clone()));
+    config.base_instructions = Some(base_instructions.cloned().map(|base_instructions| {
+        base_instructions.text
+    }));
     Ok(config)
 }
 

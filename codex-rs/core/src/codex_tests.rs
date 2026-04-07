@@ -605,8 +605,10 @@ async fn get_base_instructions_no_user_content() {
 
         let base_instructions = session.get_base_instructions().await;
         assert_eq!(
-            base_instructions.expect("base instructions").text,
-            model_info.base_instructions
+            base_instructions
+                .as_ref()
+                .map(|base_instructions| &base_instructions.text),
+            Some(&model_info.base_instructions)
         );
     }
 }

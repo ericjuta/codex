@@ -591,9 +591,7 @@ impl Codex {
             Some(base_instructions) => base_instructions,
             None => conversation_history
                 .get_base_instructions()
-                .map(|base_instructions| {
-                    base_instructions.map(|base_instructions| base_instructions.text)
-                })
+                .map(|base_instructions| Some(base_instructions.text))
                 .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
         };
 
@@ -3746,8 +3744,9 @@ impl Session {
             && let Some(personality) = turn_context.personality
         {
             let model_info = turn_context.model_info.clone();
+            let baked_model_instructions = model_info.get_model_instructions(Some(personality));
             let has_baked_personality = model_info.supports_personality()
-                && base_instructions == model_info.get_model_instructions(Some(personality));
+                && base_instructions.as_deref() == Some(baked_model_instructions.as_str());
             if !has_baked_personality
                 && let Some(personality_message) =
                     crate::context_manager::updates::personality_message_for(
@@ -7005,7 +7004,13 @@ async fn run_sampling_request(
     )
     .await?;
 
-    let base_instructions = sess.get_base_instructions().await;
+    let empty_base_instructions = BaseInstructions {
+        text: String::new(),
+    };
+    let base_instructions = sess
+        .get_base_instructions()
+        .await
+        .unwrap_or(empty_base_instructions);
 
     let prompt = build_prompt(
         input,

@@ -120,3 +120,53 @@ In particular:
 3. `c846a57d0` matters because the replay branch currently includes agentmemory and structured memory operation work, while upstream is actively changing log DB behavior
 
 If a follow-up replay is needed, absorb these upstream commits first and only then extract any remaining tiny deltas from `8c2cb3df5`.
+
+## 2026-04-07 Upstream Integration Inventory
+
+After a fresh comparison against `openai/codex` `main` on 2026-04-07, the
+branch was behind by 30 upstream commits. A blind rebase was not considered
+safe because upstream and fork work now overlap in:
+
+1. thread/app-server protocol fields
+2. core session startup and system-context injection
+3. tool/runtime configuration plumbing
+4. TUI history and slash-command surfaces
+
+### Absorbed Now
+
+1. `24c598e8a9` - `Honor null thread instructions (#16964)`
+
+This upstream patch is aligned with the fork intent because it fixes a real
+semantic gap in the thread-start / resume / fork path:
+
+1. omitted instruction fields continue to mean "inherit or fall back"
+2. explicit `null` now means "blank-slate override"
+3. explicit empty strings remain distinct from `null`
+
+That matters directly for:
+
+1. assistant-visible system/base instruction injection
+2. app-server request semantics for thread lifecycle operations
+3. replayed session metadata and base-instruction restoration
+4. spawned/forked runtime behavior when the fork intentionally clears model guidance
+
+### Deferred On Purpose
+
+1. `4bb507d2c4` - `Make AGENTS.md discovery FS-aware (#15826)`
+2. `9f737c28dd` - `Speed up /mcp inventory listing (#16831)`
+3. `756c45ec61` - `[codex-analytics] add protocol-native turn timestamps (#16638)`
+4. `1f2411629f` - `Refactor config types into a separate crate (#16962)`
+5. `73dab2046f` - `app-server: Add transport for remote control (#15951)`
+
+These were deferred because they either:
+
+1. create broad churn outside the current fork lanes
+2. touch high-conflict TUI or config surfaces without closing a correctness gap
+3. add platform or product surface area that this fork is not trying to replay right now
+
+### Practical Outcome
+
+The current branch should treat null-instruction handling as required upstream
+correctness debt that belongs inside the replayed fork stack. The remaining
+upstream commits should be considered in later narrow passes by lane rather
+than through another undifferentiated rebase attempt.

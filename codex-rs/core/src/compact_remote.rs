@@ -75,17 +75,16 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
     let mut history = sess.clone_history().await;
-    let base_instructions = sess.get_base_instructions().await;
-    let token_count_base_instructions =
-        base_instructions
-            .clone()
-            .unwrap_or_else(|| BaseInstructions {
-                text: String::new(),
-            });
+    let base_instructions = sess
+        .get_base_instructions()
+        .await
+        .unwrap_or(BaseInstructions {
+            text: String::new(),
+        });
     let deleted_items = trim_function_call_history_to_fit_context_window(
         &mut history,
         turn_context.as_ref(),
-        &token_count_base_instructions,
+        &base_instructions,
     );
     if deleted_items > 0 {
         info!(
