@@ -591,7 +591,9 @@ impl Codex {
             Some(base_instructions) => base_instructions,
             None => conversation_history
                 .get_base_instructions()
-                .map(|base_instructions| Some(base_instructions.text))
+                .map(|base_instructions| {
+                    base_instructions.map(|base_instructions| base_instructions.text)
+                })
                 .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
         };
 
@@ -977,7 +979,6 @@ impl TurnContext {
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
         .with_has_environment(self.tools_config.has_environment)
-        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
         .with_memory_backend(config.memories.backend.clone())
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &config.agent_roles,
@@ -1461,7 +1462,6 @@ impl Session {
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
         .with_has_environment(environment.is_some())
-        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
         .with_memory_backend(per_turn_config.memories.backend.clone())
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &per_turn_config.agent_roles,
@@ -3745,8 +3745,8 @@ impl Session {
         {
             let model_info = turn_context.model_info.clone();
             let baked_model_instructions = model_info.get_model_instructions(Some(personality));
-            let has_baked_personality = model_info.supports_personality()
-                && base_instructions.as_deref() == Some(baked_model_instructions.as_str());
+            let has_baked_personality =
+                model_info.supports_personality() && base_instructions == baked_model_instructions;
             if !has_baked_personality
                 && let Some(personality_message) =
                     crate::context_manager::updates::personality_message_for(
@@ -7004,13 +7004,7 @@ async fn run_sampling_request(
     )
     .await?;
 
-    let empty_base_instructions = BaseInstructions {
-        text: String::new(),
-    };
-    let base_instructions = sess
-        .get_base_instructions()
-        .await
-        .unwrap_or(empty_base_instructions);
+    let base_instructions = sess.get_base_instructions().await;
 
     let prompt = build_prompt(
         input,

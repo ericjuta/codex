@@ -14,7 +14,6 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
-use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -121,12 +120,7 @@ async fn run_compact_task_inner(
             .clone()
             .for_prompt(&turn_context.model_info.input_modalities);
         let turn_input_len = turn_input.len();
-        let base_instructions = sess
-            .get_base_instructions()
-            .await
-            .unwrap_or(BaseInstructions {
-                text: String::new(),
-            });
+        let base_instructions = sess.get_base_instructions().await;
         let prompt = Prompt {
             input: turn_input,
             base_instructions,

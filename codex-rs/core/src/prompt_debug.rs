@@ -6,7 +6,6 @@ use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::error::Result as CodexResult;
-use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
@@ -79,12 +78,7 @@ pub(crate) async fn build_prompt_input_from_session(
         &CancellationToken::new(),
     )
     .await?;
-    let base_instructions = sess
-        .get_base_instructions()
-        .await
-        .unwrap_or(BaseInstructions {
-            text: String::new(),
-        });
+    let base_instructions = sess.get_base_instructions().await;
     let prompt = build_prompt(
         prompt_input,
         router.as_ref(),
