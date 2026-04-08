@@ -2875,6 +2875,28 @@ impl Session {
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
+        if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory
+            && let Some(payload) = match &legacy_source {
+                EventMsg::TurnComplete(event) => Some(serde_json::json!({
+                    "session_id": self.conversation_id.to_string(),
+                    "turn_id": event.turn_id,
+                    "status": "completed",
+                    "last_assistant_message": event.last_agent_message,
+                })),
+                EventMsg::TurnAborted(event) => Some(serde_json::json!({
+                    "session_id": self.conversation_id.to_string(),
+                    "turn_id": event.turn_id,
+                    "status": "aborted",
+                    "reason": event.reason,
+                })),
+                _ => None,
+            }
+        {
+            let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+            tokio::spawn(async move {
+                adapter.capture_event("TaskCompleted", payload).await;
+            });
+        }
         let event = Event {
             id: turn_context.sub_id.clone(),
             msg,
@@ -2951,15 +2973,47 @@ impl Session {
             child_agent_path.clone(),
             parent_agent_path,
             Vec::new(),
-            message,
+            message.clone(),
             /*trigger_turn*/ false,
         );
-        if let Err(err) = self
+        let send_result = self
             .services
             .agent_control
             .send_inter_agent_communication(parent_thread_id, communication)
-            .await
+            .await;
+        if self.get_config().await.memories.backend
+            == crate::config::types::MemoryBackend::Agentmemory
         {
+            let session_id = self.conversation_id.to_string();
+            let status_payload = serde_json::to_value(&status).unwrap_or_default();
+            let subagent_stop_payload = serde_json::json!({
+                "session_id": session_id,
+                "parent_thread_id": parent_thread_id.to_string(),
+                "agent_path": child_agent_path.as_str(),
+                "status": status_payload,
+                "delivered": send_result.is_ok(),
+            });
+            let notification_payload = serde_json::json!({
+                "session_id": session_id,
+                "parent_thread_id": parent_thread_id.to_string(),
+                "agent_path": child_agent_path.as_str(),
+                "message": message,
+                "delivered": send_result.is_ok(),
+            });
+            let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+            tokio::spawn(async move {
+                adapter
+                    .capture_event("SubagentStop", subagent_stop_payload)
+                    .await;
+            });
+            let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+            tokio::spawn(async move {
+                adapter
+                    .capture_event("Notification", notification_payload)
+                    .await;
+            });
+        }
+        if let Err(err) = send_result {
             debug!("failed to notify parent thread {parent_thread_id}: {err}");
         }
     }
@@ -4932,6 +4986,16 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
     {
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
         let session_id = sess.conversation_id.to_string();
+        let session_end_payload = serde_json::json!({
+            "session_id": session_id.clone(),
+            "cwd": config.cwd.display().to_string(),
+        });
+        tokio::spawn(async move {
+            adapter
+                .capture_event("SessionEnd", session_end_payload)
+                .await;
+        });
+        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
         match tokio::time::timeout(
             AGENTMEMORY_SESSION_SUMMARIZE_TIMEOUT,
             adapter.summarize_session(&session_id),

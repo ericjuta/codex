@@ -393,6 +393,23 @@ impl AgentmemoryAdapter {
         Ok(())
     }
 }
+fn normalize_hook_type(event_name: &str) -> &str {
+    match event_name {
+        "SessionStart" => "session_start",
+        "UserPromptSubmit" => "prompt_submit",
+        "PreToolUse" => "pre_tool_use",
+        "PostToolUse" => "post_tool_use",
+        "PostToolUseFailure" => "post_tool_failure",
+        "AssistantResult" => "assistant_result",
+        "SubagentStart" => "subagent_start",
+        "SubagentStop" => "subagent_stop",
+        "Stop" => "stop",
+        "Notification" => "notification",
+        "TaskCompleted" => "task_completed",
+        "SessionEnd" => "session_end",
+        _ => event_name,
+    }
+}
 #[cfg(test)]
 #[allow(clippy::await_holding_lock)]
 mod tests {
@@ -484,6 +501,10 @@ mod tests {
 
         let stop = adapter.format_claude_parity_payload("Stop", payload);
         assert_eq!(stop["hookType"], json!("stop"));
+
+        let session_end = adapter
+            .format_claude_parity_payload("SessionEnd", json!({ "session_id": "session-1" }));
+        assert_eq!(session_end["hookType"], json!("session_end"));
     }
 
     #[tokio::test]
@@ -565,21 +586,5 @@ mod tests {
         assert_eq!(formatted["cwd"], "/tmp/project");
         assert!(formatted.get("timestamp").is_some());
         assert_eq!(formatted["data"], raw_payload);
-    }
-}
-fn normalize_hook_type(event_name: &str) -> &str {
-    match event_name {
-        "SessionStart" => "session_start",
-        "UserPromptSubmit" => "prompt_submit",
-        "PreToolUse" => "pre_tool_use",
-        "PostToolUse" => "post_tool_use",
-        "PostToolUseFailure" => "post_tool_failure",
-        "AssistantResult" => "assistant_result",
-        "SubagentStart" => "subagent_start",
-        "SubagentStop" => "subagent_stop",
-        "Stop" => "stop",
-        "Notification" => "notification",
-        "TaskCompleted" => "task_completed",
-        _ => event_name,
     }
 }

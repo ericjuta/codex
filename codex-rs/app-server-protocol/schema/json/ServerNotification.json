@@ -2719,6 +2719,58 @@
         },
         {
           "properties": {
+            "contextInjected": {
+              "type": "boolean"
+            },
+            "detail": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "operation": {
+              "$ref": "#/definitions/MemoryOperationKind"
+            },
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "$ref": "#/definitions/MemoryOperationSource"
+            },
+            "status": {
+              "$ref": "#/definitions/MemoryOperationStatus"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "memoryOperation"
+              ],
+              "title": "MemoryOperationThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contextInjected",
+            "id",
+            "operation",
+            "source",
+            "status",
+            "summary",
+            "type"
+          ],
+          "title": "MemoryOperationThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "id": {
               "type": "string"
             },

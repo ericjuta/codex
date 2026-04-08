@@ -239,7 +239,7 @@ pub(crate) async fn run_post_tool_use_failure_hooks(
 
     if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
-        let payload = request.clone();
+        let payload = request;
         tokio::spawn(async move {
             adapter
                 .capture_event(

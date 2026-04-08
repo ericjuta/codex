@@ -99,6 +99,17 @@ async fn agentmemory_session_lifecycle_is_registered_end_to_end() -> Result<()> 
     let expected_summarize = json!({
         "sessionId": session_id,
     });
+    let expected_session_end_observe = json!({
+        "sessionId": session_id,
+        "hookType": "session_end",
+        "project": cwd,
+        "cwd": cwd,
+        "timestamp": request_summaries_placeholder_timestamp(),
+        "data": {
+            "session_id": session_id,
+            "cwd": cwd,
+        },
+    });
 
     let request_summaries = requests
         .iter()
@@ -112,14 +123,35 @@ async fn agentmemory_session_lifecycle_is_registered_end_to_end() -> Result<()> 
         .collect::<Vec<_>>();
 
     assert_eq!(
-        request_summaries,
+        normalize_request_summaries(request_summaries),
         vec![
             ("/agentmemory/session/start".to_string(), expected_start),
             ("/agentmemory/summarize".to_string(), expected_summarize),
+            (
+                "/agentmemory/observe".to_string(),
+                expected_session_end_observe,
+            ),
             ("/agentmemory/session/end".to_string(), expected_end),
         ]
     );
     agentmemory_server.verify().await;
 
     Ok(())
+}
+
+fn normalize_request_summaries(
+    mut summaries: Vec<(String, serde_json::Value)>,
+) -> Vec<(String, serde_json::Value)> {
+    for (path, body) in &mut summaries {
+        if path == "/agentmemory/observe"
+            && let Some(timestamp) = body.get_mut("timestamp")
+        {
+            *timestamp = serde_json::Value::String(request_summaries_placeholder_timestamp());
+        }
+    }
+    summaries
+}
+
+fn request_summaries_placeholder_timestamp() -> String {
+    "__TIMESTAMP__".to_string()
 }
