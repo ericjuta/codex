@@ -375,8 +375,8 @@ impl ToolRegistry {
                 .await,
             )
         } else {
-            if !success {
-                if let Some(ref payload) = pre_tool_use_payload {
+            if !success
+                && let Some(ref payload) = pre_tool_use_payload {
                     crate::hook_runtime::run_post_tool_use_failure_hooks(
                         &invocation.session,
                         &invocation.turn,
@@ -387,7 +387,6 @@ impl ToolRegistry {
                     )
                     .await;
                 }
-            }
             None
         };
         // Deprecated: this is the legacy AfterToolUse hook. Prefer the new PostToolUse
