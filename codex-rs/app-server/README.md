@@ -468,6 +468,11 @@ Use the thread-scoped memory methods to mirror the legacy TUI slash commands:
 
 All three requests return immediately with `{}`. Result details surface through the thread event stream as `thread/memory/operation` notifications carrying the structured source, operation, status, optional query, summary, optional detail, and whether recalled context was injected into the thread.
 
+When turns are later reconstructed through `thread/read`, `thread/resume`, or
+`thread/fork` history replay, persisted memory actions are also represented as
+`{"type":"memoryOperation", ...}` thread items instead of disappearing from the
+transcript.
+
 ```json
 { "method": "thread/memory/drop", "id": 27, "params": { "threadId": "thr_b" } }
 { "id": 27, "result": {} }

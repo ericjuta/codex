@@ -4472,6 +4472,18 @@ pub enum ThreadItem {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
+    MemoryOperation {
+        id: String,
+        source: MemoryOperationSource,
+        operation: MemoryOperationKind,
+        status: MemoryOperationStatus,
+        query: Option<String>,
+        summary: String,
+        detail: Option<String>,
+        context_injected: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     AgentMessage {
         id: String,
         text: String,
@@ -4621,6 +4633,7 @@ impl ThreadItem {
         match self {
             ThreadItem::UserMessage { id, .. }
             | ThreadItem::HookPrompt { id, .. }
+            | ThreadItem::MemoryOperation { id, .. }
             | ThreadItem::AgentMessage { id, .. }
             | ThreadItem::Plan { id, .. }
             | ThreadItem::Reasoning { id, .. }
