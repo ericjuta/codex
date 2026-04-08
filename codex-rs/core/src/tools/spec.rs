@@ -56,12 +56,10 @@ fn memory_recall_output_schema() -> JsonValue {
 fn create_memory_recall_tool() -> ToolSpec {
     let properties = std::collections::BTreeMap::from([(
         "query".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Optional targeted memory recall query. When omitted, recall uses the current thread and project context only."
-                    .to_string(),
-            ),
-        },
+        JsonSchema::string(Some(
+            "Optional targeted memory recall query. When omitted, recall uses the current thread and project context only."
+                .to_string(),
+        )),
     )]);
 
     ToolSpec::Function(ResponsesApiTool {
@@ -70,11 +68,7 @@ fn create_memory_recall_tool() -> ToolSpec {
             .to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: None,
-            additional_properties: Some(false.into()),
-        },
+        parameters: JsonSchema::object(properties, /*required*/ None, Some(false.into())),
         output_schema: Some(memory_recall_output_schema()),
     })
 }
