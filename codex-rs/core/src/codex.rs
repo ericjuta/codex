@@ -971,7 +971,6 @@ impl TurnContext {
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
         .with_has_environment(self.tools_config.has_environment)
-        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
         .with_memory_backend(config.memories.backend.clone())
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &config.agent_roles,
@@ -1497,7 +1496,6 @@ impl Session {
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
         .with_has_environment(environment.is_some())
-        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
         .with_memory_backend(per_turn_config.memories.backend.clone())
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &per_turn_config.agent_roles,
@@ -4984,8 +4982,8 @@ mod handlers {
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
     use crate::tasks::execute_user_shell_command;
-    use codex_mcp::mcp::auth::compute_auth_statuses;
-    use codex_mcp::mcp::collect_mcp_snapshot_from_manager;
+    use codex_mcp::collect_mcp_snapshot_from_manager;
+    use codex_mcp::compute_auth_statuses;
     use codex_protocol::items::MemoryOperationKind;
     use codex_protocol::items::MemoryOperationStatus;
     use codex_protocol::protocol::CodexErrorInfo;
