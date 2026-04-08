@@ -6095,6 +6095,56 @@ impl ChatWidget {
                 });
             }
             ThreadItem::Plan { text, .. } => self.on_plan_item_completed(text),
+            ThreadItem::MemoryOperation {
+                source,
+                operation,
+                status,
+                query,
+                summary,
+                detail,
+                context_injected,
+                ..
+            } => {
+                self.on_memory_operation(MemoryOperationEvent {
+                    source: match source {
+                        codex_app_server_protocol::MemoryOperationSource::Human => {
+                            MemoryOperationSource::Human
+                        }
+                        codex_app_server_protocol::MemoryOperationSource::Assistant => {
+                            MemoryOperationSource::Assistant
+                        }
+                    },
+                    operation: match operation {
+                        codex_app_server_protocol::MemoryOperationKind::Recall => {
+                            codex_protocol::items::MemoryOperationKind::Recall
+                        }
+                        codex_app_server_protocol::MemoryOperationKind::Update => {
+                            codex_protocol::items::MemoryOperationKind::Update
+                        }
+                        codex_app_server_protocol::MemoryOperationKind::Drop => {
+                            codex_protocol::items::MemoryOperationKind::Drop
+                        }
+                    },
+                    status: match status {
+                        codex_app_server_protocol::MemoryOperationStatus::Pending => {
+                            codex_protocol::items::MemoryOperationStatus::Pending
+                        }
+                        codex_app_server_protocol::MemoryOperationStatus::Ready => {
+                            codex_protocol::items::MemoryOperationStatus::Ready
+                        }
+                        codex_app_server_protocol::MemoryOperationStatus::Empty => {
+                            codex_protocol::items::MemoryOperationStatus::Empty
+                        }
+                        codex_app_server_protocol::MemoryOperationStatus::Error => {
+                            codex_protocol::items::MemoryOperationStatus::Error
+                        }
+                    },
+                    query,
+                    summary,
+                    detail,
+                    context_injected,
+                });
+            }
             ThreadItem::Reasoning {
                 summary, content, ..
             } => {
