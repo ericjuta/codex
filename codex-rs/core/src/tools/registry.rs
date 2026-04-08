@@ -375,18 +375,17 @@ impl ToolRegistry {
                 .await,
             )
         } else {
-            if !success
-                && let Some(ref payload) = pre_tool_use_payload {
-                    crate::hook_runtime::run_post_tool_use_failure_hooks(
-                        &invocation.session,
-                        &invocation.turn,
-                        payload.tool_name.clone(),
-                        invocation.call_id.clone(),
-                        payload.command.clone(),
-                        output_preview.clone(),
-                    )
-                    .await;
-                }
+            if !success && let Some(ref payload) = pre_tool_use_payload {
+                crate::hook_runtime::run_post_tool_use_failure_hooks(
+                    &invocation.session,
+                    &invocation.turn,
+                    payload.tool_name.clone(),
+                    invocation.call_id.clone(),
+                    payload.command.clone(),
+                    output_preview.clone(),
+                )
+                .await;
+            }
             None
         };
         // Deprecated: this is the legacy AfterToolUse hook. Prefer the new PostToolUse
