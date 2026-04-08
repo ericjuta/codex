@@ -992,7 +992,6 @@ impl TurnContext {
         .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
-        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
         .with_memory_backend(config.memories.backend.clone())
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &config.agent_roles,
@@ -5045,8 +5044,8 @@ mod handlers {
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
     use crate::tasks::execute_user_shell_command;
-    use codex_mcp::mcp::auth::compute_auth_statuses;
-    use codex_mcp::mcp::collect_mcp_snapshot_from_manager;
+    use codex_mcp::collect_mcp_snapshot_from_manager;
+    use codex_mcp::compute_auth_statuses;
     use codex_protocol::items::MemoryOperationKind;
     use codex_protocol::items::MemoryOperationStatus;
     use codex_protocol::protocol::CodexErrorInfo;
