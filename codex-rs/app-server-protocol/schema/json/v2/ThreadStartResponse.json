@@ -585,6 +585,30 @@
       ],
       "type": "object"
     },
+    "MemoryOperationKind": {
+      "enum": [
+        "recall",
+        "update",
+        "drop"
+      ],
+      "type": "string"
+    },
+    "MemoryOperationSource": {
+      "enum": [
+        "human",
+        "assistant"
+      ],
+      "type": "string"
+    },
+    "MemoryOperationStatus": {
+      "enum": [
+        "pending",
+        "ready",
+        "empty",
+        "error"
+      ],
+      "type": "string"
+    },
     "MessagePhase": {
       "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
       "oneOf": [
@@ -1193,6 +1217,58 @@
             "type"
           ],
           "title": "HookPromptThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "contextInjected": {
+              "type": "boolean"
+            },
+            "detail": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "operation": {
+              "$ref": "#/definitions/MemoryOperationKind"
+            },
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "$ref": "#/definitions/MemoryOperationSource"
+            },
+            "status": {
+              "$ref": "#/definitions/MemoryOperationStatus"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "memoryOperation"
+              ],
+              "title": "MemoryOperationThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contextInjected",
+            "id",
+            "operation",
+            "source",
+            "status",
+            "summary",
+            "type"
+          ],
+          "title": "MemoryOperationThreadItem",
           "type": "object"
         },
         {

@@ -176,6 +176,8 @@ impl ToolHandler for Handler {
             .and_then(|snapshot| snapshot.reasoning_effort)
             .unwrap_or(args.reasoning_effort.unwrap_or_default());
         let nickname = new_agent_nickname.clone();
+        let subagent_start_nickname = new_agent_nickname.clone();
+        let subagent_start_role = new_agent_role.clone();
         session
             .send_event(
                 &turn,
@@ -193,6 +195,24 @@ impl ToolHandler for Handler {
                 .into(),
             )
             .await;
+        if turn.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory
+            && let Ok(spawned_agent) = result.as_ref()
+        {
+            let payload = serde_json::json!({
+                "session_id": session.conversation_id.to_string(),
+                "turn_id": turn.sub_id.clone(),
+                "parent_agent_path": turn.session_source.get_agent_path().map(String::from),
+                "child_thread_id": spawned_agent.thread_id.to_string(),
+                "child_agent_path": new_agent_path.clone(),
+                "child_agent_nickname": subagent_start_nickname,
+                "child_agent_role": subagent_start_role,
+                "task_name": args.task_name.clone(),
+            });
+            let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+            tokio::spawn(async move {
+                adapter.capture_event("SubagentStart", payload).await;
+            });
+        }
         let _ = result?;
         let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
         turn.session_telemetry.counter(

@@ -899,7 +899,8 @@ fn thread_item_to_core(item: &ThreadItem) -> Option<TurnItem> {
                 id: id.clone(),
             }))
         }
-        ThreadItem::CommandExecution { .. }
+        ThreadItem::MemoryOperation { .. }
+        | ThreadItem::CommandExecution { .. }
         | ThreadItem::FileChange { .. }
         | ThreadItem::McpToolCall { .. }
         | ThreadItem::DynamicToolCall { .. }
