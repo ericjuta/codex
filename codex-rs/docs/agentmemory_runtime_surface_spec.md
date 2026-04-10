@@ -266,6 +266,11 @@ The assistant-facing recall tool should be exposed only when both are true:
 - `Feature::MemoryTool` is enabled
 - `config.memories.backend == Agentmemory`
 
+In wrapped runtimes, "exposed" means callable on the effective model-visible
+tool surface, which may be a nested or wrapper-mediated surface rather than the
+top-level tool list. Example: a top-level `exec` tool whose callable nested
+tools are available via `tools` / `ALL_TOOLS`.
+
 Do not add a new feature flag unless rollout isolation is necessary.
 
 Do not gate the assistant-facing recall tool on `memories.use_memories`.
@@ -422,9 +427,12 @@ must stop implying a tool exists when none is callable.
 
 Required follow-up:
 
-- align developer/runtime instructions with the actual callable tool surface
+- align developer/runtime instructions with the actual callable tool surface,
+  including wrapper-mediated nested tool surfaces
 - avoid telling the assistant to use "AgentMemory tools" unless such tools are
-  actually present in the current runtime
+  actually callable in the current runtime
+- avoid describing a top-level wrapper-only tool list as the complete callable
+  tool surface
 - avoid documenting hook families or lifecycle guarantees that are not actually
   emitted by the runtime
 

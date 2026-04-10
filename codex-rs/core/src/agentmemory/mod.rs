@@ -111,6 +111,7 @@ impl AgentmemoryAdapter {
             "Use the `memory_recall` tool when the user asks about prior work, earlier decisions, previous failures, resumed threads, or other historical context that is not fully present in the current thread.\n\
              Agentmemory startup context may be attached below when available.\n\
              Prefer targeted recall queries naming the feature, file, bug, or decision you need.\n\
+             If the current runtime exposes tools through a wrapper surface (for example, `exec` with nested `tools`), treat the callable nested tool surface as authoritative when checking whether `memory_recall` is available.\n\
              Do not call `memory_recall` on every turn; first use the current thread context, then recall memory when that context appears insufficient."
                 .to_string();
 
