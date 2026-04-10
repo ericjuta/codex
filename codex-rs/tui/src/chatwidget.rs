@@ -106,6 +106,7 @@ use codex_app_server_protocol::TurnPlanStepStatus;
 use codex_app_server_protocol::TurnStatus;
 use codex_chatgpt::connectors;
 use codex_config::types::ApprovalsReviewer;
+use codex_config::types::MemoryBackend;
 use codex_config::types::Notifications;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_features::FEATURES;
@@ -4963,7 +4964,7 @@ impl ChatWidget {
 
         widget.prefetch_rate_limits();
         widget.bottom_pane.set_agentmemory_enabled(
-            widget.config.memories.backend == codex_core::config::types::MemoryBackend::Agentmemory
+            widget.config.memories.backend == MemoryBackend::Agentmemory
                 && widget.config.features.enabled(Feature::MemoryTool),
         );
         widget
