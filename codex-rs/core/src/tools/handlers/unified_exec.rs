@@ -134,7 +134,7 @@ impl ToolHandler for UnifiedExecHandler {
         parse_arguments::<ExecCommandArgs>(arguments)
             .ok()
             .map(|args| PreToolUsePayload {
-                tool_name: invocation.tool_name.clone(),
+                tool_name: invocation.tool_name.display(),
                 command: args.cmd,
             })
     }
@@ -156,7 +156,7 @@ impl ToolHandler for UnifiedExecHandler {
         let tool_response =
             result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
-            tool_name: invocation.tool_name.clone(),
+            tool_name: invocation.tool_name.display(),
             command: args.cmd,
             tool_response,
         })
