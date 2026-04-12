@@ -205,7 +205,7 @@ impl ToolHandler for ShellHandler {
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
         shell_payload_command(&invocation.payload).map(|command| PreToolUsePayload {
-            tool_name: invocation.tool_name.clone(),
+            tool_name: invocation.tool_name.display(),
             command,
         })
     }
@@ -218,7 +218,7 @@ impl ToolHandler for ShellHandler {
         let tool_response =
             result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
-            tool_name: invocation.tool_name.clone(),
+            tool_name: invocation.tool_name.display(),
             command: shell_payload_command(&invocation.payload)?,
             tool_response,
         })
@@ -315,7 +315,7 @@ impl ToolHandler for ShellCommandHandler {
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
         shell_command_payload_command(&invocation.payload).map(|command| PreToolUsePayload {
-            tool_name: invocation.tool_name.clone(),
+            tool_name: invocation.tool_name.display(),
             command,
         })
     }
@@ -328,7 +328,7 @@ impl ToolHandler for ShellCommandHandler {
         let tool_response =
             result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
-            tool_name: invocation.tool_name.clone(),
+            tool_name: invocation.tool_name.display(),
             command: shell_command_payload_command(&invocation.payload)?,
             tool_response,
         })

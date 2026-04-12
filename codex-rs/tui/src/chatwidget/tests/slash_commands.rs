@@ -187,21 +187,13 @@ async fn unavailable_slash_command_is_available_from_local_recall() {
 }
 
 #[tokio::test]
-async fn no_op_stub_slash_command_is_available_from_local_recall() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+async fn memory_drop_slash_command_is_available_from_local_recall() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     submit_composer_text(&mut chat, "/debug-m-drop");
 
-    let cells = drain_insert_history(&mut rx);
-    let rendered = cells
-        .iter()
-        .map(|cell| lines_to_single_string(cell))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        rendered.contains("Memory maintenance"),
-        "expected stub message, got: {rendered:?}"
-    );
+    assert!(active_blob(&chat).contains("Memory Drop Pending"));
+    assert_matches!(op_rx.try_recv(), Ok(Op::DropMemories));
     assert_eq!(recall_latest_after_clearing(&mut chat), "/debug-m-drop");
 }
 

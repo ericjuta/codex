@@ -283,8 +283,7 @@ async fn build_post_tool_use_payload_uses_tool_output_wire_value() {
         turn: turn.into(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
         call_id: "call-42".to_string(),
-        tool_name: "shell_command".to_string(),
-        tool_namespace: None,
+        tool_name: codex_tools::ToolName::plain("shell_command"),
         payload,
     };
 
