@@ -303,10 +303,21 @@ impl ChatWidget {
                 self.clean_background_terminals();
             }
             SlashCommand::MemoryDrop => {
-                self.add_app_server_stub_message("Memory maintenance");
+                self.show_pending_memory_operation(history_cell::new_memory_drop_submission());
+                self.submit_op(Op::DropMemories);
             }
             SlashCommand::MemoryUpdate => {
-                self.add_app_server_stub_message("Memory maintenance");
+                self.show_pending_memory_operation(history_cell::new_memory_update_submission());
+                self.submit_op(Op::UpdateMemories);
+            }
+            SlashCommand::MemoryRecall => {
+                if !self.ensure_memory_recall_thread() {
+                    return;
+                }
+                self.show_pending_memory_operation(history_cell::new_memory_recall_submission(
+                    /*query*/ None,
+                ));
+                self.submit_op(Op::RecallMemories { query: None });
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
@@ -511,6 +522,18 @@ impl ChatWidget {
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
                         path: prepared_args,
                     });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryRecall if !trimmed.is_empty() => {
+                if !self.ensure_memory_recall_thread() {
+                    return;
+                }
+                self.show_pending_memory_operation(history_cell::new_memory_recall_submission(
+                    Some(trimmed.to_string()),
+                ));
+                self.submit_op(Op::RecallMemories {
+                    query: Some(trimmed.to_string()),
+                });
                 self.bottom_pane.drain_pending_submission_state();
             }
             _ => self.dispatch_command(cmd),

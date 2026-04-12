@@ -63,7 +63,7 @@ pub trait ToolHandler: Send + Sync {
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
         Some(PreToolUsePayload {
-            tool_name: invocation.tool_name.clone(),
+            tool_name: invocation.tool_name.display(),
             command: invocation.payload.log_payload().into_owned(),
         })
     }
@@ -76,7 +76,7 @@ pub trait ToolHandler: Send + Sync {
         let tool_response =
             result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
-            tool_name: invocation.tool_name.clone(),
+            tool_name: invocation.tool_name.display(),
             command: invocation.payload.log_payload().into_owned(),
             tool_response,
         })

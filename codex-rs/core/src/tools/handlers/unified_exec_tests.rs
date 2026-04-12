@@ -270,8 +270,7 @@ async fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_s
         turn: turn.into(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
         call_id: "call-43".to_string(),
-        tool_name: "exec_command".to_string(),
-        tool_namespace: None,
+        tool_name: codex_tools::ToolName::plain("exec_command"),
         payload,
     };
 
@@ -312,8 +311,7 @@ async fn exec_command_post_tool_use_payload_skips_interactive_exec() {
         turn: turn.into(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
         call_id: "call-44".to_string(),
-        tool_name: "exec_command".to_string(),
-        tool_namespace: None,
+        tool_name: codex_tools::ToolName::plain("exec_command"),
         payload,
     };
 
@@ -350,8 +348,7 @@ async fn exec_command_post_tool_use_payload_skips_running_sessions() {
         turn: turn.into(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
         call_id: "call-45".to_string(),
-        tool_name: "exec_command".to_string(),
-        tool_namespace: None,
+        tool_name: codex_tools::ToolName::plain("exec_command"),
         payload,
     };
 
