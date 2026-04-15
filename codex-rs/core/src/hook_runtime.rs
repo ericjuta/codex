@@ -227,7 +227,7 @@ pub(crate) async fn run_post_tool_use_failure_hooks(
     let request = PostToolUseRequest {
         session_id: sess.conversation_id,
         turn_id: turn_context.sub_id.clone(),
-        cwd: turn_context.cwd.to_path_buf(),
+        cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
