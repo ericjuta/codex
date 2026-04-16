@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_config::types::MemoryBackend;
 use codex_features::Feature;
+use codex_models_manager::bundled_models_response;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -253,6 +254,111 @@ async fn pre_tool_enrichment_skips_non_matching_tools() -> Result<()> {
         !request_paths.contains(&"/agentmemory/enrich".to_string()),
         "non-matching tools should not trigger agentmemory enrichment",
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(agentmemory_env)]
+async fn glob_lane_enrichment_and_post_tool_capture_use_native_contract() -> Result<()> {
+    let model_server = start_mock_server().await;
+    let agentmemory_server = MockServer::start().await;
+    mount_agentmemory_runtime(&agentmemory_server).await;
+    Mock::given(method("POST"))
+        .and(path("/agentmemory/enrich"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "context": "<agentmemory-context>glob lane note</agentmemory-context>",
+        })))
+        .expect(1)
+        .mount(&agentmemory_server)
+        .await;
+
+    let mut builder = test_codex().with_config({
+        let agentmemory_base_url = agentmemory_server.uri();
+        move |config| {
+            config.memories.backend = MemoryBackend::Agentmemory;
+            config.memories.agentmemory.base_url = agentmemory_base_url;
+            config.memories.agentmemory.inject_context = true;
+            let mut model_catalog = bundled_models_response()
+                .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+            let model = model_catalog
+                .models
+                .iter_mut()
+                .find(|model| model.slug == "gpt-5.3-codex")
+                .expect("gpt-5.3-codex exists in bundled models.json");
+            model
+                .experimental_supported_tools
+                .push("list_dir".to_string());
+            config.model_catalog = Some(model_catalog);
+            config
+                .features
+                .disable(Feature::MemoryTool)
+                .expect("test config should allow feature update");
+        }
+    });
+    let test = builder.build(&model_server).await?;
+    std::fs::write(test.config.cwd.join("glob_lane.txt"), "harbor note")?;
+    let call_id = "agentmemory-list-dir";
+    let args = json!({
+        "dir_path": test.config.cwd.display().to_string(),
+        "offset": 1,
+        "limit": 5,
+        "depth": 1,
+    });
+    let responses = mount_sse_sequence(
+        &model_server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "list_dir", &serde_json::to_string(&args)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "listed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.submit_turn("list the directory").await?;
+    test.codex.shutdown_and_wait().await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let agentmemory_requests = agentmemory_server
+        .received_requests()
+        .await
+        .unwrap_or_default();
+    let agentmemory_paths = agentmemory_requests
+        .iter()
+        .map(|request| request.url.path().to_string())
+        .collect::<Vec<_>>();
+    let observe_bodies = agentmemory_requests
+        .iter()
+        .filter(|request| request.url.path() == "/agentmemory/observe")
+        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+        .collect::<Vec<_>>();
+    assert!(
+        requests[1].body_contains_text("glob lane note"),
+        "glob lane enrichment should inject context into the follow-up model turn: body={}; paths={agentmemory_paths:?}; observe={observe_bodies:?}",
+        requests[1].body_json(),
+    );
+    let post_tool_use = agentmemory_requests
+        .into_iter()
+        .filter(|request| request.url.path() == "/agentmemory/observe")
+        .map(|request| {
+            serde_json::from_slice::<serde_json::Value>(&request.body)
+                .expect("agentmemory observe body should be valid json")
+        })
+        .find(|payload| {
+            payload["hookType"] == "post_tool_use" && payload["data"]["tool_name"] == "Glob"
+        })
+        .expect("list_dir should emit glob post_tool_use observe payload");
+    assert_eq!(post_tool_use["source"], "codex-native");
+    assert_eq!(post_tool_use["payload_version"], "1");
+    assert_eq!(post_tool_use["persistence_class"], "persistent");
 
     Ok(())
 }
