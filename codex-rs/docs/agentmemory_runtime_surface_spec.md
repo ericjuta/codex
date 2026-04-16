@@ -14,6 +14,11 @@ appear in this fork. It covers:
 - replay and resume visibility requirements
 - verification required to call the lane complete
 
+Implementation that still remains after the config-first parity work is tracked
+separately in:
+
+- [`agentmemory_runtime_expansion_followup_spec.md`](./agentmemory_runtime_expansion_followup_spec.md)
+
 It does not replace the broader architecture and hook-contract decisions in:
 
 - `/Users/ericjuta/Projects/codex/docs/fork-intent.md`

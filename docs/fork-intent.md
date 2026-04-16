@@ -54,6 +54,7 @@ shipping public release artifacts, see
 - [`README.md`](../README.md)
 - [`docs/claude-code-hooks-parity.md`](./claude-code-hooks-parity.md)
 - [`codex-rs/docs/agentmemory_runtime_surface_spec.md`](../codex-rs/docs/agentmemory_runtime_surface_spec.md)
+- [`codex-rs/docs/agentmemory_runtime_expansion_followup_spec.md`](../codex-rs/docs/agentmemory_runtime_expansion_followup_spec.md)
 - [`codex-rs/docs/github_actions_private_fork_spec.md`](../codex-rs/docs/github_actions_private_fork_spec.md)
 - [`docs/public-release-notes.md`](./public-release-notes.md)
 - [`docs/license.md`](./license.md)
