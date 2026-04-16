@@ -14,10 +14,9 @@ appear in this fork. It covers:
 - replay and resume visibility requirements
 - verification required to call the lane complete
 
-It does not replace the broader architecture decisions in:
+It does not replace the broader architecture and hook-contract decisions in:
 
-- `docs/agentmemory_payload_quality_spec.md`
-- `/Users/ericjuta/Projects/codex/docs/agentmemory-codex-memory-replacement-spec.md`
+- `/Users/ericjuta/Projects/codex/docs/fork-intent.md`
 - `/Users/ericjuta/Projects/codex/docs/claude-code-hooks-parity.md`
 
 Those documents answer whether `agentmemory` should be the primary memory
@@ -112,7 +111,7 @@ Current relevant implementation points:
   - `core/src/codex.rs`
 - current TUI slash-command dispatch:
   - `tui/src/chatwidget.rs`
-  - `tui_app_server/src/chatwidget.rs`
+  - `tui/src/app/app_server_adapter.rs`
 
 Design rule:
 
@@ -543,10 +542,10 @@ Required behavior:
 
 This applies to both:
 
-- `tui`
-- `tui_app_server`
+- the standalone `tui`
+- the app-server-backed TUI mode routed through `tui/src/app/app_server_adapter.rs`
 
-The two implementations must stay behaviorally aligned.
+Those two runtime paths must stay behaviorally aligned.
 
 ## Persistence and Replay
 

@@ -9,7 +9,7 @@ means for the Codex fork when `agentmemory` is the active memory backend.
 
 It is intentionally narrower than:
 
-- [`agentmemory-codex-memory-replacement-spec.md`](./agentmemory-codex-memory-replacement-spec.md)
+- [`fork-intent.md`](./fork-intent.md)
 - [`../codex-rs/docs/agentmemory_runtime_surface_spec.md`](../codex-rs/docs/agentmemory_runtime_surface_spec.md)
 
 Those documents define the memory backend and the runtime memory surface at a
@@ -471,5 +471,5 @@ This spec does not require:
 
 ## Related Docs
 
-- [`agentmemory-codex-memory-replacement-spec.md`](./agentmemory-codex-memory-replacement-spec.md)
+- [`fork-intent.md`](./fork-intent.md)
 - [`../codex-rs/docs/agentmemory_runtime_surface_spec.md`](../codex-rs/docs/agentmemory_runtime_surface_spec.md)

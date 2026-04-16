@@ -9,9 +9,8 @@ license that applies to repository-authored code.
 Some files shipped in this repository remain under their upstream licenses and
 keep their original notices:
 
-- codex-rs/tui/src/custom_terminal.rs and
-  codex-rs/tui_app_server/src/custom_terminal.rs are derived from Ratatui and
-  retain MIT notices inline.
+- codex-rs/tui/src/custom_terminal.rs is derived from Ratatui and retains MIT
+  notices inline.
 - codex-rs/utils/pty/src/win/ contains Windows PTY support code copied from
   WezTerm and retains MIT notices inline. A copy of the upstream license is
   available at third_party/wezterm/LICENSE.

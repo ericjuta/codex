@@ -32,8 +32,8 @@ non-Apache material currently kept in-tree.
 
 The repository currently includes the following notable third-party materials:
 
-- Ratatui-derived files in `codex-rs/tui/src/custom_terminal.rs` and
-  `codex-rs/tui_app_server/src/custom_terminal.rs`, with inline MIT notices.
+- Ratatui-derived file in `codex-rs/tui/src/custom_terminal.rs`, with inline
+  MIT notices.
 - WezTerm-derived Windows PTY files in `codex-rs/utils/pty/src/win/`, with
   inline MIT notices and local-modification notes.
 - A bundled Meriyah parser asset at
