@@ -18,6 +18,7 @@ It does not replace the broader architecture decisions in:
 
 - `docs/agentmemory_payload_quality_spec.md`
 - `/Users/ericjuta/Projects/codex/docs/agentmemory-codex-memory-replacement-spec.md`
+- `/Users/ericjuta/Projects/codex/docs/claude-code-hooks-parity.md`
 
 Those documents answer whether `agentmemory` should be the primary memory
 engine and how retrieval quality should work. This document answers the next
