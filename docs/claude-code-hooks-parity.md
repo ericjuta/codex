@@ -71,12 +71,13 @@ That means:
 2. Codex must use the same backend endpoints for injection:
    - `POST /agentmemory/session/start`
    - `POST /agentmemory/enrich`
-3. Codex must use the same primary operator knobs:
-   - `AGENTMEMORY_URL`
-   - `AGENTMEMORY_SECRET`
-   - `AGENTMEMORY_INJECT_CONTEXT`
-4. `AGENTMEMORY_INJECT_CONTEXT` must remain default-off.
-5. The assistant-facing `memory_recall` tool remains a separate runtime
+3. Codex must expose a config-first operator surface in `config.toml` for
+   parity-related settings.
+4. Codex must continue to support the Claude-compatible environment variable
+   names as override and compatibility inputs.
+5. Context injection must remain default-off unless the operator explicitly
+   enables it.
+6. The assistant-facing `memory_recall` tool remains a separate runtime
    surface and does not replace hook injection.
 
 ## Current Gap
@@ -118,21 +119,79 @@ Rationale:
 - `memory_recall` may remain gated by `Feature::MemoryTool`; hook injection may
   not
 
-### Environment Contract
+### Config Contract
 
-Codex must honor these environment variables on the same terms as the Claude
-plugin:
+The primary operator surface for this fork must be `~/.codex/config.toml`, not
+an env-only setup.
+
+Recommended shape:
+
+```toml
+[memories]
+backend = "agentmemory"
+
+[features]
+memory_tool = true
+
+[memories.agentmemory]
+base_url = "http://127.0.0.1:3111"
+inject_context = true
+secret_env_var = "AGENTMEMORY_SECRET"
+```
+
+Required semantics:
+
+- `memories.backend = "agentmemory"`
+  - selects the `agentmemory` backend
+- `memories.agentmemory.base_url`
+  - primary backend base URL for parity-related requests
+- `memories.agentmemory.inject_context`
+  - boolean gate for startup and pre-tool injection
+- `memories.agentmemory.secret_env_var`
+  - names the environment variable whose value should be used as bearer auth
+    when present
+
+Design rules:
+
+- `base_url` belongs in `config.toml`
+- the injection enablement flag belongs in `config.toml`
+- the secret value itself should not be stored directly in `config.toml`
+- the assistant-facing `memory_recall` tool may continue to use
+  `[features].memory_tool`
+
+### Environment Compatibility Contract
+
+Codex must still honor these Claude-compatible environment variable names:
 
 - `AGENTMEMORY_URL`
-  - primary backend base URL
 - `AGENTMEMORY_SECRET`
-  - bearer auth for backend requests when present
+- `AGENTMEMORY_INJECT_CONTEXT`
+
+But they are not the primary configuration surface for this fork.
+
+Required precedence:
+
+1. explicit Claude-compatible env vars
+2. `config.toml` parity settings
+3. implementation default
+
+Required semantics:
+
+- `AGENTMEMORY_URL`
+  - overrides `memories.agentmemory.base_url`
 - `AGENTMEMORY_INJECT_CONTEXT`
   - string `"true"` enables injection
-  - unset or any other value keeps injection off
+  - string `"false"` disables injection
+  - overrides `memories.agentmemory.inject_context`
+- `AGENTMEMORY_SECRET`
+  - overrides `memories.agentmemory.secret_env_var` indirection
 
-Codex may add a TOML alias later, but the environment variable names above are
-the canonical compatibility surface.
+Rationale:
+
+- `config.toml` is the cleanest persistent operator surface in Codex
+- Claude-compatible env names preserve launcher compatibility and ad hoc runs
+- secret indirection matches existing Codex patterns better than storing a raw
+  secret value in `config.toml`
 
 ## SessionStart Parity
 
@@ -146,7 +205,8 @@ On `SessionStart`, Codex must:
    - `project`
    - `cwd`
 3. continue startup even if the request fails or times out
-4. only inject returned `context` when `AGENTMEMORY_INJECT_CONTEXT=true`
+4. only inject returned `context` when context injection is enabled by the
+   config/env precedence rules above
 
 ### Injection Semantics
 
@@ -177,11 +237,11 @@ Specifically:
 
 On `PreToolUse`, Codex must behave like the Claude plugin setup.
 
-When `AGENTMEMORY_INJECT_CONTEXT` is not `"true"`:
+When context injection is disabled:
 
 - the enrichment path must be a no-op
 
-When `AGENTMEMORY_INJECT_CONTEXT == "true"`:
+When context injection is enabled:
 
 - only these tools are eligible:
   - `Edit`
@@ -260,14 +320,15 @@ forked Codex runtime without learning a different injection model.
 
 Minimum operator guarantees:
 
-- the same `AGENTMEMORY_INJECT_CONTEXT=true` opt-in enables injection
-- leaving the variable unset keeps injection off
-- the same backend URL variable works
-- the same secret variable works
+- a normal persistent setup can be done entirely in `~/.codex/config.toml`
+  except for the secret value
+- the secret can be provided indirectly via `secret_env_var`
+- the same Claude-compatible env names still work as overrides
+- leaving both config and env injection flags unset keeps injection off
 - file/search tool enrichment only happens when the operator explicitly opted in
 
-The fork must not require a separate Codex-only flag to get the base parity
-behavior.
+The fork may use Codex-native config fields for the primary operator surface,
+but it must not require a fork-specific environment variable vocabulary.
 
 ## Acceptance Criteria
 
@@ -276,14 +337,20 @@ This lane is complete only when all of the following are true.
 ### Behavior
 
 - `SessionStart` registration still happens when `backend == Agentmemory`
-- `SessionStart` injects returned context only when
-  `AGENTMEMORY_INJECT_CONTEXT=true`
-- `PreToolUse` injects returned context only when
-  `AGENTMEMORY_INJECT_CONTEXT=true`
+- `SessionStart` injects returned context only when context injection is
+  enabled by config/env precedence
+- `PreToolUse` injects returned context only when context injection is enabled
+  by config/env precedence
 - `PreToolUse` injection is limited to `Edit|Write|Read|Glob|Grep`
 - `PreToolUse` accepts `additionalContext`
 - `memory_recall` remains available only on the assistant tool surface when its
   existing feature/backend gates are satisfied
+- `memories.agentmemory.base_url` controls the backend URL when no override env
+  var is present
+- `memories.agentmemory.inject_context` controls injection when no override env
+  var is present
+- `memories.agentmemory.secret_env_var` is used to resolve bearer auth when no
+  direct secret override env var is present
 
 ### Tests
 
@@ -291,18 +358,25 @@ At minimum, add or update tests that prove:
 
 - startup injection uses `/agentmemory/session/start`, not only
   `/agentmemory/context`
-- startup injection is absent when `AGENTMEMORY_INJECT_CONTEXT` is not enabled
+- startup injection follows `config.toml` injection enablement when no override
+  env var is set
 - pre-tool enrichment injects context for `Edit|Write|Read|Glob|Grep`
 - pre-tool enrichment does not inject for non-matching tools
 - `PreToolUse` parsing accepts valid `additionalContext`
-- `AGENTMEMORY_URL` and `AGENTMEMORY_SECRET` are honored by the parity path
+- `memories.agentmemory.base_url` is honored by the parity path
+- `memories.agentmemory.inject_context` is honored by the parity path
+- `memories.agentmemory.secret_env_var` resolves auth correctly
+- `AGENTMEMORY_URL`, `AGENTMEMORY_SECRET`, and `AGENTMEMORY_INJECT_CONTEXT`
+  override `config.toml` when present
 - `Feature::MemoryTool = false` does not disable the hook-based parity path
 
 ### Documentation
 
 Update runtime-facing docs so they say:
 
-- Codex supports Claude-style `AGENTMEMORY_INJECT_CONTEXT` parity
+- Codex supports Claude-style parity with a config-first operator surface
+- persistent setup belongs in `~/.codex/config.toml`
+- env vars remain compatible overrides
 - startup injection comes from `session/start`
 - pre-tool enrichment comes from `enrich`
 - `memory_recall` is complementary, not a replacement for hook injection
