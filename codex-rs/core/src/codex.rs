@@ -202,6 +202,7 @@ use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::exec_output::StreamOutput;
 
+pub(crate) mod agentmemory_ops;
 mod rollout_reconstruction;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
@@ -447,7 +448,6 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
-const DIRECT_APP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
 const AGENTMEMORY_SESSION_SUMMARIZE_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(30);
 const AGENTMEMORY_SESSION_LIFECYCLE_TIMEOUT: std::time::Duration =
@@ -4955,6 +4955,56 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::recall_memories(&sess, &config, sub.id.clone(), query).await;
                     false
                 }
+                Op::RememberMemories { content } => {
+                    handlers::remember_memories(&sess, &config, sub.id.clone(), content).await;
+                    false
+                }
+                Op::ReviewLessons { query } => {
+                    handlers::review_lessons(&sess, &config, sub.id.clone(), query).await;
+                    false
+                }
+                Op::ReviewCrystals => {
+                    handlers::review_crystals(&sess, &config, sub.id.clone()).await;
+                    false
+                }
+                Op::CreateCrystals { action_ids } => {
+                    handlers::create_crystals(&sess, &config, sub.id.clone(), action_ids).await;
+                    false
+                }
+                Op::AutoCrystallize { older_than_days } => {
+                    handlers::auto_crystallize(&sess, &config, sub.id.clone(), older_than_days)
+                        .await;
+                    false
+                }
+                Op::ReflectMemories { max_clusters } => {
+                    handlers::reflect_memories(&sess, &config, sub.id.clone(), max_clusters).await;
+                    false
+                }
+                Op::ReviewInsights { query } => {
+                    handlers::review_insights(&sess, &config, sub.id.clone(), query).await;
+                    false
+                }
+                Op::ListActions { status } => {
+                    handlers::list_actions(&sess, &config, sub.id.clone(), status).await;
+                    false
+                }
+                Op::CreateAction { title } => {
+                    handlers::create_action(&sess, &config, sub.id.clone(), title).await;
+                    false
+                }
+                Op::UpdateAction { action_id, status } => {
+                    handlers::update_action(&sess, &config, sub.id.clone(), action_id, status)
+                        .await;
+                    false
+                }
+                Op::ReviewFrontier { limit } => {
+                    handlers::review_frontier(&sess, &config, sub.id.clone(), limit).await;
+                    false
+                }
+                Op::ReviewNext => {
+                    handlers::review_next(&sess, &config, sub.id.clone()).await;
+                    false
+                }
                 Op::ThreadRollback { num_turns } => {
                     handlers::thread_rollback(&sess, sub.id.clone(), num_turns).await;
                     false
@@ -5011,14 +5061,15 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
         let session_id = sess.conversation_id.to_string();
         let memories = config.memories.clone();
-        let session_end_payload = serde_json::json!({
+        let lifecycle_payload = serde_json::json!({
             "session_id": session_id.clone(),
             "cwd": config.cwd.display().to_string(),
         });
+        let consolidation_enabled = adapter.consolidation_enabled(&memories);
         let observe_memories = memories.clone();
         tokio::spawn(async move {
             adapter
-                .capture_event("SessionEnd", session_end_payload, &observe_memories)
+                .capture_event("Stop", lifecycle_payload, &observe_memories)
                 .await;
         });
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
@@ -5045,6 +5096,18 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 warn!("timed out summarizing agentmemory session {session_id}");
             }
         }
+        let session_end_payload = serde_json::json!({
+            "session_id": session_id.clone(),
+            "cwd": config.cwd.display().to_string(),
+        });
+        let observe_memories = memories.clone();
+        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+        tokio::spawn(async move {
+            adapter
+                .capture_event("SessionEnd", session_end_payload, &observe_memories)
+                .await;
+        });
+        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
         match tokio::time::timeout(
             AGENTMEMORY_SESSION_LIFECYCLE_TIMEOUT,
             adapter.end_session(&session_id, &memories),
@@ -5057,6 +5120,39 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             }
             Err(_) => {
                 warn!("timed out ending agentmemory session {session_id}");
+            }
+        }
+        if consolidation_enabled {
+            let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+            match tokio::time::timeout(
+                AGENTMEMORY_SESSION_SUMMARIZE_TIMEOUT,
+                adapter.auto_crystallize(Some(0), None, &memories),
+            )
+            .await
+            {
+                Ok(Ok(_)) => {}
+                Ok(Err(err)) => {
+                    warn!("failed to auto-crystallize agentmemory session {session_id}: {err}");
+                }
+                Err(_) => {
+                    warn!("timed out auto-crystallizing agentmemory session {session_id}");
+                }
+            }
+
+            let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+            match tokio::time::timeout(
+                AGENTMEMORY_SESSION_SUMMARIZE_TIMEOUT,
+                adapter.consolidate_pipeline(&memories),
+            )
+            .await
+            {
+                Ok(Ok(_)) => {}
+                Ok(Err(err)) => {
+                    warn!("failed to run agentmemory consolidate-pipeline for {session_id}: {err}");
+                }
+                Err(_) => {
+                    warn!("timed out running agentmemory consolidate-pipeline for {session_id}");
+                }
             }
         }
     }
@@ -5120,8 +5216,6 @@ mod handlers {
     use crate::tasks::execute_user_shell_command;
     use codex_mcp::collect_mcp_snapshot_from_manager;
     use codex_mcp::compute_auth_statuses;
-    use codex_protocol::items::MemoryOperationKind;
-    use codex_protocol::items::MemoryOperationStatus;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -5129,8 +5223,6 @@ mod handlers {
     use codex_protocol::protocol::InterAgentCommunication;
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
-    use codex_protocol::protocol::MemoryOperationEvent;
-    use codex_protocol::protocol::MemoryOperationSource;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::RealtimeConversationListVoicesResponseEvent;
     use codex_protocol::protocol::RealtimeVoicesList;
@@ -5154,8 +5246,6 @@ mod handlers {
     use codex_protocol::dynamic_tools::DynamicToolResponse;
     use codex_protocol::items::UserMessageItem;
     use codex_protocol::mcp::RequestId as ProtocolRequestId;
-    use codex_protocol::models::DeveloperInstructions;
-    use codex_protocol::models::ResponseItem;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
@@ -5700,226 +5790,12 @@ mod handlers {
         .await;
     }
 
-    struct MemoryOperationEventArgs {
-        source: MemoryOperationSource,
-        operation: MemoryOperationKind,
-        status: MemoryOperationStatus,
-        query: Option<String>,
-        summary: String,
-        detail: Option<String>,
-        context_injected: bool,
-    }
-
-    async fn send_memory_operation_event(
-        sess: &Session,
-        sub_id: &str,
-        args: MemoryOperationEventArgs,
-    ) {
-        let MemoryOperationEventArgs {
-            source,
-            operation,
-            status,
-            query,
-            summary,
-            detail,
-            context_injected,
-        } = args;
-        sess.send_event_raw(Event {
-            id: sub_id.to_string(),
-            msg: EventMsg::MemoryOperation(MemoryOperationEvent {
-                source,
-                operation,
-                status,
-                query,
-                summary,
-                detail,
-                context_injected,
-            }),
-        })
-        .await;
-    }
-
     pub async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
-        if config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
-            let adapter = crate::agentmemory::AgentmemoryAdapter::new();
-            if let Err(e) = adapter.drop_memories(&config.memories).await {
-                send_memory_operation_event(
-                    sess,
-                    &sub_id,
-                    MemoryOperationEventArgs {
-                        source: MemoryOperationSource::Human,
-                        operation: MemoryOperationKind::Drop,
-                        status: MemoryOperationStatus::Error,
-                        query: None,
-                        summary: "Memory drop failed.".to_string(),
-                        detail: Some(e.to_string()),
-                        context_injected: false,
-                    },
-                )
-                .await;
-                return;
-            }
-            send_memory_operation_event(
-                sess,
-                &sub_id,
-                MemoryOperationEventArgs {
-                    source: MemoryOperationSource::Human,
-                    operation: MemoryOperationKind::Drop,
-                    status: MemoryOperationStatus::Ready,
-                    query: None,
-                    summary: "Cleared Agentmemory contents.".to_string(),
-                    detail: None,
-                    context_injected: false,
-                },
-            )
-            .await;
-            return;
-        }
-
-        let mut errors = Vec::new();
-
-        if let Some(state_db) = sess.services.state_db.as_deref() {
-            if let Err(err) = state_db.clear_memory_data().await {
-                errors.push(format!("failed clearing memory rows from state db: {err}"));
-            }
-        } else {
-            errors.push("state db unavailable; memory rows were not cleared".to_string());
-        }
-
-        let memory_root = crate::memories::memory_root(&config.codex_home);
-        if let Err(err) = crate::memories::clear_memory_root_contents(&memory_root).await {
-            errors.push(format!(
-                "failed clearing memory directory {}: {err}",
-                memory_root.display()
-            ));
-        }
-
-        if errors.is_empty() {
-            send_memory_operation_event(
-                sess,
-                &sub_id,
-                MemoryOperationEventArgs {
-                    source: MemoryOperationSource::Human,
-                    operation: MemoryOperationKind::Drop,
-                    status: MemoryOperationStatus::Ready,
-                    query: None,
-                    summary: "Dropped stored memories for this workspace.".to_string(),
-                    detail: Some(format!(
-                        "Cleared memory rows from the state db and removed stored memory files at {}.",
-                        memory_root.display()
-                    )),
-                    context_injected: false,
-                },
-            )
-            .await;
-            return;
-        }
-
-        send_memory_operation_event(
-            sess,
-            &sub_id,
-            MemoryOperationEventArgs {
-                source: MemoryOperationSource::Human,
-                operation: MemoryOperationKind::Drop,
-                status: MemoryOperationStatus::Error,
-                query: None,
-                summary: "Memory drop completed with errors.".to_string(),
-                detail: Some(errors.join("; ")),
-                context_injected: false,
-            },
-        )
-        .await;
+        super::agentmemory_ops::drop_memories(sess, config, sub_id).await;
     }
 
     pub async fn update_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
-        let session_source = {
-            let state = sess.state.lock().await;
-            state.session_configuration.session_source.clone()
-        };
-
-        if config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
-            let adapter = crate::agentmemory::AgentmemoryAdapter::new();
-            let result = match adapter.update_memories(&config.memories).await {
-                Ok(result) => result,
-                Err(e) => {
-                    send_memory_operation_event(
-                        sess,
-                        &sub_id,
-                        MemoryOperationEventArgs {
-                            source: MemoryOperationSource::Human,
-                            operation: MemoryOperationKind::Update,
-                            status: MemoryOperationStatus::Error,
-                            query: None,
-                            summary: "Memory update failed.".to_string(),
-                            detail: Some(e.to_string()),
-                            context_injected: false,
-                        },
-                    )
-                    .await;
-                    return;
-                }
-            };
-            let status = if result.consolidated > 0 {
-                MemoryOperationStatus::Ready
-            } else {
-                MemoryOperationStatus::Empty
-            };
-            let summary = if result.consolidated > 0 {
-                format!("Consolidated {} new memory entries.", result.consolidated)
-            } else if result.reason.as_deref() == Some("insufficient_observations") {
-                "Not enough observations yet to consolidate agentmemory.".to_string()
-            } else {
-                "Memory update completed without new consolidated memories.".to_string()
-            };
-            let detail = match (
-                result.reason.as_deref(),
-                result.scanned_sessions,
-                result.total_observations,
-            ) {
-                (Some(reason), Some(scanned_sessions), Some(total_observations)) => Some(format!(
-                    "Agentmemory returned reason '{reason}' after scanning {scanned_sessions} sessions and considering {total_observations} candidate observations."
-                )),
-                (Some(reason), _, _) => Some(format!("Agentmemory returned reason '{reason}'.")),
-                (None, Some(scanned_sessions), Some(total_observations)) => Some(format!(
-                    "Agentmemory scanned {scanned_sessions} sessions and considered {total_observations} candidate observations."
-                )),
-                _ => None,
-            };
-            send_memory_operation_event(
-                sess,
-                &sub_id,
-                MemoryOperationEventArgs {
-                    source: MemoryOperationSource::Human,
-                    operation: MemoryOperationKind::Update,
-                    status,
-                    query: None,
-                    summary,
-                    detail,
-                    context_injected: false,
-                },
-            )
-            .await;
-            return;
-        }
-
-        if config.memories.backend == crate::config::types::MemoryBackend::Native {
-            crate::memories::start_memories_startup_task(sess, Arc::clone(config), &session_source);
-        }
-
-        send_memory_operation_event(
-            sess,
-            &sub_id,
-            MemoryOperationEventArgs {
-                source: MemoryOperationSource::Human,
-                operation: MemoryOperationKind::Update,
-                status: MemoryOperationStatus::Ready,
-                query: None,
-                summary: "Memory update triggered.".to_string(),
-                detail: Some("Consolidation is running in the background.".to_string()),
-                context_injected: false,
-            },
-        )
-        .await;
+        super::agentmemory_ops::update_memories(sess, config, sub_id).await;
     }
 
     pub async fn recall_memories(
@@ -5928,94 +5804,106 @@ mod handlers {
         sub_id: String,
         query: Option<String>,
     ) {
-        if config.memories.backend != crate::config::types::MemoryBackend::Agentmemory {
-            send_memory_operation_event(
-                sess,
-                &sub_id,
-                MemoryOperationEventArgs {
-                    source: MemoryOperationSource::Human,
-                    operation: MemoryOperationKind::Recall,
-                    status: MemoryOperationStatus::Error,
-                    query,
-                    summary: "Memory recall requires agentmemory backend.".to_string(),
-                    detail: None,
-                    context_injected: false,
-                },
-            )
-            .await;
-            return;
-        }
+        super::agentmemory_ops::recall_memories(sess, config, sub_id, query).await;
+    }
 
-        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
-        let session_id = sess.conversation_id.to_string();
+    pub async fn remember_memories(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        content: String,
+    ) {
+        super::agentmemory_ops::remember_memories(sess, config, sub_id, content).await;
+    }
 
-        match adapter
-            .recall_for_runtime(
-                &session_id,
-                config.cwd.as_ref(),
-                query.as_deref(),
-                &config.memories,
-            )
-            .await
-        {
-            Ok(result) if result.recalled => {
-                let context = result.context;
-                let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
-                let message: ResponseItem = DeveloperInstructions::new(format!(
-                    "<agentmemory-recall>\n{context}\n</agentmemory-recall>"
-                ))
-                .into();
-                sess.record_conversation_items(&turn_context, std::slice::from_ref(&message))
-                    .await;
-                send_memory_operation_event(
-                    sess,
-                    &sub_id,
-                    MemoryOperationEventArgs {
-                        source: MemoryOperationSource::Human,
-                        operation: MemoryOperationKind::Recall,
-                        status: MemoryOperationStatus::Ready,
-                        query,
-                        summary: "Recalled memory context and injected it into the current thread."
-                            .to_string(),
-                        detail: Some(context),
-                        context_injected: true,
-                    },
-                )
-                .await;
-            }
-            Ok(_) => {
-                send_memory_operation_event(
-                    sess,
-                    &sub_id,
-                    MemoryOperationEventArgs {
-                        source: MemoryOperationSource::Human,
-                        operation: MemoryOperationKind::Recall,
-                        status: MemoryOperationStatus::Empty,
-                        query,
-                        summary: "No relevant memory context was found.".to_string(),
-                        detail: None,
-                        context_injected: false,
-                    },
-                )
-                .await;
-            }
-            Err(e) => {
-                send_memory_operation_event(
-                    sess,
-                    &sub_id,
-                    MemoryOperationEventArgs {
-                        source: MemoryOperationSource::Human,
-                        operation: MemoryOperationKind::Recall,
-                        status: MemoryOperationStatus::Error,
-                        query,
-                        summary: "Memory recall failed.".to_string(),
-                        detail: Some(e.to_string()),
-                        context_injected: false,
-                    },
-                )
-                .await;
-            }
-        }
+    pub async fn review_lessons(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        query: Option<String>,
+    ) {
+        super::agentmemory_ops::review_lessons(sess, config, sub_id, query).await;
+    }
+
+    pub async fn review_crystals(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
+        super::agentmemory_ops::review_crystals(sess, config, sub_id).await;
+    }
+
+    pub async fn create_crystals(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        action_ids: Vec<String>,
+    ) {
+        super::agentmemory_ops::create_crystals(sess, config, sub_id, action_ids).await;
+    }
+
+    pub async fn auto_crystallize(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        older_than_days: Option<u32>,
+    ) {
+        super::agentmemory_ops::auto_crystallize(sess, config, sub_id, older_than_days).await;
+    }
+
+    pub async fn reflect_memories(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        max_clusters: Option<u32>,
+    ) {
+        super::agentmemory_ops::reflect_memories(sess, config, sub_id, max_clusters).await;
+    }
+
+    pub async fn review_insights(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        query: Option<String>,
+    ) {
+        super::agentmemory_ops::review_insights(sess, config, sub_id, query).await;
+    }
+
+    pub async fn list_actions(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        status: Option<String>,
+    ) {
+        super::agentmemory_ops::list_actions(sess, config, sub_id, status).await;
+    }
+
+    pub async fn create_action(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        title: String,
+    ) {
+        super::agentmemory_ops::create_action(sess, config, sub_id, title).await;
+    }
+
+    pub async fn update_action(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        action_id: String,
+        status: String,
+    ) {
+        super::agentmemory_ops::update_action(sess, config, sub_id, action_id, status).await;
+    }
+
+    pub async fn review_frontier(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        limit: Option<u32>,
+    ) {
+        super::agentmemory_ops::review_frontier(sess, config, sub_id, limit).await;
+    }
+
+    pub async fn review_next(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
+        super::agentmemory_ops::review_next(sess, config, sub_id).await;
     }
 
     pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) {

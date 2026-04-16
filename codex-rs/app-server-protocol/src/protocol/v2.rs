@@ -3146,16 +3146,40 @@ pub struct ThreadCompactStartResponse {}
 #[ts(rename_all = "snake_case", export_to = "v2/")]
 pub enum MemoryOperationKind {
     Recall,
+    Remember,
     Update,
     Drop,
+    Lessons,
+    Crystals,
+    Crystallize,
+    AutoCrystallize,
+    Insights,
+    Reflect,
+    Actions,
+    ActionCreate,
+    ActionUpdate,
+    Frontier,
+    Next,
 }
 
 impl From<CoreMemoryOperationKind> for MemoryOperationKind {
     fn from(value: CoreMemoryOperationKind) -> Self {
         match value {
             CoreMemoryOperationKind::Recall => Self::Recall,
+            CoreMemoryOperationKind::Remember => Self::Remember,
             CoreMemoryOperationKind::Update => Self::Update,
             CoreMemoryOperationKind::Drop => Self::Drop,
+            CoreMemoryOperationKind::Lessons => Self::Lessons,
+            CoreMemoryOperationKind::Crystals => Self::Crystals,
+            CoreMemoryOperationKind::Crystallize => Self::Crystallize,
+            CoreMemoryOperationKind::AutoCrystallize => Self::AutoCrystallize,
+            CoreMemoryOperationKind::Insights => Self::Insights,
+            CoreMemoryOperationKind::Reflect => Self::Reflect,
+            CoreMemoryOperationKind::Actions => Self::Actions,
+            CoreMemoryOperationKind::ActionCreate => Self::ActionCreate,
+            CoreMemoryOperationKind::ActionUpdate => Self::ActionUpdate,
+            CoreMemoryOperationKind::Frontier => Self::Frontier,
+            CoreMemoryOperationKind::Next => Self::Next,
         }
     }
 }

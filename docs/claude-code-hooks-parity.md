@@ -12,6 +12,19 @@ It is intentionally narrower than:
 - [`fork-intent.md`](./fork-intent.md)
 - [`../codex-rs/docs/agentmemory_runtime_surface_spec.md`](../codex-rs/docs/agentmemory_runtime_surface_spec.md)
 
+Current branch state:
+
+- `SessionStart` registration uses `POST /agentmemory/session/start`
+- `PreToolUse` enrichment uses `POST /agentmemory/enrich` and accepts
+  `additionalContext`
+- `UserPromptSubmit` retains `observe` and now issues
+  `POST /agentmemory/context/refresh` for long-enough prompts
+- shutdown emits `Stop` observation plus summarize, then `SessionEnd`
+  observation plus `session/end`
+- when consolidation is enabled, shutdown also issues
+  `POST /agentmemory/crystals/auto` and
+  `POST /agentmemory/consolidate-pipeline`
+
 Those documents define the memory backend and the runtime memory surface at a
 higher level. This document defines the hook-level operator contract that must
 match the Claude plugin setup.
@@ -94,26 +107,13 @@ That means:
 6. The assistant-facing `memory_recall` tool remains a separate runtime
    surface and does not replace hook injection.
 
-## Current Gap
+## Current State
 
-The fork is not currently at parity.
+The parity lane is implemented on this branch.
 
-Current mismatches:
-
-- startup injection currently uses `POST /agentmemory/context` with
-  `sessionId = "startup"` instead of consuming `context` from
-  `POST /agentmemory/session/start`
-- startup injection is currently tied to the startup memory prompt path rather
-  than the Claude-style hook contract
-- `PreToolUse` currently rejects `additionalContext`, which blocks Claude-style
-  pre-tool enrichment entirely
-- prompt-submit parity is underspecified relative to the plugin's current
-  `observe` plus `context/refresh` behavior
-- stop/session-end parity is underspecified relative to the plugin's current
-  `summarize`, `session/end`, optional `crystals/auto`, and optional
-  `consolidate-pipeline` behavior
-- Codex currently supports `additional_context` after tool execution, which is
-  useful but is not a substitute for pre-tool enrichment
+What remains valuable here is keeping the specification synchronized with the
+actual operator contract so future edits do not silently regress the behavior
+above.
 
 ## Required Runtime Contract
 
@@ -169,6 +169,9 @@ Required semantics:
 - `memories.agentmemory.secret_env_var`
   - names the environment variable whose value should be used as bearer auth
     when present
+- `memories.use_memories`
+  - is the current Codex-native toggle for the optional shutdown-side
+    `crystals/auto` plus `consolidate-pipeline` behavior
 
 Design rules:
 
@@ -204,6 +207,10 @@ Required semantics:
   - overrides `memories.agentmemory.inject_context`
 - `AGENTMEMORY_SECRET`
   - overrides `memories.agentmemory.secret_env_var` indirection
+- `CONSOLIDATION_ENABLED`
+  - when set to `"true"` or `"false"`, overrides the shutdown-side
+    consolidation toggle so Codex matches the standalone `agentmemory` hook
+    runtime
 
 Rationale:
 
@@ -316,6 +323,12 @@ Codex must:
 4. inject returned `context` when the backend returns non-empty context and the
    backend does not mark the request as skipped
 
+Current implementation rule:
+
+- prompt-submit refresh is independent of
+  `memories.agentmemory.inject_context` and follows the plugin's
+  prompt-length-plus-backend-skip contract instead
+
 Design rule:
 
 - `UserPromptSubmit` is not a substitute for `SessionStart` or `PreToolUse`
@@ -343,6 +356,12 @@ Codex must:
 
 The exact config knob may be Codex-native, but the behavior must remain
 equivalent to the plugin's enabled path.
+
+Current implementation note:
+
+- Codex currently uses `memories.use_memories` as the native toggle and still
+  honors `CONSOLIDATION_ENABLED` as an override for parity with the standalone
+  hook runtime
 
 ## Observation Parity
 

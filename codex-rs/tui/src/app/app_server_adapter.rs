@@ -109,6 +109,93 @@ use codex_protocol::protocol::TurnStartedEvent;
 #[cfg(test)]
 use std::time::Duration;
 
+#[cfg(test)]
+fn app_server_memory_source(
+    source: codex_app_server_protocol::MemoryOperationSource,
+) -> codex_protocol::protocol::MemoryOperationSource {
+    match source {
+        codex_app_server_protocol::MemoryOperationSource::Human => {
+            codex_protocol::protocol::MemoryOperationSource::Human
+        }
+        codex_app_server_protocol::MemoryOperationSource::Assistant => {
+            codex_protocol::protocol::MemoryOperationSource::Assistant
+        }
+    }
+}
+
+#[cfg(test)]
+fn app_server_memory_kind(
+    operation: codex_app_server_protocol::MemoryOperationKind,
+) -> codex_protocol::items::MemoryOperationKind {
+    match operation {
+        codex_app_server_protocol::MemoryOperationKind::Recall => {
+            codex_protocol::items::MemoryOperationKind::Recall
+        }
+        codex_app_server_protocol::MemoryOperationKind::Remember => {
+            codex_protocol::items::MemoryOperationKind::Remember
+        }
+        codex_app_server_protocol::MemoryOperationKind::Update => {
+            codex_protocol::items::MemoryOperationKind::Update
+        }
+        codex_app_server_protocol::MemoryOperationKind::Drop => {
+            codex_protocol::items::MemoryOperationKind::Drop
+        }
+        codex_app_server_protocol::MemoryOperationKind::Lessons => {
+            codex_protocol::items::MemoryOperationKind::Lessons
+        }
+        codex_app_server_protocol::MemoryOperationKind::Crystals => {
+            codex_protocol::items::MemoryOperationKind::Crystals
+        }
+        codex_app_server_protocol::MemoryOperationKind::Crystallize => {
+            codex_protocol::items::MemoryOperationKind::Crystallize
+        }
+        codex_app_server_protocol::MemoryOperationKind::AutoCrystallize => {
+            codex_protocol::items::MemoryOperationKind::AutoCrystallize
+        }
+        codex_app_server_protocol::MemoryOperationKind::Insights => {
+            codex_protocol::items::MemoryOperationKind::Insights
+        }
+        codex_app_server_protocol::MemoryOperationKind::Reflect => {
+            codex_protocol::items::MemoryOperationKind::Reflect
+        }
+        codex_app_server_protocol::MemoryOperationKind::Actions => {
+            codex_protocol::items::MemoryOperationKind::Actions
+        }
+        codex_app_server_protocol::MemoryOperationKind::ActionCreate => {
+            codex_protocol::items::MemoryOperationKind::ActionCreate
+        }
+        codex_app_server_protocol::MemoryOperationKind::ActionUpdate => {
+            codex_protocol::items::MemoryOperationKind::ActionUpdate
+        }
+        codex_app_server_protocol::MemoryOperationKind::Frontier => {
+            codex_protocol::items::MemoryOperationKind::Frontier
+        }
+        codex_app_server_protocol::MemoryOperationKind::Next => {
+            codex_protocol::items::MemoryOperationKind::Next
+        }
+    }
+}
+
+#[cfg(test)]
+fn app_server_memory_status(
+    status: codex_app_server_protocol::MemoryOperationStatus,
+) -> codex_protocol::items::MemoryOperationStatus {
+    match status {
+        codex_app_server_protocol::MemoryOperationStatus::Pending => {
+            codex_protocol::items::MemoryOperationStatus::Pending
+        }
+        codex_app_server_protocol::MemoryOperationStatus::Ready => {
+            codex_protocol::items::MemoryOperationStatus::Ready
+        }
+        codex_app_server_protocol::MemoryOperationStatus::Empty => {
+            codex_protocol::items::MemoryOperationStatus::Empty
+        }
+        codex_app_server_protocol::MemoryOperationStatus::Error => {
+            codex_protocol::items::MemoryOperationStatus::Error
+        }
+    }
+}
+
 impl App {
     fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
         let enabled_config_mcp_servers: Vec<String> = self
@@ -581,39 +668,9 @@ fn server_notification_thread_events(
             vec![Event {
                 id: String::new(),
                 msg: EventMsg::MemoryOperation(MemoryOperationEvent {
-                    source: match notification.source {
-                        codex_app_server_protocol::MemoryOperationSource::Human => {
-                            codex_protocol::protocol::MemoryOperationSource::Human
-                        }
-                        codex_app_server_protocol::MemoryOperationSource::Assistant => {
-                            codex_protocol::protocol::MemoryOperationSource::Assistant
-                        }
-                    },
-                    operation: match notification.operation {
-                        codex_app_server_protocol::MemoryOperationKind::Recall => {
-                            codex_protocol::items::MemoryOperationKind::Recall
-                        }
-                        codex_app_server_protocol::MemoryOperationKind::Update => {
-                            codex_protocol::items::MemoryOperationKind::Update
-                        }
-                        codex_app_server_protocol::MemoryOperationKind::Drop => {
-                            codex_protocol::items::MemoryOperationKind::Drop
-                        }
-                    },
-                    status: match notification.status {
-                        codex_app_server_protocol::MemoryOperationStatus::Pending => {
-                            codex_protocol::items::MemoryOperationStatus::Pending
-                        }
-                        codex_app_server_protocol::MemoryOperationStatus::Ready => {
-                            codex_protocol::items::MemoryOperationStatus::Ready
-                        }
-                        codex_app_server_protocol::MemoryOperationStatus::Empty => {
-                            codex_protocol::items::MemoryOperationStatus::Empty
-                        }
-                        codex_app_server_protocol::MemoryOperationStatus::Error => {
-                            codex_protocol::items::MemoryOperationStatus::Error
-                        }
-                    },
+                    source: app_server_memory_source(notification.source),
+                    operation: app_server_memory_kind(notification.operation),
+                    status: app_server_memory_status(notification.status),
                     query: notification.query,
                     summary: notification.summary,
                     detail: notification.detail,

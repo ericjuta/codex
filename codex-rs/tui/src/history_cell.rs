@@ -2276,6 +2276,7 @@ pub(crate) struct MemoryHistoryCell {
     query: Option<String>,
     summary: String,
     detail: Option<String>,
+    context_injected: bool,
 }
 
 impl MemoryHistoryCell {
@@ -2296,14 +2297,27 @@ impl MemoryHistoryCell {
             detail: detail
                 .map(|detail| detail.trim().to_string())
                 .filter(|detail| !detail.is_empty()),
+            context_injected: false,
         }
     }
 
     fn title(&self) -> &'static str {
         match self.operation {
             MemoryOperationKind::Recall => "Memory Recall",
+            MemoryOperationKind::Remember => "Memory Remember",
             MemoryOperationKind::Update => "Memory Update",
             MemoryOperationKind::Drop => "Memory Drop",
+            MemoryOperationKind::Lessons => "Memory Lessons",
+            MemoryOperationKind::Crystals => "Memory Crystals",
+            MemoryOperationKind::Crystallize => "Memory Crystallize",
+            MemoryOperationKind::AutoCrystallize => "Memory Auto-Crystallize",
+            MemoryOperationKind::Insights => "Memory Insights",
+            MemoryOperationKind::Reflect => "Memory Reflect",
+            MemoryOperationKind::Actions => "Memory Actions",
+            MemoryOperationKind::ActionCreate => "Memory Action Create",
+            MemoryOperationKind::ActionUpdate => "Memory Action Update",
+            MemoryOperationKind::Frontier => "Memory Frontier",
+            MemoryOperationKind::Next => "Memory Next",
         }
     }
 
@@ -2343,6 +2357,7 @@ impl MemoryHistoryCell {
             .detail
             .map(|detail| detail.trim().to_string())
             .filter(|detail| !detail.is_empty());
+        self.context_injected = event.context_injected;
     }
 }
 
@@ -2363,6 +2378,13 @@ impl HistoryCell for MemoryHistoryCell {
             let query_line = Line::from(vec!["  Query: ".dim(), query.clone().into()]);
             let wrapped = adaptive_wrap_line(&query_line, RtOptions::new(wrap_width));
             push_owned_lines(&wrapped, &mut lines);
+        }
+
+        if self.operation == MemoryOperationKind::Recall
+            && self.status != MemoryOperationStatus::Pending
+        {
+            let injected = if self.context_injected { "yes" } else { "no" };
+            lines.push(Line::from(vec!["  Injected: ".dim(), injected.into()]));
         }
 
         if self.source == MemoryOperationSource::Assistant {
@@ -2389,48 +2411,173 @@ impl HistoryCell for MemoryHistoryCell {
     }
 }
 
-pub(crate) fn new_memory_recall_submission(query: Option<String>) -> MemoryHistoryCell {
+fn new_memory_submission(
+    operation: MemoryOperationKind,
+    query: Option<String>,
+    summary: String,
+    detail: Option<String>,
+) -> MemoryHistoryCell {
     MemoryHistoryCell::new(
         MemoryOperationSource::Human,
-        MemoryOperationKind::Recall,
+        operation,
         MemoryOperationStatus::Pending,
         query,
+        summary,
+        detail,
+    )
+}
+
+pub(crate) fn new_memory_recall_submission(query: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Recall,
+        query,
         "Recalling memory context for the current thread.".to_string(),
-        /*detail*/ None,
+        None,
+    )
+}
+
+pub(crate) fn new_memory_remember_submission(content: String) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Remember,
+        None,
+        "Saving durable memory.".to_string(),
+        Some(content),
     )
 }
 
 pub(crate) fn new_memory_update_submission() -> MemoryHistoryCell {
-    MemoryHistoryCell::new(
-        MemoryOperationSource::Human,
+    new_memory_submission(
         MemoryOperationKind::Update,
-        MemoryOperationStatus::Pending,
-        /*query*/ None,
+        None,
         "Requesting a memory refresh.".to_string(),
-        /*detail*/ None,
+        None,
     )
 }
 
 pub(crate) fn new_memory_drop_submission() -> MemoryHistoryCell {
-    MemoryHistoryCell::new(
-        MemoryOperationSource::Human,
+    new_memory_submission(
         MemoryOperationKind::Drop,
-        MemoryOperationStatus::Pending,
-        /*query*/ None,
+        None,
         "Dropping stored memories for this workspace.".to_string(),
-        /*detail*/ None,
+        None,
+    )
+}
+
+pub(crate) fn new_memory_lessons_submission(query: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Lessons,
+        query,
+        "Reviewing lessons for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_crystals_submission() -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Crystals,
+        None,
+        "Reviewing crystals for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_crystallize_submission(action_ids: Vec<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Crystallize,
+        None,
+        "Creating a crystal from explicit action ids.".to_string(),
+        Some(action_ids.join(", ")),
+    )
+}
+
+pub(crate) fn new_memory_auto_crystallize_submission(
+    older_than_days: Option<u32>,
+) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::AutoCrystallize,
+        older_than_days.map(|value| value.to_string()),
+        "Auto-crystallizing eligible action groups.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_insights_submission(query: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Insights,
+        query,
+        "Reviewing insights for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_reflect_submission(max_clusters: Option<u32>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Reflect,
+        max_clusters.map(|value| value.to_string()),
+        "Generating reflected insights for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_actions_submission(status: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Actions,
+        status,
+        "Reviewing action work items for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_action_create_submission(title: String) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::ActionCreate,
+        None,
+        "Creating an action work item.".to_string(),
+        Some(title),
+    )
+}
+
+pub(crate) fn new_memory_action_update_submission(
+    action_id: String,
+    status: String,
+) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::ActionUpdate,
+        None,
+        "Updating an action work item.".to_string(),
+        Some(format!("{action_id} -> {status}")),
+    )
+}
+
+pub(crate) fn new_memory_frontier_submission(limit: Option<u32>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Frontier,
+        limit.map(|value| value.to_string()),
+        "Reviewing frontier suggestions for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_next_submission() -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Next,
+        None,
+        "Reviewing the next suggested action for this workspace.".to_string(),
+        None,
     )
 }
 
 pub(crate) fn new_memory_operation_event(event: MemoryOperationEvent) -> MemoryHistoryCell {
-    MemoryHistoryCell::new(
+    let mut cell = MemoryHistoryCell::new(
         event.source,
         event.operation,
         event.status,
         event.query,
         event.summary,
         event.detail,
-    )
+    );
+    cell.context_injected = event.context_injected;
+    cell
 }
 
 /// Renders a completed (or interrupted) request_user_input exchange in history.
@@ -3458,9 +3605,22 @@ mod tests {
         insta::assert_snapshot!(rendered, @r###"
 🧠 Memory Recall Ready
   Query: retrieval freshness
+  Injected: yes
   Recalled memory context and injected it into the current thread.
   Preview:
     <agentmemory-context>remember this</agentmemory-context>
+"###);
+    }
+
+    #[test]
+    fn memory_remember_submission_snapshot() {
+        let cell = new_memory_remember_submission("retain this note".to_string());
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+🧠 Memory Remember Pending
+  Saving durable memory.
+  Preview:
+    retain this note
 "###);
     }
 

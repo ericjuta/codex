@@ -655,6 +655,60 @@ pub enum Op {
         query: Option<String>,
     },
 
+    /// Persist a durable memory entry explicitly.
+    RememberMemories { content: String },
+
+    /// Review lessons, optionally scoped by a search query.
+    ReviewLessons {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+
+    /// Review crystallized session digests.
+    ReviewCrystals,
+
+    /// Create a crystal from explicit action ids.
+    CreateCrystals { action_ids: Vec<String> },
+
+    /// Trigger automatic crystallization for eligible action groups.
+    AutoCrystallize {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        older_than_days: Option<u32>,
+    },
+
+    /// Trigger reflective insight generation.
+    ReflectMemories {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_clusters: Option<u32>,
+    },
+
+    /// Review insights, optionally scoped by a search query.
+    ReviewInsights {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+
+    /// Review explicit action work items.
+    ListActions {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+    },
+
+    /// Create a new explicit action work item.
+    CreateAction { title: String },
+
+    /// Update an existing action work item.
+    UpdateAction { action_id: String, status: String },
+
+    /// Review current frontier suggestions.
+    ReviewFrontier {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<u32>,
+    },
+
+    /// Review the single highest-priority suggested next action.
+    ReviewNext,
+
     /// Set a user-facing thread name in the persisted rollout metadata.
     /// This is a local-only operation handled by codex-core; it does not
     /// involve the model.
@@ -792,6 +846,18 @@ impl Op {
             Self::DropMemories => "drop_memories",
             Self::UpdateMemories => "update_memories",
             Self::RecallMemories { .. } => "recall_memories",
+            Self::RememberMemories { .. } => "remember_memories",
+            Self::ReviewLessons { .. } => "review_lessons",
+            Self::ReviewCrystals => "review_crystals",
+            Self::CreateCrystals { .. } => "create_crystals",
+            Self::AutoCrystallize { .. } => "auto_crystallize",
+            Self::ReflectMemories { .. } => "reflect_memories",
+            Self::ReviewInsights { .. } => "review_insights",
+            Self::ListActions { .. } => "list_actions",
+            Self::CreateAction { .. } => "create_action",
+            Self::UpdateAction { .. } => "update_action",
+            Self::ReviewFrontier { .. } => "review_frontier",
+            Self::ReviewNext => "review_next",
             Self::SetThreadName { .. } => "set_thread_name",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
             Self::Undo => "undo",

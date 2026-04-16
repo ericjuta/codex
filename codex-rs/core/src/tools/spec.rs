@@ -53,6 +53,153 @@ fn memory_recall_output_schema() -> JsonValue {
     })
 }
 
+fn memory_success_output_schema(primary_key: &str) -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "success": {
+                "type": "boolean"
+            },
+            primary_key: {
+                "type": ["array", "object", "null"]
+            },
+            "error": {
+                "type": ["string", "null"]
+            }
+        },
+        "required": ["success"],
+        "additionalProperties": true
+    })
+}
+
+fn create_memory_remember_tool() -> ToolSpec {
+    let properties = std::collections::BTreeMap::from([(
+        "content".to_string(),
+        JsonSchema::string(Some(
+            "Durable memory content to save explicitly for later recall.".to_string(),
+        )),
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "memory_remember".to_string(),
+        description: "Persist durable, high-value knowledge into agentmemory. Use this sparingly for facts, patterns, decisions, or lessons that should survive beyond the current turn."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            properties,
+            Some(vec!["content".to_string()]),
+            Some(false.into()),
+        ),
+        output_schema: Some(memory_success_output_schema("memory")),
+    })
+}
+
+fn create_memory_lessons_tool() -> ToolSpec {
+    let properties = std::collections::BTreeMap::from([(
+        "query".to_string(),
+        JsonSchema::string(Some(
+            "Optional targeted lesson search query. When omitted, returns the current lesson list for this project."
+                .to_string(),
+        )),
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "memory_lessons".to_string(),
+        description: "Review lessons derived by agentmemory for the current project. Use a query to search, or omit it to list current lessons."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(properties, None, Some(false.into())),
+        output_schema: Some(memory_success_output_schema("lessons")),
+    })
+}
+
+fn create_memory_crystals_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: "memory_crystals".to_string(),
+        description: "Review crystallized action-chain digests for the current project."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(std::collections::BTreeMap::new(), None, Some(false.into())),
+        output_schema: Some(memory_success_output_schema("crystals")),
+    })
+}
+
+fn create_memory_insights_tool() -> ToolSpec {
+    let properties = std::collections::BTreeMap::from([(
+        "query".to_string(),
+        JsonSchema::string(Some(
+            "Optional targeted insight search query. When omitted, returns the current insight list for this project."
+                .to_string(),
+        )),
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "memory_insights".to_string(),
+        description: "Review higher-level insights derived by agentmemory for the current project. Use a query to search, or omit it to list current insights."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(properties, None, Some(false.into())),
+        output_schema: Some(memory_success_output_schema("insights")),
+    })
+}
+
+fn create_memory_actions_tool() -> ToolSpec {
+    let properties = std::collections::BTreeMap::from([(
+        "status".to_string(),
+        JsonSchema::string(Some(
+            "Optional action status filter such as pending, active, blocked, done, or cancelled."
+                .to_string(),
+        )),
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "memory_actions".to_string(),
+        description:
+            "Review explicit action work items tracked by agentmemory for the current project."
+                .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(properties, None, Some(false.into())),
+        output_schema: Some(memory_success_output_schema("actions")),
+    })
+}
+
+fn create_memory_frontier_tool() -> ToolSpec {
+    let properties = std::collections::BTreeMap::from([(
+        "limit".to_string(),
+        JsonSchema::number(Some(
+            "Optional maximum number of frontier suggestions to return.".to_string(),
+        )),
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "memory_frontier".to_string(),
+        description:
+            "Review the current frontier of unblocked action suggestions from agentmemory."
+                .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(properties, None, Some(false.into())),
+        output_schema: Some(memory_success_output_schema("frontier")),
+    })
+}
+
+fn create_memory_next_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: "memory_next".to_string(),
+        description: "Review the single best next action suggestion from agentmemory for the current project."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(std::collections::BTreeMap::new(), None, Some(false.into())),
+        output_schema: Some(memory_success_output_schema("suggestion")),
+    })
+}
+
 fn create_memory_recall_tool() -> ToolSpec {
     let properties = std::collections::BTreeMap::from([(
         "query".to_string(),
@@ -115,7 +262,14 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
+    use crate::tools::handlers::MemoryActionsHandler;
+    use crate::tools::handlers::MemoryCrystalsHandler;
+    use crate::tools::handlers::MemoryFrontierHandler;
+    use crate::tools::handlers::MemoryInsightsHandler;
+    use crate::tools::handlers::MemoryLessonsHandler;
+    use crate::tools::handlers::MemoryNextHandler;
     use crate::tools::handlers::MemoryRecallHandler;
+    use crate::tools::handlers::MemoryRememberHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
     use crate::tools::handlers::RequestUserInputHandler;
@@ -187,7 +341,14 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let request_user_input_handler = Arc::new(RequestUserInputHandler {
         default_mode_request_user_input: config.default_mode_request_user_input,
     });
+    let memory_actions_handler = Arc::new(MemoryActionsHandler);
+    let memory_crystals_handler = Arc::new(MemoryCrystalsHandler);
+    let memory_frontier_handler = Arc::new(MemoryFrontierHandler);
+    let memory_insights_handler = Arc::new(MemoryInsightsHandler);
+    let memory_lessons_handler = Arc::new(MemoryLessonsHandler);
+    let memory_next_handler = Arc::new(MemoryNextHandler);
     let memory_recall_handler = Arc::new(MemoryRecallHandler);
+    let memory_remember_handler = Arc::new(MemoryRememberHandler);
     let mut tool_search_handler = None;
     let tool_suggest_handler = Arc::new(ToolSuggestHandler);
     let code_mode_handler = Arc::new(CodeModeExecuteHandler);
@@ -311,7 +472,21 @@ pub(crate) fn build_specs_with_discoverable_tools(
     }
     if config.memory_tool_enabled && config.memory_backend == MemoryBackend::Agentmemory {
         builder.push_spec(create_memory_recall_tool());
+        builder.push_spec(create_memory_remember_tool());
+        builder.push_spec(create_memory_lessons_tool());
+        builder.push_spec(create_memory_crystals_tool());
+        builder.push_spec(create_memory_insights_tool());
+        builder.push_spec(create_memory_actions_tool());
+        builder.push_spec(create_memory_frontier_tool());
+        builder.push_spec(create_memory_next_tool());
+        builder.register_handler("memory_actions", memory_actions_handler);
+        builder.register_handler("memory_crystals", memory_crystals_handler);
+        builder.register_handler("memory_frontier", memory_frontier_handler);
+        builder.register_handler("memory_insights", memory_insights_handler);
+        builder.register_handler("memory_lessons", memory_lessons_handler);
+        builder.register_handler("memory_next", memory_next_handler);
         builder.register_handler("memory_recall", memory_recall_handler);
+        builder.register_handler("memory_remember", memory_remember_handler);
     }
     if let Some(deferred_mcp_tools) = deferred_mcp_tools.as_ref() {
         for (name, _) in deferred_mcp_tools.iter().filter(|(name, _)| {

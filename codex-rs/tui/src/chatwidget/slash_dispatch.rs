@@ -7,6 +7,48 @@
 
 use super::*;
 
+fn parse_memory_action_ids(input: &str) -> Option<Vec<String>> {
+    let action_ids = input
+        .split(',')
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    (!action_ids.is_empty()).then_some(action_ids)
+}
+
+fn parse_positive_u32_arg(input: &str) -> Option<u32> {
+    input.trim().parse::<u32>().ok().filter(|value| *value > 0)
+}
+
+fn is_valid_action_status(status: &str) -> bool {
+    matches!(
+        status,
+        "pending" | "active" | "done" | "blocked" | "cancelled"
+    )
+}
+
+fn parse_memory_action_update_args(input: &str) -> Option<(String, String)> {
+    let mut parts = input.split_whitespace();
+    let action_id = parts.next()?.trim();
+    let status = parts.next()?.trim().to_ascii_lowercase();
+    if action_id.is_empty() || parts.next().is_some() || !is_valid_action_status(status.as_str()) {
+        return None;
+    }
+    Some((action_id.to_string(), status))
+}
+
+fn prepared_inline_args(widget: &mut ChatWidget, args: String) -> Option<String> {
+    if widget.bottom_pane.composer_text().is_empty() {
+        Some(args)
+    } else {
+        let (prepared_args, _prepared_elements) = widget
+            .bottom_pane
+            .prepare_inline_args_submission(/*record_history*/ false)?;
+        Some(prepared_args)
+    }
+}
+
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
     ///
@@ -319,6 +361,69 @@ impl ChatWidget {
                 ));
                 self.submit_op(Op::RecallMemories { query: None });
             }
+            SlashCommand::MemoryRemember => {
+                self.add_error_message("Usage: /memory-remember <content>".to_string());
+            }
+            SlashCommand::MemoryLessons => {
+                self.show_pending_memory_operation(history_cell::new_memory_lessons_submission(
+                    None,
+                ));
+                self.submit_op(Op::ReviewLessons { query: None });
+            }
+            SlashCommand::MemoryCrystals => {
+                self.show_pending_memory_operation(history_cell::new_memory_crystals_submission());
+                self.submit_op(Op::ReviewCrystals);
+            }
+            SlashCommand::MemoryCrystalsCreate => {
+                self.add_error_message(
+                    "Usage: /memory-crystals-create <action_id[,action_id...]>".to_string(),
+                );
+            }
+            SlashCommand::MemoryCrystalsAuto => {
+                self.show_pending_memory_operation(
+                    history_cell::new_memory_auto_crystallize_submission(None),
+                );
+                self.submit_op(Op::AutoCrystallize {
+                    older_than_days: None,
+                });
+            }
+            SlashCommand::MemoryInsights => {
+                self.show_pending_memory_operation(history_cell::new_memory_insights_submission(
+                    None,
+                ));
+                self.submit_op(Op::ReviewInsights { query: None });
+            }
+            SlashCommand::MemoryReflect => {
+                self.show_pending_memory_operation(history_cell::new_memory_reflect_submission(
+                    None,
+                ));
+                self.submit_op(Op::ReflectMemories { max_clusters: None });
+            }
+            SlashCommand::MemoryActions => {
+                self.show_pending_memory_operation(history_cell::new_memory_actions_submission(
+                    None,
+                ));
+                self.submit_op(Op::ListActions { status: None });
+            }
+            SlashCommand::MemoryActionCreate => {
+                self.add_error_message("Usage: /memory-action-create <title>".to_string());
+            }
+            SlashCommand::MemoryActionUpdate => {
+                self.add_error_message(
+                    "Usage: /memory-action-update <action_id> <pending|active|done|blocked|cancelled>"
+                        .to_string(),
+                );
+            }
+            SlashCommand::MemoryFrontier => {
+                self.show_pending_memory_operation(history_cell::new_memory_frontier_submission(
+                    None,
+                ));
+                self.submit_op(Op::ReviewFrontier { limit: None });
+            }
+            SlashCommand::MemoryNext => {
+                self.show_pending_memory_operation(history_cell::new_memory_next_submission());
+                self.submit_op(Op::ReviewNext);
+            }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
@@ -534,6 +639,160 @@ impl ChatWidget {
                 self.submit_op(Op::RecallMemories {
                     query: Some(trimmed.to_string()),
                 });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryRemember if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                self.show_pending_memory_operation(history_cell::new_memory_remember_submission(
+                    prepared_args.clone(),
+                ));
+                self.submit_op(Op::RememberMemories {
+                    content: prepared_args,
+                });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryLessons if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                self.show_pending_memory_operation(history_cell::new_memory_lessons_submission(
+                    Some(prepared_args.clone()),
+                ));
+                self.submit_op(Op::ReviewLessons {
+                    query: Some(prepared_args),
+                });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryCrystalsCreate if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                let Some(action_ids) = parse_memory_action_ids(prepared_args.as_str()) else {
+                    self.add_error_message(
+                        "Usage: /memory-crystals-create <action_id[,action_id...]>".to_string(),
+                    );
+                    return;
+                };
+                self.show_pending_memory_operation(
+                    history_cell::new_memory_crystallize_submission(action_ids.clone()),
+                );
+                self.submit_op(Op::CreateCrystals { action_ids });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryCrystalsAuto if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                let Some(older_than_days) = parse_positive_u32_arg(prepared_args.as_str()) else {
+                    self.add_error_message(
+                        "Usage: /memory-crystals-auto [older_than_days]".to_string(),
+                    );
+                    return;
+                };
+                self.show_pending_memory_operation(
+                    history_cell::new_memory_auto_crystallize_submission(Some(older_than_days)),
+                );
+                self.submit_op(Op::AutoCrystallize {
+                    older_than_days: Some(older_than_days),
+                });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryInsights if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                self.show_pending_memory_operation(history_cell::new_memory_insights_submission(
+                    Some(prepared_args.clone()),
+                ));
+                self.submit_op(Op::ReviewInsights {
+                    query: Some(prepared_args),
+                });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryReflect if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                let Some(max_clusters) = parse_positive_u32_arg(prepared_args.as_str()) else {
+                    self.add_error_message("Usage: /memory-reflect [max_clusters]".to_string());
+                    return;
+                };
+                self.show_pending_memory_operation(history_cell::new_memory_reflect_submission(
+                    Some(max_clusters),
+                ));
+                self.submit_op(Op::ReflectMemories {
+                    max_clusters: Some(max_clusters),
+                });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryActions if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                let status = prepared_args.trim().to_ascii_lowercase();
+                if !is_valid_action_status(status.as_str()) {
+                    self.add_error_message(
+                        "Usage: /memory-actions [pending|active|done|blocked|cancelled]"
+                            .to_string(),
+                    );
+                    return;
+                }
+                self.show_pending_memory_operation(history_cell::new_memory_actions_submission(
+                    Some(status.clone()),
+                ));
+                self.submit_op(Op::ListActions {
+                    status: Some(status),
+                });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryActionCreate if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                self.show_pending_memory_operation(
+                    history_cell::new_memory_action_create_submission(prepared_args.clone()),
+                );
+                self.submit_op(Op::CreateAction {
+                    title: prepared_args,
+                });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryActionUpdate if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                let Some((action_id, status)) =
+                    parse_memory_action_update_args(prepared_args.as_str())
+                else {
+                    self.add_error_message(
+                        "Usage: /memory-action-update <action_id> <pending|active|done|blocked|cancelled>"
+                            .to_string(),
+                    );
+                    return;
+                };
+                self.show_pending_memory_operation(
+                    history_cell::new_memory_action_update_submission(
+                        action_id.clone(),
+                        status.clone(),
+                    ),
+                );
+                self.submit_op(Op::UpdateAction { action_id, status });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryFrontier if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                let Some(limit) = parse_positive_u32_arg(prepared_args.as_str()) else {
+                    self.add_error_message("Usage: /memory-frontier [limit]".to_string());
+                    return;
+                };
+                self.show_pending_memory_operation(history_cell::new_memory_frontier_submission(
+                    Some(limit),
+                ));
+                self.submit_op(Op::ReviewFrontier { limit: Some(limit) });
                 self.bottom_pane.drain_pending_submission_state();
             }
             _ => self.dispatch_command(cmd),

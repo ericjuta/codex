@@ -2,11 +2,11 @@
 
 ## Status
 
-Remaining implementation contract after the config-first hook parity lane.
+Implementation checklist after the config-first hook parity lane.
 
 This document exists so the branch has one focused place to track what is
-still missing from the expanded runtime-surface plan without mixing
-already-implemented parity work with unimplemented product expansion.
+still missing or recently completed in the expanded runtime-surface plan
+without mixing already-implemented parity work with older baseline notes.
 
 ## Baseline
 
@@ -27,6 +27,38 @@ That work is tracked by:
 - [`../../docs/claude-code-hooks-parity.md`](../../docs/claude-code-hooks-parity.md)
 
 This follow-up spec covers what remains after that baseline.
+
+Current branch implementation now includes:
+
+- human slash surfaces for:
+  - remember
+  - lessons
+  - crystals review/create/auto
+  - insights
+  - reflect
+  - actions list/create/update
+  - frontier
+  - next
+- assistant tools for:
+  - `memory_recall`
+  - `memory_remember`
+  - `memory_lessons`
+  - `memory_crystals`
+  - `memory_insights`
+  - `memory_actions`
+  - `memory_frontier`
+  - `memory_next`
+- lifecycle expansion for:
+  - prompt-submit `context/refresh`
+  - shutdown-side `crystals/auto`
+  - shutdown-side `consolidate-pipeline`
+
+Operational sync note:
+
+- `memories.use_memories` is the current native toggle for the shutdown-side
+  consolidation calls
+- `CONSOLIDATION_ENABLED=true|false` remains honored as an override so Codex
+  can match the standalone `agentmemory` hook runtime
 
 ## Goal
 

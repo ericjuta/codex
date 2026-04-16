@@ -226,6 +226,21 @@ Keep these slash commands:
 
 They remain explicit human controls.
 
+Current branch implementation also exposes these human-visible review and
+orchestration commands on the same agentmemory seam:
+
+- `/memory-lessons [query]`
+- `/memory-crystals`
+- `/memory-crystals-create <action_id[,action_id...]>`
+- `/memory-crystals-auto [older_than_days]`
+- `/memory-insights [query]`
+- `/memory-reflect [max_clusters]`
+- `/memory-actions [status]`
+- `/memory-action-create <title>`
+- `/memory-action-update <action_id> <pending|active|done|blocked|cancelled>`
+- `/memory-frontier [limit]`
+- `/memory-next`
+
 Required UX behavior:
 
 - on submit:
@@ -363,6 +378,15 @@ Minimum required initial tools:
 - `memory_recall`
 - `memory_remember`
 
+Current branch implementation also exposes these read-oriented assistant tools:
+
+- `memory_lessons`
+- `memory_crystals`
+- `memory_insights`
+- `memory_actions`
+- `memory_frontier`
+- `memory_next`
+
 Recommended initial parameters:
 
 - `query: Option<String>`
@@ -443,7 +467,8 @@ the human as structured memory/action UI, not silent background state changes.
 
 ## Enablement Gates
 
-The assistant-facing recall tool should be exposed only when both are true:
+The assistant-facing agentmemory tool suite should be exposed only when both
+are true:
 
 - `Feature::MemoryTool` is enabled
 - `config.memories.backend == Agentmemory`
@@ -455,7 +480,7 @@ tools are available via `tools` / `ALL_TOOLS`.
 
 Do not add a new feature flag unless rollout isolation is necessary.
 
-Do not gate the assistant-facing recall tool on `memories.use_memories`.
+Do not gate the assistant-facing agentmemory tool suite on `memories.use_memories`.
 
 Rationale:
 
@@ -463,6 +488,14 @@ Rationale:
   `backend == Agentmemory`
 - using `use_memories` here would create inconsistent behavior between startup
   retrieval and mid-session retrieval
+
+Current implementation note:
+
+- `memories.use_memories` is the Codex-native consolidation toggle for the
+  session-end `crystals/auto` plus `consolidate-pipeline` side effects
+- `CONSOLIDATION_ENABLED=true|false` remains honored as an override so Codex
+  can match the standalone `agentmemory` hook runtime when operators already
+  use that environment variable
 
 ## Tool/Slash Semantics
 

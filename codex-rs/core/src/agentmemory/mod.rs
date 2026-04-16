@@ -8,9 +8,11 @@ use crate::config::types::MemoriesConfig;
 use codex_git_utils::get_git_repo_root;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::HashSet;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 /// A placeholder adapter struct for agentmemory integration.
@@ -24,11 +26,13 @@ pub struct AgentmemoryAdapter {
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 pub(crate) const DEFAULT_RUNTIME_RECALL_TOKEN_BUDGET: usize = 2_000;
-const MEMORY_RECALL_DEVELOPER_INSTRUCTIONS: &str = "Use the `memory_recall` tool when the user asks about prior work, earlier decisions, previous failures, resumed threads, or other historical context that is not fully present in the current thread.\n\
+const MEMORY_RUNTIME_DEVELOPER_INSTRUCTIONS: &str = "Use `memory_recall` for prior work, earlier decisions, previous failures, resumed threads, or other historical context that is not already present in the current thread.\n\
+     Use `memory_remember` only for durable, high-value knowledge that should survive beyond the current turn.\n\
+     Use `memory_lessons`, `memory_crystals`, `memory_insights`, `memory_actions`, `memory_frontier`, and `memory_next` as read-oriented agentmemory review surfaces when they would materially help with coordination or retrieval.\n\
      Agentmemory startup context may be attached below when available.\n\
-     Prefer targeted recall queries naming the feature, file, bug, or decision you need.\n\
-     If the current runtime exposes tools through a wrapper surface (for example, `exec` with nested `tools`), treat the callable nested tool surface as authoritative when checking whether `memory_recall` is available.\n\
-     Do not call `memory_recall` on every turn; first use the current thread context, then recall memory when that context appears insufficient.";
+     Prefer targeted queries naming the feature, file, bug, or decision you need.\n\
+     If the current runtime exposes tools through a wrapper surface (for example, `exec` with nested `tools`), treat the callable nested tool surface as authoritative when checking whether these memory tools are available.\n\
+     Do not call memory tools on every turn; first use the current thread context, then reach for agentmemory when that context appears insufficient.";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct MemoryRecallResult {
@@ -57,10 +61,24 @@ pub(crate) struct AgentmemorySummarizeResult {
 struct AgentmemoryContextResult {
     #[serde(default)]
     context: String,
+    #[serde(default)]
+    skipped: bool,
 }
 
 fn get_client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| reqwest::Client::builder().build().unwrap_or_default())
+}
+
+fn parse_bool_override(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+pub(crate) fn workspace_project(cwd: &Path) -> PathBuf {
+    get_git_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf())
 }
 
 fn extract_project_and_cwd(payload: &serde_json::Value) -> (String, String) {
@@ -110,12 +128,17 @@ impl AgentmemoryAdapter {
     pub(crate) fn inject_context_enabled(&self, memories: &MemoriesConfig) -> bool {
         std::env::var("AGENTMEMORY_INJECT_CONTEXT")
             .ok()
-            .and_then(|raw| match raw.trim().to_ascii_lowercase().as_str() {
-                "true" => Some(true),
-                "false" => Some(false),
-                _ => None,
-            })
+            .as_deref()
+            .and_then(parse_bool_override)
             .unwrap_or(memories.agentmemory.inject_context)
+    }
+
+    pub(crate) fn consolidation_enabled(&self, memories: &MemoriesConfig) -> bool {
+        std::env::var("CONSOLIDATION_ENABLED")
+            .ok()
+            .as_deref()
+            .and_then(parse_bool_override)
+            .unwrap_or(memories.use_memories)
     }
 
     fn auth_secret(&self, memories: &MemoriesConfig) -> Option<String> {
@@ -130,8 +153,13 @@ impl AgentmemoryAdapter {
             .filter(|secret| !secret.trim().is_empty())
     }
 
-    fn request_builder(&self, url: &str, memories: &MemoriesConfig) -> reqwest::RequestBuilder {
-        let builder = get_client().post(url);
+    fn request_builder(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        memories: &MemoriesConfig,
+    ) -> reqwest::RequestBuilder {
+        let builder = get_client().request(method, url);
         if let Some(secret) = self.auth_secret(memories) {
             builder.bearer_auth(secret)
         } else {
@@ -139,12 +167,42 @@ impl AgentmemoryAdapter {
         }
     }
 
-    async fn parse_context_result(response: reqwest::Response) -> Result<String, String> {
-        let payload = response
-            .json::<AgentmemoryContextResult>()
+    async fn json_or_error(response: reqwest::Response) -> Result<JsonValue, String> {
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            let detail = if body.trim().is_empty() {
+                String::new()
+            } else {
+                format!(": {body}")
+            };
+            return Err(format!("request failed with status {status}{detail}"));
+        }
+        response
+            .json::<JsonValue>()
             .await
-            .map_err(|err| err.to_string())?;
-        Ok(payload.context)
+            .map_err(|err| err.to_string())
+    }
+
+    async fn ensure_success(response: reqwest::Response) -> Result<(), String> {
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            let detail = if body.trim().is_empty() {
+                String::new()
+            } else {
+                format!(": {body}")
+            };
+            return Err(format!("request failed with status {status}{detail}"));
+        }
+        Ok(())
+    }
+
+    async fn parse_context_result(
+        response: reqwest::Response,
+    ) -> Result<AgentmemoryContextResult, String> {
+        let payload = Self::json_or_error(response).await?;
+        serde_json::from_value(payload).map_err(|err| err.to_string())
     }
 
     /// Builds the developer instructions for the assistant-facing memory recall
@@ -154,7 +212,7 @@ impl AgentmemoryAdapter {
         _codex_home: &Path,
         _token_budget: usize,
     ) -> Option<String> {
-        Some(MEMORY_RECALL_DEVELOPER_INSTRUCTIONS.to_string())
+        Some(MEMORY_RUNTIME_DEVELOPER_INSTRUCTIONS.to_string())
     }
 
     /// Attempts to parse a tool command string as JSON to recover structured
@@ -262,7 +320,7 @@ impl AgentmemoryAdapter {
         let body = self.format_claude_parity_payload(event_name, payload_json);
 
         match self
-            .request_builder(&url, memories)
+            .request_builder(reqwest::Method::POST, &url, memories)
             .json(&body)
             .send()
             .await
@@ -300,12 +358,13 @@ impl AgentmemoryAdapter {
     pub async fn recall_context(
         &self,
         session_id: &str,
-        project: &Path,
+        cwd: &Path,
         query: Option<&str>,
         token_budget: usize,
         memories: &MemoriesConfig,
     ) -> Result<String, String> {
         let url = format!("{}/agentmemory/context", self.api_base(memories));
+        let project = workspace_project(cwd);
 
         let mut body = json!({
             "sessionId": session_id,
@@ -317,38 +376,26 @@ impl AgentmemoryAdapter {
         }
 
         let res = self
-            .request_builder(&url, memories)
+            .request_builder(reqwest::Method::POST, &url, memories)
             .json(&body)
             .send()
             .await
             .map_err(|e| e.to_string())?;
-
-        if !res.status().is_success() {
-            return Err(format!(
-                "Context retrieval failed with status {}",
-                res.status()
-            ));
-        }
-
-        let json_res: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
-        Ok(json_res
-            .get("context")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string())
+        let json_res = Self::json_or_error(res).await?;
+        Ok(json_res["context"].as_str().unwrap_or_default().to_string())
     }
 
     pub(crate) async fn recall_for_runtime(
         &self,
         session_id: &str,
-        project: &Path,
+        cwd: &Path,
         query: Option<&str>,
         memories: &MemoriesConfig,
     ) -> Result<MemoryRecallResult, String> {
         let context = self
             .recall_context(
                 session_id,
-                project,
+                cwd,
                 query,
                 DEFAULT_RUNTIME_RECALL_TOKEN_BUDGET,
                 memories,
@@ -376,15 +423,13 @@ impl AgentmemoryAdapter {
             "cwd": cwd.display().to_string(),
         });
         let res = self
-            .request_builder(&url, memories)
+            .request_builder(reqwest::Method::POST, &url, memories)
             .json(&body)
             .send()
             .await
             .map_err(|e| e.to_string())?;
-        if !res.status().is_success() {
-            return Err(format!("Session start failed with status {}", res.status()));
-        }
-        Self::parse_context_result(res).await
+        let payload = Self::parse_context_result(res).await?;
+        Ok(payload.context)
     }
 
     pub async fn enrich_context(
@@ -408,18 +453,36 @@ impl AgentmemoryAdapter {
             "toolName": tool_name,
         });
         let res = self
-            .request_builder(&url, memories)
+            .request_builder(reqwest::Method::POST, &url, memories)
             .json(&body)
             .send()
             .await
             .map_err(|err| err.to_string())?;
-        if !res.status().is_success() {
-            return Err(format!(
-                "Context enrichment failed with status {}",
-                res.status()
-            ));
-        }
-        Self::parse_context_result(res).await
+        let payload = Self::parse_context_result(res).await?;
+        Ok(payload.context)
+    }
+
+    pub(crate) async fn refresh_context(
+        &self,
+        session_id: &str,
+        cwd: &Path,
+        query: &str,
+        memories: &MemoriesConfig,
+    ) -> Result<(String, bool), String> {
+        let url = format!("{}/agentmemory/context/refresh", self.api_base(memories));
+        let body = json!({
+            "sessionId": session_id,
+            "project": workspace_project(cwd).display().to_string(),
+            "query": query,
+        });
+        let res = self
+            .request_builder(reqwest::Method::POST, &url, memories)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        let payload = Self::parse_context_result(res).await?;
+        Ok((payload.context, payload.skipped))
     }
 
     /// Marks a session completed so Agentmemory's viewer can stop showing it as active.
@@ -431,15 +494,29 @@ impl AgentmemoryAdapter {
         let url = format!("{}/agentmemory/session/end", self.api_base(memories));
         let body = json!({ "sessionId": session_id });
         let res = self
-            .request_builder(&url, memories)
+            .request_builder(reqwest::Method::POST, &url, memories)
             .json(&body)
             .send()
             .await
             .map_err(|e| e.to_string())?;
-        if !res.status().is_success() {
-            return Err(format!("Session end failed with status {}", res.status()));
-        }
+        Self::ensure_success(res).await?;
         Ok(())
+    }
+
+    pub(crate) async fn remember_memory(
+        &self,
+        content: &str,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/remember", self.api_base(memories));
+        let body = json!({ "content": content });
+        let res = self
+            .request_builder(reqwest::Method::POST, &url, memories)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
     }
 
     /// Asynchronously triggers a memory refresh/update operation in `agentmemory`.
@@ -449,16 +526,13 @@ impl AgentmemoryAdapter {
     ) -> Result<AgentmemoryConsolidateResult, String> {
         let url = format!("{}/agentmemory/consolidate", self.api_base(memories));
         let res = self
-            .request_builder(&url, memories)
+            .request_builder(reqwest::Method::POST, &url, memories)
             .send()
             .await
             .map_err(|e| e.to_string())?;
-        if !res.status().is_success() {
-            return Err(format!("Consolidate failed with status {}", res.status()));
-        }
-        res.json::<AgentmemoryConsolidateResult>()
-            .await
-            .map_err(|e| e.to_string())
+        let payload = Self::json_or_error(res).await?;
+        serde_json::from_value::<AgentmemoryConsolidateResult>(payload)
+            .map_err(|err| err.to_string())
     }
 
     /// Best-effort end-of-session summarization so later recalls can use durable
@@ -471,32 +545,303 @@ impl AgentmemoryAdapter {
         let url = format!("{}/agentmemory/summarize", self.api_base(memories));
         let body = json!({ "sessionId": session_id });
         let res = self
-            .request_builder(&url, memories)
+            .request_builder(reqwest::Method::POST, &url, memories)
             .json(&body)
             .send()
             .await
             .map_err(|e| e.to_string())?;
-        if !res.status().is_success() {
-            return Err(format!("Summarize failed with status {}", res.status()));
-        }
-        res.json::<AgentmemorySummarizeResult>()
-            .await
-            .map_err(|e| e.to_string())
+        let payload = Self::json_or_error(res).await?;
+        serde_json::from_value::<AgentmemorySummarizeResult>(payload).map_err(|err| err.to_string())
     }
 
     /// Asynchronously drops/clears the memory store in `agentmemory`.
     pub async fn drop_memories(&self, memories: &MemoriesConfig) -> Result<(), String> {
         let url = format!("{}/agentmemory/forget", self.api_base(memories));
         let res = self
-            .request_builder(&url, memories)
+            .request_builder(reqwest::Method::POST, &url, memories)
             .json(&json!({"all": true}))
             .send()
             .await
             .map_err(|e| e.to_string())?;
-        if !res.status().is_success() {
-            return Err(format!("Forget failed with status {}", res.status()));
-        }
+        Self::ensure_success(res).await?;
         Ok(())
+    }
+
+    pub(crate) async fn list_lessons(
+        &self,
+        project: &Path,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/lessons", self.api_base(memories));
+        let project = project.display().to_string();
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&[("project", project)])
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn search_lessons(
+        &self,
+        query: &str,
+        project: &Path,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/lessons/search", self.api_base(memories));
+        let body = json!({
+            "query": query,
+            "project": project.display().to_string(),
+        });
+        let res = self
+            .request_builder(reqwest::Method::POST, &url, memories)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn list_crystals(
+        &self,
+        project: &Path,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/crystals", self.api_base(memories));
+        let project = project.display().to_string();
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&[("project", project)])
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn create_crystals(
+        &self,
+        action_ids: &[String],
+        session_id: &str,
+        project: &Path,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/crystals/create", self.api_base(memories));
+        let body = json!({
+            "actionIds": action_ids,
+            "sessionId": session_id,
+            "project": project.display().to_string(),
+        });
+        let res = self
+            .request_builder(reqwest::Method::POST, &url, memories)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn auto_crystallize(
+        &self,
+        older_than_days: Option<u32>,
+        project: Option<&Path>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/crystals/auto", self.api_base(memories));
+        let mut body = json!({});
+        if let Some(older_than_days) = older_than_days {
+            body["olderThanDays"] = json!(older_than_days);
+        }
+        if let Some(project) = project {
+            body["project"] = json!(project.display().to_string());
+        }
+        let res = self
+            .request_builder(reqwest::Method::POST, &url, memories)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn reflect(
+        &self,
+        project: &Path,
+        max_clusters: Option<u32>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/reflect", self.api_base(memories));
+        let mut body = json!({ "project": project.display().to_string() });
+        if let Some(max_clusters) = max_clusters {
+            body["maxClusters"] = json!(max_clusters);
+        }
+        let res = self
+            .request_builder(reqwest::Method::POST, &url, memories)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn list_insights(
+        &self,
+        project: &Path,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/insights", self.api_base(memories));
+        let project = project.display().to_string();
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&[("project", project)])
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn search_insights(
+        &self,
+        query: &str,
+        project: &Path,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/insights/search", self.api_base(memories));
+        let body = json!({
+            "query": query,
+            "project": project.display().to_string(),
+        });
+        let res = self
+            .request_builder(reqwest::Method::POST, &url, memories)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn list_actions(
+        &self,
+        project: &Path,
+        status: Option<&str>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/actions", self.api_base(memories));
+        let mut query = vec![("project".to_string(), project.display().to_string())];
+        if let Some(status) = status {
+            query.push(("status".to_string(), status.to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn create_action(
+        &self,
+        title: &str,
+        created_by: &str,
+        project: &Path,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/actions", self.api_base(memories));
+        let body = json!({
+            "title": title,
+            "createdBy": created_by,
+            "project": project.display().to_string(),
+        });
+        let res = self
+            .request_builder(reqwest::Method::POST, &url, memories)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn update_action(
+        &self,
+        action_id: &str,
+        status: &str,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/actions/update", self.api_base(memories));
+        let body = json!({
+            "actionId": action_id,
+            "status": status,
+        });
+        let res = self
+            .request_builder(reqwest::Method::POST, &url, memories)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn frontier(
+        &self,
+        project: &Path,
+        agent_id: Option<&str>,
+        limit: Option<u32>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/frontier", self.api_base(memories));
+        let mut query = vec![("project".to_string(), project.display().to_string())];
+        if let Some(agent_id) = agent_id {
+            query.push(("agentId".to_string(), agent_id.to_string()));
+        }
+        if let Some(limit) = limit {
+            query.push(("limit".to_string(), limit.to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn next_action(
+        &self,
+        project: &Path,
+        agent_id: Option<&str>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/next", self.api_base(memories));
+        let mut query = vec![("project".to_string(), project.display().to_string())];
+        if let Some(agent_id) = agent_id {
+            query.push(("agentId".to_string(), agent_id.to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn consolidate_pipeline(
+        &self,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!(
+            "{}/agentmemory/consolidate-pipeline",
+            self.api_base(memories)
+        );
+        let body = json!({ "tier": "all", "force": true });
+        let res = self
+            .request_builder(reqwest::Method::POST, &url, memories)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
     }
 }
 fn normalize_hook_type(event_name: &str) -> &str {
@@ -578,13 +923,15 @@ mod tests {
             .await
             .expect("instructions should be returned");
 
-        assert!(instructions.contains("Use the `memory_recall` tool"));
+        assert!(instructions.contains("Use `memory_recall`"));
+        assert!(instructions.contains("Use `memory_remember`"));
+        assert!(instructions.contains("memory_lessons"));
         assert!(instructions.contains("prior work, earlier decisions, previous failures"));
         assert!(instructions.contains("Agentmemory startup context may be attached below"));
         assert!(instructions.contains(
-            "Prefer targeted recall queries naming the feature, file, bug, or decision you need"
+            "Prefer targeted queries naming the feature, file, bug, or decision you need"
         ));
-        assert!(instructions.contains("Do not call `memory_recall` on every turn"));
+        assert!(instructions.contains("Do not call memory tools on every turn"));
     }
 
     #[test]
@@ -887,5 +1234,94 @@ mod tests {
         assert_eq!(formatted["cwd"], "/tmp/project");
         assert!(formatted.get("timestamp").is_some());
         assert_eq!(formatted["data"], raw_payload);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn refresh_context_posts_query_aware_payload() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _url_guard = EnvVarGuard::set("AGENTMEMORY_URL", "");
+        let memories = test_memories(&server);
+
+        Mock::given(method("POST"))
+            .and(path("/agentmemory/context/refresh"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "context": "<agentmemory-context>fresh</agentmemory-context>",
+                "skipped": false,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let result = adapter
+            .refresh_context(
+                "session-1",
+                Path::new("/tmp/project"),
+                "debug agentmemory refresh semantics",
+                &memories,
+            )
+            .await
+            .expect("refresh context should succeed");
+
+        assert_eq!(
+            result,
+            (
+                "<agentmemory-context>fresh</agentmemory-context>".to_string(),
+                false,
+            )
+        );
+
+        let requests = server.received_requests().await.unwrap_or_default();
+        let body = serde_json::from_slice::<serde_json::Value>(&requests[0].body)
+            .expect("refresh request body should be json");
+        assert_eq!(
+            body,
+            json!({
+                "sessionId": "session-1",
+                "project": "/tmp/project",
+                "query": "debug agentmemory refresh semantics",
+            })
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn remember_memory_posts_content_and_returns_json() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _url_guard = EnvVarGuard::set("AGENTMEMORY_URL", "");
+        let memories = test_memories(&server);
+
+        Mock::given(method("POST"))
+            .and(path("/agentmemory/remember"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+                "success": true,
+                "memory": {
+                    "id": "mem-1",
+                    "content": "remember this"
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = adapter
+            .remember_memory("remember this", &memories)
+            .await
+            .expect("remember should succeed");
+
+        assert_eq!(
+            response,
+            json!({
+                "success": true,
+                "memory": {
+                    "id": "mem-1",
+                    "content": "remember this"
+                }
+            })
+        );
     }
 }

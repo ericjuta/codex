@@ -557,6 +557,87 @@ async fn slash_memory_recall_shows_pending_cell_and_submits_op() {
 }
 
 #[tokio::test]
+async fn slash_memory_remember_requires_content() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryRemember);
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Usage: /memory-remember <content>"));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn slash_memory_remember_with_args_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(
+        SlashCommand::MemoryRemember,
+        "retain this durable note".to_string(),
+        Vec::new(),
+    );
+
+    assert!(active_blob(&chat).contains("Memory Remember Pending"));
+    assert!(active_blob(&chat).contains("Saving durable memory."));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::RememberMemories { content }) if content == "retain this durable note"
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_lessons_with_query_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(
+        SlashCommand::MemoryLessons,
+        "hook payloads".to_string(),
+        Vec::new(),
+    );
+
+    assert!(active_blob(&chat).contains("Memory Lessons Pending"));
+    assert!(active_blob(&chat).contains("hook payloads"));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ReviewLessons { query }) if query == Some("hook payloads".to_string())
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_actions_with_status_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(
+        SlashCommand::MemoryActions,
+        "blocked".to_string(),
+        Vec::new(),
+    );
+
+    assert!(active_blob(&chat).contains("Memory Actions Pending"));
+    assert!(active_blob(&chat).contains("blocked"));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ListActions { status }) if status == Some("blocked".to_string())
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_next_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryNext);
+
+    assert!(active_blob(&chat).contains("Memory Next Pending"));
+    assert!(active_blob(&chat).contains("Reviewing the next suggested action"));
+    assert_matches!(op_rx.try_recv(), Ok(Op::ReviewNext));
+}
+
+#[tokio::test]
 async fn slash_resume_opens_picker() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

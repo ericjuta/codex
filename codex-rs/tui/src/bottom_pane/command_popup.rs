@@ -300,6 +300,18 @@ mod tests {
                 "mention",
                 "mcp",
                 "memory-recall",
+                "memory-remember",
+                "memory-lessons",
+                "memory-crystals",
+                "memory-crystals-create",
+                "memory-crystals-auto",
+                "memory-insights",
+                "memory-reflect",
+                "memory-actions",
+                "memory-action-create",
+                "memory-action-update",
+                "memory-frontier",
+                "memory-next",
                 "memory-drop",
                 "memory-update"
             ]

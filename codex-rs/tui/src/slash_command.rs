@@ -62,6 +62,18 @@ pub enum SlashCommand {
     // Debugging commands.
     #[strum(serialize = "memory-recall")]
     MemoryRecall,
+    MemoryRemember,
+    MemoryLessons,
+    MemoryCrystals,
+    MemoryCrystalsCreate,
+    MemoryCrystalsAuto,
+    MemoryInsights,
+    MemoryReflect,
+    MemoryActions,
+    MemoryActionCreate,
+    MemoryActionUpdate,
+    MemoryFrontier,
+    MemoryNext,
     #[strum(to_string = "memory-drop", serialize = "debug-m-drop")]
     MemoryDrop,
     #[strum(to_string = "memory-update", serialize = "debug-m-update")]
@@ -95,6 +107,18 @@ impl SlashCommand {
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Stop => "stop all background terminals",
             SlashCommand::MemoryRecall => "recall relevant memory into the current thread",
+            SlashCommand::MemoryRemember => "save durable memory explicitly",
+            SlashCommand::MemoryLessons => "review agentmemory lessons",
+            SlashCommand::MemoryCrystals => "review crystallized action digests",
+            SlashCommand::MemoryCrystalsCreate => "create a crystal from action ids",
+            SlashCommand::MemoryCrystalsAuto => "auto-crystallize eligible action groups",
+            SlashCommand::MemoryInsights => "review reflected insights",
+            SlashCommand::MemoryReflect => "generate reflected insights",
+            SlashCommand::MemoryActions => "review tracked action work items",
+            SlashCommand::MemoryActionCreate => "create a tracked action work item",
+            SlashCommand::MemoryActionUpdate => "update a tracked action work item",
+            SlashCommand::MemoryFrontier => "review unblocked frontier suggestions",
+            SlashCommand::MemoryNext => "review the next suggested action",
             SlashCommand::MemoryDrop => "clear stored memories for this workspace",
             SlashCommand::MemoryUpdate => "refresh stored memories for this workspace",
             SlashCommand::Model => "choose what model and reasoning effort to use",
@@ -138,6 +162,16 @@ impl SlashCommand {
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
                 | SlashCommand::MemoryRecall
+                | SlashCommand::MemoryRemember
+                | SlashCommand::MemoryLessons
+                | SlashCommand::MemoryCrystalsCreate
+                | SlashCommand::MemoryCrystalsAuto
+                | SlashCommand::MemoryInsights
+                | SlashCommand::MemoryReflect
+                | SlashCommand::MemoryActions
+                | SlashCommand::MemoryActionCreate
+                | SlashCommand::MemoryActionUpdate
+                | SlashCommand::MemoryFrontier
         )
     }
 
@@ -163,6 +197,18 @@ impl SlashCommand {
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryRecall
+            | SlashCommand::MemoryRemember
+            | SlashCommand::MemoryLessons
+            | SlashCommand::MemoryCrystals
+            | SlashCommand::MemoryCrystalsCreate
+            | SlashCommand::MemoryCrystalsAuto
+            | SlashCommand::MemoryInsights
+            | SlashCommand::MemoryReflect
+            | SlashCommand::MemoryActions
+            | SlashCommand::MemoryActionCreate
+            | SlashCommand::MemoryActionUpdate
+            | SlashCommand::MemoryFrontier
+            | SlashCommand::MemoryNext
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff

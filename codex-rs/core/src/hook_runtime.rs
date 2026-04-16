@@ -320,10 +320,11 @@ pub(crate) async fn run_user_prompt_submit_hooks(
 
     if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+        let observe_adapter = adapter.clone();
         let payload = request.clone();
         let memories = turn_context.config.memories.clone();
         tokio::spawn(async move {
-            adapter
+            observe_adapter
                 .capture_event(
                     "UserPromptSubmit",
                     serde_json::to_value(&payload).unwrap_or_default(),
@@ -331,6 +332,35 @@ pub(crate) async fn run_user_prompt_submit_hooks(
                 )
                 .await;
         });
+
+        if request.prompt.trim().len() > 10 {
+            match adapter
+                .refresh_context(
+                    &sess.conversation_id.to_string(),
+                    turn_context.cwd.as_path(),
+                    request.prompt.as_str(),
+                    &turn_context.config.memories,
+                )
+                .await
+            {
+                Ok((context, skipped)) if !skipped && !context.trim().is_empty() => {
+                    let preview_runs = sess.hooks().preview_user_prompt_submit(&request);
+                    let mut outcome = run_context_injecting_hook(
+                        sess,
+                        turn_context,
+                        preview_runs,
+                        sess.hooks().run_user_prompt_submit(request),
+                    )
+                    .await;
+                    outcome.additional_contexts.push(context);
+                    return outcome;
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::warn!("failed to refresh agentmemory context on prompt submit: {err}");
+                }
+            }
+        }
     }
 
     let preview_runs = sess.hooks().preview_user_prompt_submit(&request);

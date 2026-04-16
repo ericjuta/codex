@@ -712,6 +712,36 @@ async fn replayed_memory_operation_item_renders_memory_cell() {
 }
 
 #[tokio::test]
+async fn replayed_memory_action_item_renders_memory_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.replay_thread_item(
+        AppServerThreadItem::MemoryOperation {
+            id: "memory-2".to_string(),
+            source: codex_app_server_protocol::MemoryOperationSource::Assistant,
+            operation: codex_app_server_protocol::MemoryOperationKind::ActionCreate,
+            status: codex_app_server_protocol::MemoryOperationStatus::Ready,
+            query: None,
+            summary: "Created action `act-123`.".to_string(),
+            detail: Some("{\"success\":true}".to_string()),
+            context_injected: false,
+        },
+        "turn-1".to_string(),
+        ReplayKind::ThreadSnapshot,
+    );
+
+    let rendered = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            lines_to_single_string(&cell.transcript_lines(/*width*/ 80))
+        }
+        other => panic!("expected InsertHistoryCell, got {other:?}"),
+    };
+    assert!(rendered.contains("Memory Action Create"));
+    assert!(rendered.contains("assistant tool"));
+    assert!(rendered.contains("Created action `act-123`."));
+}
+
+#[tokio::test]
 async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;

@@ -132,8 +132,20 @@ pub struct ImageGenerationItem {
 #[ts(rename_all = "snake_case")]
 pub enum MemoryOperationKind {
     Recall,
+    Remember,
     Update,
     Drop,
+    Lessons,
+    Crystals,
+    Crystallize,
+    AutoCrystallize,
+    Insights,
+    Reflect,
+    Actions,
+    ActionCreate,
+    ActionUpdate,
+    Frontier,
+    Next,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]

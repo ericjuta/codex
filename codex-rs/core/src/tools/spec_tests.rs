@@ -350,6 +350,34 @@ fn memory_recall_is_exposed_with_memory_tool_feature_on_and_agentmemory_backend(
 
     let memory_recall_tool = find_tool(&tools, "memory_recall");
     assert_eq!(memory_recall_tool.spec, create_memory_recall_tool());
+    assert_eq!(
+        find_tool(&tools, "memory_remember").spec,
+        create_memory_remember_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_lessons").spec,
+        create_memory_lessons_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_crystals").spec,
+        create_memory_crystals_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_insights").spec,
+        create_memory_insights_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_actions").spec,
+        create_memory_actions_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_frontier").spec,
+        create_memory_frontier_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_next").spec,
+        create_memory_next_tool()
+    );
 }
 
 fn assert_model_tools(

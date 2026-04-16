@@ -869,8 +869,36 @@ impl ThreadHistoryBuilder {
             },
             operation: match payload.operation {
                 codex_protocol::items::MemoryOperationKind::Recall => MemoryOperationKind::Recall,
+                codex_protocol::items::MemoryOperationKind::Remember => {
+                    MemoryOperationKind::Remember
+                }
                 codex_protocol::items::MemoryOperationKind::Update => MemoryOperationKind::Update,
                 codex_protocol::items::MemoryOperationKind::Drop => MemoryOperationKind::Drop,
+                codex_protocol::items::MemoryOperationKind::Lessons => MemoryOperationKind::Lessons,
+                codex_protocol::items::MemoryOperationKind::Crystals => {
+                    MemoryOperationKind::Crystals
+                }
+                codex_protocol::items::MemoryOperationKind::Crystallize => {
+                    MemoryOperationKind::Crystallize
+                }
+                codex_protocol::items::MemoryOperationKind::AutoCrystallize => {
+                    MemoryOperationKind::AutoCrystallize
+                }
+                codex_protocol::items::MemoryOperationKind::Insights => {
+                    MemoryOperationKind::Insights
+                }
+                codex_protocol::items::MemoryOperationKind::Reflect => MemoryOperationKind::Reflect,
+                codex_protocol::items::MemoryOperationKind::Actions => MemoryOperationKind::Actions,
+                codex_protocol::items::MemoryOperationKind::ActionCreate => {
+                    MemoryOperationKind::ActionCreate
+                }
+                codex_protocol::items::MemoryOperationKind::ActionUpdate => {
+                    MemoryOperationKind::ActionUpdate
+                }
+                codex_protocol::items::MemoryOperationKind::Frontier => {
+                    MemoryOperationKind::Frontier
+                }
+                codex_protocol::items::MemoryOperationKind::Next => MemoryOperationKind::Next,
             },
             status: match payload.status {
                 codex_protocol::items::MemoryOperationStatus::Pending => {
@@ -3076,6 +3104,7 @@ mod tests {
         let items = vec![
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             })),
@@ -3091,6 +3120,8 @@ mod tests {
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),
                 last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
             })),
         ];
 

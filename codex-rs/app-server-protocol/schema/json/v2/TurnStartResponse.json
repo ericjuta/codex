@@ -505,8 +505,20 @@
     "MemoryOperationKind": {
       "enum": [
         "recall",
+        "remember",
         "update",
-        "drop"
+        "drop",
+        "lessons",
+        "crystals",
+        "crystallize",
+        "auto_crystallize",
+        "insights",
+        "reflect",
+        "actions",
+        "action_create",
+        "action_update",
+        "frontier",
+        "next"
       ],
       "type": "string"
     },
