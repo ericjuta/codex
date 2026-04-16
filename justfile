@@ -93,6 +93,10 @@ build-for-release:
 # Optional environment variables:
 #   CODEX_PERF_EXTRA_FLAGS='...' append extra rustc flags
 #   CODEX_PERF_FEATURES='...'    pass cargo features to codex-cli
+#
+# Each perf build prunes `./target` back down to `./target/release/codex` so a
+# PATH entry or symlink targeting that binary keeps working without retaining
+# the full build tree.
 perf-build-local:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -104,6 +108,7 @@ perf-build-local:
     else
         cargo build -p codex-cli --release --locked
     fi
+    ./scripts/prune_perf_build_target.sh ./target/release/codex
 
 # Build a machine-local codex binary using profile-guided optimization on top
 # of the same local tuning as `perf-build-local`.
@@ -152,6 +157,7 @@ perf-build-local-pgo:
     else
         RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-use=$PGO_DIR/merged.profdata -C llvm-args=-pgo-warn-missing-function" cargo build -p codex-cli --release --locked
     fi
+    ./scripts/prune_perf_build_target.sh ./target/release/codex
 
 # Build a reproducible local binary tuned specifically for Apple M3 machines.
 # This is functionally similar to `perf-build-local` on this Mac, but pins the
@@ -167,6 +173,7 @@ perf-build-m3:
     else
         cargo build -p codex-cli --release --locked
     fi
+    ./scripts/prune_perf_build_target.sh ./target/release/codex
 
 # Build an Apple M3-tuned codex binary using profile-guided optimization.
 perf-build-m3-pgo:
@@ -208,6 +215,7 @@ perf-build-m3-pgo:
     else
         RUSTFLAGS="$COMMON_RUSTFLAGS -C profile-use=$PGO_DIR/merged.profdata -C llvm-args=-pgo-warn-missing-function" cargo build -p codex-cli --release --locked
     fi
+    ./scripts/prune_perf_build_target.sh ./target/release/codex
 
 # Run the MCP server
 mcp-server-run *args:
