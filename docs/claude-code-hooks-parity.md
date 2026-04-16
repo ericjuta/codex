@@ -17,13 +17,24 @@ Current branch state:
 - `SessionStart` registration uses `POST /agentmemory/session/start`
 - `PreToolUse` enrichment uses `POST /agentmemory/enrich` and accepts
   `additionalContext`
+- native observe payloads now declare `source = codex-native`,
+  `payload_version = 1`, a stable `event_id`, sender `capabilities`, and an
+  explicit `persistence_class`
+- native `PostToolUse` and `PostToolUseFailure` observations now normalize to
+  `tool_input` / `tool_output` / `error` instead of the older
+  `command` / `tool_response` sender shape
+- non-shell post-tool capture now covers the same native tool-name lane as the
+  enrichment matcher when Codex emits `Edit|Write|Read|Glob|Grep`
 - `UserPromptSubmit` retains `observe` and now issues
   `POST /agentmemory/context/refresh` for long-enough prompts
 - shutdown emits `Stop` observation plus summarize, then `SessionEnd`
-  observation plus `session/end`
+  observation plus `session/end`, but bare shutdown markers are now classified
+  as non-persistent sender diagnostics instead of ordinary observations
 - when consolidation is enabled, shutdown also issues
   `POST /agentmemory/crystals/auto` and
   `POST /agentmemory/consolidate-pipeline`
+- current sender capabilities still do not advertise `assistant_result`;
+  freshness remains stop/task-completed driven on the Codex side
 
 Those documents define the memory backend and the runtime memory surface at a
 higher level. This document defines the hook-level operator contract that must
@@ -345,6 +356,12 @@ Codex must:
 
 This is required parity behavior, not an optional enhancement.
 
+Sender-side payload quality rule:
+
+- a real turn stop may remain useful lifecycle input
+- a synthetic shutdown stop with only `session_id` / `cwd` must be classified
+  as `diagnostics_only`, not as a normal persistent memory observation
+
 ### SessionEnd
 
 Codex must:
@@ -362,6 +379,8 @@ Current implementation note:
 - Codex currently uses `memories.use_memories` as the native toggle and still
   honors `CONSOLIDATION_ENABLED` as an override for parity with the standalone
   hook runtime
+- the native `SessionEnd` observe payload now carries summarize outcome fields
+  and emits as `ephemeral` instead of an unclassified bare lifecycle marker
 
 ## Observation Parity
 
@@ -383,6 +402,13 @@ the broader lifecycle hooks already modeled in the fork:
 
 These are observation hooks, not context-injection hooks, and should not be
 repurposed as substitutes for `SessionStart` or `PreToolUse` injection.
+
+Current Codex-owned concrete coverage in this repo is:
+
+- `apply_patch` mapped to `Edit|Write`
+- `list_dir` mapped to `Glob`
+- generic native tool invocations already named `Edit|Write|Read|Glob|Grep`
+  now forward structured arguments into the same observe/enrich contract
 
 ### Explicit Deferral
 
@@ -428,6 +454,11 @@ This lane is complete only when all of the following are true.
 - `UserPromptSubmit` still calls `observe`
 - `UserPromptSubmit` uses `/agentmemory/context/refresh` for query-aware
   refresh when appropriate
+- native observe payloads include explicit sender metadata:
+  `source`, `payload_version`, `event_id`, `capabilities`, and
+  `persistence_class`
+- native post-tool observe payloads normalize to
+  `tool_input` / `tool_output` / `error`
 - `Stop` still calls `observe`
 - `Stop` still calls `summarize`
 - `SessionEnd` still calls `session/end`
@@ -453,6 +484,7 @@ At minimum, add or update tests that prove:
 - pre-tool enrichment injects context for `Edit|Write|Read|Glob|Grep`
 - pre-tool enrichment does not inject for non-matching tools
 - `PreToolUse` parsing accepts valid `additionalContext`
+- native post-tool capture covers the real non-shell sender lane Codex owns
 - prompt-submit parity keeps `observe` and `context/refresh` wired together
 - stop parity keeps `observe` and `summarize` wired together
 - session-end parity keeps `session/end` wired and, when enabled,
@@ -474,6 +506,8 @@ Update runtime-facing docs so they say:
 - startup injection comes from `session/start`
 - pre-tool enrichment comes from `enrich`
 - prompt-submit refresh comes from `context/refresh`
+- native observe payloads are explicitly versioned and attributed
+- bare shutdown lifecycle markers are sender-classified as non-persistent
 - stop still summarizes the session
 - session end still closes the session and, when enabled, runs the same
   maintenance calls as the plugin

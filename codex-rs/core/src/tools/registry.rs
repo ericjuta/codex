@@ -62,10 +62,11 @@ pub trait ToolHandler: Send + Sync {
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        let tool_name = invocation.tool_name.display();
         Some(PreToolUsePayload {
-            tool_name: invocation.tool_name.display(),
+            tool_name: tool_name.clone(),
             command: invocation.payload.log_payload().into_owned(),
-            agentmemory_input: None,
+            agentmemory_input: structured_agentmemory_input(&tool_name, &invocation.payload),
         })
     }
 
@@ -129,6 +130,20 @@ pub(crate) struct PostToolUsePayload {
     pub(crate) tool_response: Value,
 }
 
+fn structured_agentmemory_input(tool_name: &str, payload: &ToolPayload) -> Option<Value> {
+    if !matches!(tool_name, "Edit" | "Write" | "Read" | "Glob" | "Grep") {
+        return None;
+    }
+
+    match payload {
+        ToolPayload::Function { arguments } => serde_json::from_str::<Value>(arguments).ok(),
+        ToolPayload::Custom { input } => serde_json::from_str::<Value>(input).ok(),
+        ToolPayload::LocalShell { .. }
+        | ToolPayload::ToolSearch { .. }
+        | ToolPayload::Mcp { .. } => None,
+    }
+}
+
 fn pre_tool_use_hooks_enabled(payload: &PreToolUsePayload) -> bool {
     matches!(
         payload.tool_name.as_str(),
@@ -147,7 +162,15 @@ fn pre_tool_use_hooks_enabled(payload: &PreToolUsePayload) -> bool {
 fn post_tool_use_hooks_enabled(payload: &PostToolUsePayload) -> bool {
     matches!(
         payload.tool_name.as_str(),
-        "shell" | "shell_command" | "local_shell" | "exec_command"
+        "shell"
+            | "shell_command"
+            | "local_shell"
+            | "exec_command"
+            | "Edit"
+            | "Write"
+            | "Read"
+            | "Glob"
+            | "Grep"
     )
 }
 

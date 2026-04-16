@@ -19,6 +19,16 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+fn normalized_observe_payload(mut payload: serde_json::Value) -> serde_json::Value {
+    if let Some(timestamp) = payload.get_mut("timestamp") {
+        *timestamp = json!("__TIMESTAMP__");
+    }
+    if let Some(event_id) = payload.get_mut("event_id") {
+        *event_id = json!("__EVENT_ID__");
+    }
+    payload
+}
+
 async fn mount_agentmemory_runtime(agentmemory_server: &MockServer) {
     Mock::given(method("POST"))
         .and(path("/agentmemory/session/start"))
@@ -120,6 +130,67 @@ async fn pre_tool_enrichment_injects_context_for_write_lane() -> Result<()> {
         requests[1].body_contains_text("glob tide note"),
         "pre-tool enrichment should inject context into the follow-up model turn",
     );
+    let post_tool_use = agentmemory_requests
+        .into_iter()
+        .filter(|request| request.url.path() == "/agentmemory/observe")
+        .map(|request| {
+            serde_json::from_slice::<serde_json::Value>(&request.body)
+                .expect("agentmemory observe body should be valid json")
+        })
+        .find(|payload| {
+            payload["hookType"] == "post_tool_use"
+                && payload["data"]["tool_use_id"] == call_id
+                && payload["data"]["tool_name"] == "Write"
+        })
+        .expect("apply_patch should emit post_tool_use observe payload");
+    let normalized = normalized_observe_payload(post_tool_use);
+    assert_eq!(
+        normalized["sessionId"],
+        test.session_configured.session_id.to_string()
+    );
+    assert_eq!(normalized["hookType"], "post_tool_use");
+    assert_eq!(normalized["project"], test.config.cwd.display().to_string());
+    assert_eq!(normalized["cwd"], test.config.cwd.display().to_string());
+    assert_eq!(normalized["source"], "codex-native");
+    assert_eq!(normalized["payload_version"], "1");
+    assert_eq!(normalized["event_id"], "__EVENT_ID__");
+    assert_eq!(
+        normalized["capabilities"],
+        json!([
+            "structured_post_tool_payload",
+            "query_aware_context",
+            "event_identity",
+        ]),
+    );
+    assert_eq!(normalized["persistence_class"], "persistent");
+    assert_eq!(
+        normalized["data"]["session_id"],
+        test.session_configured.session_id.to_string(),
+    );
+    assert_eq!(
+        normalized["data"]["cwd"],
+        test.config.cwd.display().to_string()
+    );
+    assert_eq!(normalized["data"]["tool_name"], "Write");
+    assert_eq!(normalized["data"]["tool_use_id"], call_id);
+    assert_eq!(
+        normalized["data"]["tool_input"],
+        json!({
+            "patch": patch,
+            "paths": ["agentmemory_pretool.txt"],
+        }),
+    );
+    assert_eq!(
+        normalized["data"]["tool_output"]["metadata"]["exit_code"],
+        0,
+    );
+    assert!(normalized["data"]["tool_output"]["metadata"]["duration_seconds"].is_number(),);
+    assert_eq!(
+        normalized["data"]["tool_output"]["output"],
+        "Success. Updated the following files:\nA agentmemory_pretool.txt\n",
+    );
+    assert!(normalized["data"]["turn_id"].is_string());
+    assert!(normalized["data"]["model"].is_string());
 
     Ok(())
 }
@@ -182,6 +253,89 @@ async fn pre_tool_enrichment_skips_non_matching_tools() -> Result<()> {
         !request_paths.contains(&"/agentmemory/enrich".to_string()),
         "non-matching tools should not trigger agentmemory enrichment",
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(agentmemory_env)]
+async fn glob_lane_enrichment_and_post_tool_capture_use_native_contract() -> Result<()> {
+    let model_server = start_mock_server().await;
+    let agentmemory_server = MockServer::start().await;
+    mount_agentmemory_runtime(&agentmemory_server).await;
+    Mock::given(method("POST"))
+        .and(path("/agentmemory/enrich"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "context": "<agentmemory-context>glob lane note</agentmemory-context>",
+        })))
+        .expect(1)
+        .mount(&agentmemory_server)
+        .await;
+
+    let mut builder = test_codex().with_config({
+        let agentmemory_base_url = agentmemory_server.uri();
+        move |config| {
+            config.memories.backend = MemoryBackend::Agentmemory;
+            config.memories.agentmemory.base_url = agentmemory_base_url;
+            config.memories.agentmemory.inject_context = true;
+            config
+                .features
+                .disable(Feature::MemoryTool)
+                .expect("test config should allow feature update");
+        }
+    });
+    let test = builder.build(&model_server).await?;
+    std::fs::write(test.config.cwd.join("glob_lane.txt"), "harbor note")?;
+    let call_id = "agentmemory-list-dir";
+    let args = json!({
+        "dir_path": test.config.cwd.display().to_string(),
+        "offset": 1,
+        "limit": 5,
+        "depth": 1,
+    });
+    let responses = mount_sse_sequence(
+        &model_server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "list_dir", &serde_json::to_string(&args)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "listed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.submit_turn("list the directory").await?;
+    test.codex.shutdown_and_wait().await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1].body_contains_text("glob lane note"),
+        "glob lane enrichment should inject context into the follow-up model turn",
+    );
+    let post_tool_use = agentmemory_server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|request| request.url.path() == "/agentmemory/observe")
+        .map(|request| {
+            serde_json::from_slice::<serde_json::Value>(&request.body)
+                .expect("agentmemory observe body should be valid json")
+        })
+        .find(|payload| {
+            payload["hookType"] == "post_tool_use" && payload["data"]["tool_name"] == "Glob"
+        })
+        .expect("list_dir should emit glob post_tool_use observe payload");
+    assert_eq!(post_tool_use["source"], "codex-native");
+    assert_eq!(post_tool_use["payload_version"], "1");
+    assert_eq!(post_tool_use["persistence_class"], "persistent");
 
     Ok(())
 }

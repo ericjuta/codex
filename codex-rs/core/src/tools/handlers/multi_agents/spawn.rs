@@ -168,6 +168,7 @@ impl ToolHandler for Handler {
             let payload = serde_json::json!({
                 "session_id": session.conversation_id.to_string(),
                 "turn_id": turn.sub_id.clone(),
+                "cwd": turn.cwd.display().to_string(),
                 "parent_agent_path": turn.session_source.get_agent_path().map(String::from),
                 "child_thread_id": spawned_agent.thread_id.to_string(),
                 "child_agent_nickname": subagent_start_nickname,

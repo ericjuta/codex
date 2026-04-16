@@ -3,6 +3,9 @@
 //! This module provides the seam for integrating the `agentmemory` service
 //! as a replacement for Codex's native memory engine.
 
+mod observe_payload;
+
+use crate::agentmemory::observe_payload::build_observe_payload;
 use crate::config::types::AgentmemoryConfig;
 use crate::config::types::MemoriesConfig;
 use codex_git_utils::get_git_repo_root;
@@ -79,28 +82,6 @@ fn parse_bool_override(value: &str) -> Option<bool> {
 
 pub(crate) fn workspace_project(cwd: &Path) -> PathBuf {
     get_git_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf())
-}
-
-fn extract_project_and_cwd(payload: &serde_json::Value) -> (String, String) {
-    let cwd = payload
-        .get("cwd")
-        .and_then(|value| value.as_str())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .map(|path| path.to_string_lossy().into_owned())
-        })
-        .unwrap_or_default();
-    let project = if cwd.is_empty() {
-        String::new()
-    } else {
-        get_git_repo_root(Path::new(&cwd))
-            .unwrap_or_else(|| Path::new(&cwd).to_path_buf())
-            .to_string_lossy()
-            .into_owned()
-    };
-    (project, cwd)
 }
 
 impl AgentmemoryAdapter {
@@ -220,7 +201,6 @@ impl AgentmemoryAdapter {
     fn parse_structured_tool_input(raw: &serde_json::Value) -> serde_json::Value {
         if let Some(s) = raw.as_str()
             && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(s)
-            && parsed.is_object()
         {
             return parsed;
         }
@@ -278,34 +258,6 @@ impl AgentmemoryAdapter {
         (files, search_terms)
     }
 
-    /// Transforms Codex's internal hook payloads into Claude-parity structures
-    /// expected by the `agentmemory` REST API. This provides a central, malleable
-    /// place to adjust mapping logic in the future without touching the hooks engine.
-    fn format_claude_parity_payload(
-        &self,
-        event_name: &str,
-        payload: serde_json::Value,
-    ) -> serde_json::Value {
-        let session_id = payload
-            .get("session_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let (project, cwd) = extract_project_and_cwd(&payload);
-
-        let timestamp = chrono::Utc::now().to_rfc3339();
-        let hook_type = normalize_hook_type(event_name);
-
-        json!({
-            "sessionId": session_id,
-            "hookType": hook_type,
-            "project": project,
-            "cwd": cwd,
-            "timestamp": timestamp,
-            "data": payload,
-        })
-    }
-
     /// Asynchronously captures and stores lifecycle events in `agentmemory`.
     ///
     /// This method allows Codex hooks (like `SessionStart`, `PostToolUse`) to
@@ -317,7 +269,17 @@ impl AgentmemoryAdapter {
         memories: &MemoriesConfig,
     ) {
         let url = format!("{}/agentmemory/observe", self.api_base(memories));
-        let body = self.format_claude_parity_payload(event_name, payload_json);
+        let body = match build_observe_payload(event_name, payload_json) {
+            Ok(body) => body,
+            Err(err) => {
+                tracing::warn!(
+                    "Agentmemory observation skipped for unsupported or invalid {} payload: {}",
+                    event_name,
+                    err
+                );
+                return;
+            }
+        };
 
         match self
             .request_builder(reqwest::Method::POST, &url, memories)
@@ -844,23 +806,6 @@ impl AgentmemoryAdapter {
         Self::json_or_error(res).await
     }
 }
-fn normalize_hook_type(event_name: &str) -> &str {
-    match event_name {
-        "SessionStart" => "session_start",
-        "UserPromptSubmit" => "prompt_submit",
-        "PreToolUse" => "pre_tool_use",
-        "PostToolUse" => "post_tool_use",
-        "PostToolUseFailure" => "post_tool_failure",
-        "AssistantResult" => "assistant_result",
-        "SubagentStart" => "subagent_start",
-        "SubagentStop" => "subagent_stop",
-        "Stop" => "stop",
-        "Notification" => "notification",
-        "TaskCompleted" => "task_completed",
-        "SessionEnd" => "session_end",
-        _ => event_name,
-    }
-}
 #[cfg(test)]
 #[allow(clippy::await_holding_lock)]
 mod tests {
@@ -932,28 +877,6 @@ mod tests {
             "Prefer targeted queries naming the feature, file, bug, or decision you need"
         ));
         assert!(instructions.contains("Do not call memory tools on every turn"));
-    }
-
-    #[test]
-    fn format_claude_parity_payload_normalizes_codex_hook_names() {
-        let adapter = AgentmemoryAdapter::new();
-        let payload = json!({ "session_id": "session-123" });
-
-        let prompt_submit =
-            adapter.format_claude_parity_payload("UserPromptSubmit", payload.clone());
-        assert_eq!(prompt_submit["hookType"], json!("prompt_submit"));
-        assert_eq!(prompt_submit["sessionId"], json!("session-123"));
-
-        let post_tool_failure =
-            adapter.format_claude_parity_payload("PostToolUseFailure", payload.clone());
-        assert_eq!(post_tool_failure["hookType"], json!("post_tool_failure"));
-
-        let stop = adapter.format_claude_parity_payload("Stop", payload);
-        assert_eq!(stop["hookType"], json!("stop"));
-
-        let session_end = adapter
-            .format_claude_parity_payload("SessionEnd", json!({ "session_id": "session-1" }));
-        assert_eq!(session_end["hookType"], json!("session_end"));
     }
 
     #[tokio::test]
@@ -1216,26 +1139,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_format_claude_parity_payload() {
-        let adapter = AgentmemoryAdapter::new();
-        let raw_payload = json!({
-            "session_id": "1234",
-            "turn_id": "turn-5",
-            "cwd": "/tmp/project",
-            "command": "echo hello"
-        });
-
-        let formatted = adapter.format_claude_parity_payload("PreToolUse", raw_payload.clone());
-
-        assert_eq!(formatted["sessionId"], "1234");
-        assert_eq!(formatted["hookType"], "pre_tool_use");
-        assert_eq!(formatted["project"], "/tmp/project");
-        assert_eq!(formatted["cwd"], "/tmp/project");
-        assert!(formatted.get("timestamp").is_some());
-        assert_eq!(formatted["data"], raw_payload);
-    }
-
     #[tokio::test]
     #[serial_test::serial(agentmemory_env)]
     async fn refresh_context_posts_query_aware_payload() {
@@ -1282,6 +1185,51 @@ mod tests {
                 "sessionId": "session-1",
                 "project": "/tmp/project",
                 "query": "debug agentmemory refresh semantics",
+            })
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn recall_context_posts_query_aware_payload() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _url_guard = EnvVarGuard::set("AGENTMEMORY_URL", "");
+        let memories = test_memories(&server);
+
+        Mock::given(method("POST"))
+            .and(path("/agentmemory/context"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "context": "<agentmemory-context>recall</agentmemory-context>",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let context = adapter
+            .recall_context(
+                "session-1",
+                Path::new("/tmp/project"),
+                Some("debug agentmemory recall semantics"),
+                DEFAULT_RUNTIME_RECALL_TOKEN_BUDGET,
+                &memories,
+            )
+            .await
+            .expect("recall context should succeed");
+
+        assert_eq!(context, "<agentmemory-context>recall</agentmemory-context>");
+
+        let requests = server.received_requests().await.unwrap_or_default();
+        let body = serde_json::from_slice::<serde_json::Value>(&requests[0].body)
+            .expect("recall request body should be json");
+        assert_eq!(
+            body,
+            json!({
+                "sessionId": "session-1",
+                "project": "/tmp/project",
+                "budget": DEFAULT_RUNTIME_RECALL_TOKEN_BUDGET,
+                "query": "debug agentmemory recall semantics",
             })
         );
     }

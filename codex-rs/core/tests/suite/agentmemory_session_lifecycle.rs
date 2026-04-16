@@ -96,6 +96,15 @@ async fn agentmemory_session_lifecycle_is_registered_end_to_end() -> Result<()> 
         "project": cwd,
         "cwd": cwd,
         "timestamp": request_summaries_placeholder_timestamp(),
+        "source": "codex-native",
+        "payload_version": "1",
+        "event_id": request_summaries_placeholder_event_id(),
+        "capabilities": [
+            "structured_post_tool_payload",
+            "query_aware_context",
+            "event_identity",
+        ],
+        "persistence_class": "diagnostics_only",
         "data": {
             "session_id": session_id,
             "cwd": cwd,
@@ -107,9 +116,20 @@ async fn agentmemory_session_lifecycle_is_registered_end_to_end() -> Result<()> 
         "project": cwd,
         "cwd": cwd,
         "timestamp": request_summaries_placeholder_timestamp(),
+        "source": "codex-native",
+        "payload_version": "1",
+        "event_id": request_summaries_placeholder_event_id(),
+        "capabilities": [
+            "structured_post_tool_payload",
+            "query_aware_context",
+            "event_identity",
+        ],
+        "persistence_class": "ephemeral",
         "data": {
             "session_id": session_id,
             "cwd": cwd,
+            "summary_success": false,
+            "summary_error": "no_observations",
         },
     });
 
@@ -418,10 +438,19 @@ fn normalize_request_summaries(
         {
             *timestamp = serde_json::Value::String(request_summaries_placeholder_timestamp());
         }
+        if path == "/agentmemory/observe"
+            && let Some(event_id) = body.get_mut("event_id")
+        {
+            *event_id = serde_json::Value::String(request_summaries_placeholder_event_id());
+        }
     }
     summaries
 }
 
 fn request_summaries_placeholder_timestamp() -> String {
     "__TIMESTAMP__".to_string()
+}
+
+fn request_summaries_placeholder_event_id() -> String {
+    "__EVENT_ID__".to_string()
 }

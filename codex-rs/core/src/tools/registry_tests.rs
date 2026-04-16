@@ -88,3 +88,37 @@ async fn default_tool_handler_hook_payloads_are_retained() {
     assert_eq!(post_payload.tool_name, "example_tool");
     assert_eq!(post_payload.command, r#"{"alpha":1}"#);
 }
+
+#[tokio::test]
+async fn default_tool_handler_populates_agentmemory_input_for_native_file_tools() {
+    let (session, turn) = make_session_and_context().await;
+    let invocation = ToolInvocation {
+        session: session.into(),
+        turn: turn.into(),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+        call_id: "call-2".to_string(),
+        tool_name: codex_tools::ToolName::plain("Read"),
+        payload: ToolPayload::Function {
+            arguments: r#"{"path":"src/main.rs"}"#.to_string(),
+        },
+    };
+
+    assert_eq!(
+        ToolHandler::pre_tool_use_payload(&TestHandler, &invocation),
+        Some(PreToolUsePayload {
+            tool_name: "Read".to_string(),
+            command: r#"{"path":"src/main.rs"}"#.to_string(),
+            agentmemory_input: Some(serde_json::json!({
+                "path": "src/main.rs",
+            })),
+        })
+    );
+    assert_eq!(
+        post_tool_use_hooks_enabled(&PostToolUsePayload {
+            tool_name: "Read".to_string(),
+            command: r#"{"path":"src/main.rs"}"#.to_string(),
+            tool_response: serde_json::json!("ok"),
+        }),
+        true,
+    );
+}

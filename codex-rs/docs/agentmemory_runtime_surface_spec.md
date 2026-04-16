@@ -180,6 +180,9 @@ Required behavior:
 - session lifecycle transport must be best-effort but observable in tests
 - failure to reach the backend must not crash the main session
 - summarize must happen before session end
+- bare shutdown `Stop` payloads with only `session_id` / `cwd` must be
+  sender-classified as `diagnostics_only`
+- `SessionEnd` observe payloads should include summarize outcome when available
 - the request bodies must include enough information for backend session views
   to identify the session and workspace
 
@@ -594,7 +597,20 @@ Minimum required fields:
 - cwd
 - timestamp
 - normalized hook type
+- sender metadata:
+  - `source`
+  - `payload_version`
+  - `event_id`
+  - `capabilities`
+- explicit `persistence_class`
 - original hook payload data
+
+Required normalization for native post-tool capture:
+
+- `PostToolUse` must emit `tool_input` and `tool_output`
+- `PostToolUseFailure` must emit `tool_input` and `error`
+- the sender must reject unknown native hook types instead of silently passing
+  them through as ad hoc hook names
 
 ### Failure Behavior
 

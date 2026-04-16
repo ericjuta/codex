@@ -2886,12 +2886,16 @@ impl Session {
                 EventMsg::TurnComplete(event) => Some(serde_json::json!({
                     "session_id": self.conversation_id.to_string(),
                     "turn_id": event.turn_id,
+                    "cwd": turn_context.cwd.display().to_string(),
+                    "model": turn_context.model_info.slug.clone(),
                     "status": "completed",
                     "last_assistant_message": event.last_agent_message,
                 })),
                 EventMsg::TurnAborted(event) => Some(serde_json::json!({
                     "session_id": self.conversation_id.to_string(),
                     "turn_id": event.turn_id,
+                    "cwd": turn_context.cwd.display().to_string(),
+                    "model": turn_context.model_info.slug.clone(),
                     "status": "aborted",
                     "reason": event.reason,
                 })),
@@ -2990,13 +2994,14 @@ impl Session {
             .agent_control
             .send_inter_agent_communication(parent_thread_id, communication)
             .await;
-        if self.get_config().await.memories.backend
-            == crate::config::types::MemoryBackend::Agentmemory
-        {
+        let config = self.get_config().await;
+        if config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
             let session_id = self.conversation_id.to_string();
+            let cwd = config.cwd.display().to_string();
             let status_payload = serde_json::to_value(&status).unwrap_or_default();
             let subagent_stop_payload = serde_json::json!({
                 "session_id": session_id,
+                "cwd": cwd,
                 "parent_thread_id": parent_thread_id.to_string(),
                 "agent_path": child_agent_path.as_str(),
                 "status": status_payload,
@@ -3004,12 +3009,13 @@ impl Session {
             });
             let notification_payload = serde_json::json!({
                 "session_id": session_id,
+                "cwd": config.cwd.display().to_string(),
                 "parent_thread_id": parent_thread_id.to_string(),
                 "agent_path": child_agent_path.as_str(),
                 "message": message,
                 "delivered": send_result.is_ok(),
             });
-            let memories = self.get_config().await.memories.clone();
+            let memories = config.memories.clone();
             let adapter = crate::agentmemory::AgentmemoryAdapter::new();
             let observe_memories = memories.clone();
             tokio::spawn(async move {
@@ -5073,7 +5079,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 .await;
         });
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
-        match tokio::time::timeout(
+        let (summary_success, summary_error) = match tokio::time::timeout(
             AGENTMEMORY_SESSION_SUMMARIZE_TIMEOUT,
             adapter.summarize_session(&session_id, &memories),
         )
@@ -5085,20 +5091,26 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         "agentmemory summarize returned unsuccessful result for {session_id}: {}",
                         result
                             .error
+                            .clone()
                             .unwrap_or_else(|| "unknown summarize error".to_string())
                     );
                 }
+                (result.success, result.error)
             }
             Ok(Err(err)) => {
                 warn!("failed to summarize agentmemory session {session_id}: {err}");
+                (false, Some(err))
             }
             Err(_) => {
                 warn!("timed out summarizing agentmemory session {session_id}");
+                (false, Some("timeout".to_string()))
             }
-        }
+        };
         let session_end_payload = serde_json::json!({
             "session_id": session_id.clone(),
             "cwd": config.cwd.display().to_string(),
+            "summary_success": summary_success,
+            "summary_error": summary_error,
         });
         let observe_memories = memories.clone();
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();

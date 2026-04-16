@@ -1,6 +1,11 @@
 use super::*;
+use crate::codex::make_session_and_context;
+use crate::tools::context::FunctionToolOutput;
+use crate::turn_diff_tracker::TurnDiffTracker;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
 use tempfile::tempdir;
+use tokio::sync::Mutex;
 
 #[tokio::test]
 async fn lists_directory_entries() {
@@ -228,6 +233,40 @@ async fn indicates_truncated_results() {
         entries.last(),
         Some(&"More than 25 entries found".to_string())
     );
+}
+
+#[tokio::test]
+async fn post_tool_use_payload_maps_list_dir_into_glob_lane() {
+    let (session, turn) = make_session_and_context().await;
+    let invocation = crate::tools::context::ToolInvocation {
+        session: session.into(),
+        turn: turn.into(),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+        call_id: "call-1".to_string(),
+        tool_name: codex_tools::ToolName::plain("list_dir"),
+        payload: crate::tools::context::ToolPayload::Function {
+            arguments: r#"{"dir_path":"/tmp/project","offset":1,"limit":5,"depth":1}"#.to_string(),
+        },
+    };
+
+    let payload = ListDirHandler
+        .post_tool_use_payload(
+            &invocation,
+            &FunctionToolOutput::from_text("listed".to_string(), Some(true)),
+        )
+        .expect("post-tool payload");
+
+    assert_eq!(payload.tool_name, "Glob");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&payload.command).expect("json command"),
+        serde_json::json!({
+            "dir_path": "/tmp/project",
+            "offset": 1,
+            "limit": 5,
+            "depth": 1,
+        }),
+    );
+    assert_eq!(payload.tool_response, serde_json::json!("listed"));
 }
 
 #[tokio::test]

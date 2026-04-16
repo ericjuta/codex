@@ -11,8 +11,10 @@ use tokio::fs;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -69,6 +71,30 @@ impl ToolHandler for ListDirHandler {
             agentmemory_input: Some(serde_json::json!({
                 "dir_path": args.dir_path,
             })),
+        })
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        invocation: &ToolInvocation,
+        result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload> {
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            return None;
+        };
+        let args: ListDirArgs = parse_arguments(arguments).ok()?;
+        let tool_response =
+            result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
+        Some(PostToolUsePayload {
+            tool_name: "Glob".to_string(),
+            command: serde_json::to_string(&serde_json::json!({
+                "dir_path": args.dir_path,
+                "offset": args.offset,
+                "limit": args.limit,
+                "depth": args.depth,
+            }))
+            .ok()?,
+            tool_response,
         })
     }
 
