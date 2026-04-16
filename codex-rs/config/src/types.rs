@@ -182,6 +182,52 @@ pub enum MemoryBackend {
     Agentmemory,
 }
 
+/// Agentmemory-specific settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AgentmemoryConfigToml {
+    /// Base URL for the agentmemory backend.
+    pub base_url: Option<String>,
+    /// When `true`, inject startup and pre-tool agentmemory context.
+    pub inject_context: Option<bool>,
+    /// Environment variable whose value is used for agentmemory bearer auth.
+    pub secret_env_var: Option<String>,
+}
+
+/// Effective agentmemory settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentmemoryConfig {
+    pub base_url: String,
+    pub inject_context: bool,
+    pub secret_env_var: String,
+}
+
+impl Default for AgentmemoryConfig {
+    fn default() -> Self {
+        Self {
+            base_url: "http://127.0.0.1:3111".to_string(),
+            inject_context: false,
+            secret_env_var: "AGENTMEMORY_SECRET".to_string(),
+        }
+    }
+}
+
+impl From<AgentmemoryConfigToml> for AgentmemoryConfig {
+    fn from(toml: AgentmemoryConfigToml) -> Self {
+        let defaults = Self::default();
+        let AgentmemoryConfig {
+            base_url,
+            inject_context,
+            secret_env_var,
+        } = defaults;
+        Self {
+            base_url: toml.base_url.unwrap_or(base_url),
+            inject_context: toml.inject_context.unwrap_or(inject_context),
+            secret_env_var: toml.secret_env_var.unwrap_or(secret_env_var),
+        }
+    }
+}
+
 /// Memories settings loaded from config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -208,6 +254,8 @@ pub struct MemoriesToml {
     pub extract_model: Option<String>,
     /// Model used for memory consolidation.
     pub consolidation_model: Option<String>,
+    /// Agentmemory-specific configuration.
+    pub agentmemory: Option<AgentmemoryConfigToml>,
 }
 
 /// Effective memories settings after defaults are applied.
@@ -224,6 +272,7 @@ pub struct MemoriesConfig {
     pub min_rollout_idle_hours: i64,
     pub extract_model: Option<String>,
     pub consolidation_model: Option<String>,
+    pub agentmemory: AgentmemoryConfig,
 }
 
 impl Default for MemoriesConfig {
@@ -240,6 +289,7 @@ impl Default for MemoriesConfig {
             min_rollout_idle_hours: DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS,
             extract_model: None,
             consolidation_model: None,
+            agentmemory: AgentmemoryConfig::default(),
         }
     }
 }
@@ -276,6 +326,7 @@ impl From<MemoriesToml> for MemoriesConfig {
                 .clamp(1, 48),
             extract_model: toml.extract_model,
             consolidation_model: toml.consolidation_model,
+            agentmemory: toml.agentmemory.unwrap_or_default().into(),
         }
     }
 }

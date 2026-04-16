@@ -217,8 +217,11 @@ impl ToolHandler for Handler {
                 "task_name": args.task_name.clone(),
             });
             let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+            let memories = turn.config.memories.clone();
             tokio::spawn(async move {
-                adapter.capture_event("SubagentStart", payload).await;
+                adapter
+                    .capture_event("SubagentStart", payload, &memories)
+                    .await;
             });
         }
         let _ = result?;

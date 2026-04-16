@@ -174,8 +174,11 @@ impl ToolHandler for Handler {
                 "child_agent_role": subagent_start_role,
             });
             let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+            let memories = turn.config.memories.clone();
             tokio::spawn(async move {
-                adapter.capture_event("SubagentStart", payload).await;
+                adapter
+                    .capture_event("SubagentStart", payload, &memories)
+                    .await;
             });
         }
         let new_thread_id = result?.thread_id;

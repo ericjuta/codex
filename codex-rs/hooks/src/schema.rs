@@ -476,7 +476,10 @@ fn pre_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
 }
 
 fn pre_tool_use_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
-    string_const_schema("Bash")
+    Schema::Object(SchemaObject {
+        instance_type: Some(InstanceType::String.into()),
+        ..Default::default()
+    })
 }
 
 fn user_prompt_submit_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {

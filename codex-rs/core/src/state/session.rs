@@ -32,6 +32,7 @@ pub(crate) struct SessionState {
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
+    pending_session_start_additional_contexts: Vec<String>,
     granted_permissions: Option<PermissionProfile>,
     next_turn_is_first: bool,
 }
@@ -51,6 +52,7 @@ impl SessionState {
             startup_prewarm: None,
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
+            pending_session_start_additional_contexts: Vec::new(),
             granted_permissions: None,
             next_turn_is_first: true,
         }
@@ -216,6 +218,18 @@ impl SessionState {
         &mut self,
     ) -> Option<codex_hooks::SessionStartSource> {
         self.pending_session_start_source.take()
+    }
+
+    pub(crate) fn push_pending_session_start_additional_context(
+        &mut self,
+        additional_context: String,
+    ) {
+        self.pending_session_start_additional_contexts
+            .push(additional_context);
+    }
+
+    pub(crate) fn take_pending_session_start_additional_contexts(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_session_start_additional_contexts)
     }
 
     pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {

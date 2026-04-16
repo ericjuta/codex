@@ -136,6 +136,7 @@ impl ToolHandler for UnifiedExecHandler {
             .map(|args| PreToolUsePayload {
                 tool_name: invocation.tool_name.display(),
                 command: args.cmd,
+                agentmemory_input: None,
             })
     }
 

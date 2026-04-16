@@ -2167,13 +2167,19 @@ impl Session {
             let project = get_git_repo_root(&session_configuration.cwd)
                 .unwrap_or_else(|| session_configuration.cwd.to_path_buf());
             let cwd = session_configuration.cwd.to_path_buf();
+            let memories = config.memories.clone();
             match tokio::time::timeout(
                 AGENTMEMORY_SESSION_LIFECYCLE_TIMEOUT,
-                adapter.start_session(&session_id, project.as_path(), cwd.as_path()),
+                adapter.start_session(&session_id, project.as_path(), cwd.as_path(), &memories),
             )
             .await
             {
-                Ok(Ok(())) => {}
+                Ok(Ok(context)) => {
+                    if adapter.inject_context_enabled(&memories) && !context.trim().is_empty() {
+                        sess.push_pending_session_start_additional_context(context)
+                            .await;
+                    }
+                }
                 Ok(Err(err)) => {
                     warn!("failed to register agentmemory session {session_id}: {err}");
                 }
@@ -2893,8 +2899,11 @@ impl Session {
             }
         {
             let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+            let memories = turn_context.config.memories.clone();
             tokio::spawn(async move {
-                adapter.capture_event("TaskCompleted", payload).await;
+                adapter
+                    .capture_event("TaskCompleted", payload, &memories)
+                    .await;
             });
         }
         let event = Event {
@@ -3000,16 +3009,18 @@ impl Session {
                 "message": message,
                 "delivered": send_result.is_ok(),
             });
+            let memories = self.get_config().await.memories.clone();
             let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+            let observe_memories = memories.clone();
             tokio::spawn(async move {
                 adapter
-                    .capture_event("SubagentStop", subagent_stop_payload)
+                    .capture_event("SubagentStop", subagent_stop_payload, &observe_memories)
                     .await;
             });
             let adapter = crate::agentmemory::AgentmemoryAdapter::new();
             tokio::spawn(async move {
                 adapter
-                    .capture_event("Notification", notification_payload)
+                    .capture_event("Notification", notification_payload, &memories)
                     .await;
             });
         }
@@ -3890,27 +3901,27 @@ impl Session {
         {
             developer_sections.push(developer_instructions.to_string());
         }
-        // Add developer instructions for memories.
-        if turn_context.features.enabled(Feature::MemoryTool)
-            && (turn_context.config.memories.use_memories
-                || turn_context.config.memories.backend
-                    == crate::config::types::MemoryBackend::Agentmemory)
-        {
-            let memory_prompt_opt = match turn_context.config.memories.backend {
-                crate::config::types::MemoryBackend::Agentmemory => {
-                    let adapter = crate::agentmemory::AgentmemoryAdapter::new();
-                    // Provide a default explicit token budget for the startup query context
-                    adapter
-                        .build_startup_developer_instructions(&turn_context.config.codex_home, 2000)
-                        .await
-                }
-                crate::config::types::MemoryBackend::Native => {
-                    build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
-                }
-            };
-            if let Some(memory_prompt) = memory_prompt_opt {
-                developer_sections.push(memory_prompt);
+        // Add developer instructions for assistant-visible memory surfaces.
+        let memory_prompt_opt = match turn_context.config.memories.backend {
+            crate::config::types::MemoryBackend::Agentmemory
+                if turn_context.features.enabled(Feature::MemoryTool) =>
+            {
+                let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+                adapter
+                    .build_startup_developer_instructions(&turn_context.config.codex_home, 2000)
+                    .await
             }
+            crate::config::types::MemoryBackend::Native
+                if turn_context.features.enabled(Feature::MemoryTool)
+                    && turn_context.config.memories.use_memories =>
+            {
+                build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
+            }
+            crate::config::types::MemoryBackend::Agentmemory
+            | crate::config::types::MemoryBackend::Native => None,
+        };
+        if let Some(memory_prompt) = memory_prompt_opt {
+            developer_sections.push(memory_prompt);
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if let Some(collab_instructions) =
@@ -4608,6 +4619,19 @@ impl Session {
         state.take_pending_session_start_source()
     }
 
+    pub(crate) async fn push_pending_session_start_additional_context(
+        &self,
+        additional_context: String,
+    ) {
+        let mut state = self.state.lock().await;
+        state.push_pending_session_start_additional_context(additional_context);
+    }
+
+    pub(crate) async fn take_pending_session_start_additional_contexts(&self) -> Vec<String> {
+        let mut state = self.state.lock().await;
+        state.take_pending_session_start_additional_contexts()
+    }
+
     async fn refresh_mcp_servers_inner(
         &self,
         turn_context: &TurnContext,
@@ -4986,19 +5010,21 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
     {
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
         let session_id = sess.conversation_id.to_string();
+        let memories = config.memories.clone();
         let session_end_payload = serde_json::json!({
             "session_id": session_id.clone(),
             "cwd": config.cwd.display().to_string(),
         });
+        let observe_memories = memories.clone();
         tokio::spawn(async move {
             adapter
-                .capture_event("SessionEnd", session_end_payload)
+                .capture_event("SessionEnd", session_end_payload, &observe_memories)
                 .await;
         });
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
         match tokio::time::timeout(
             AGENTMEMORY_SESSION_SUMMARIZE_TIMEOUT,
-            adapter.summarize_session(&session_id),
+            adapter.summarize_session(&session_id, &memories),
         )
         .await
         {
@@ -5021,7 +5047,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
         }
         match tokio::time::timeout(
             AGENTMEMORY_SESSION_LIFECYCLE_TIMEOUT,
-            adapter.end_session(&session_id),
+            adapter.end_session(&session_id, &memories),
         )
         .await
         {
@@ -5716,7 +5742,7 @@ mod handlers {
     pub async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
         if config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
             let adapter = crate::agentmemory::AgentmemoryAdapter::new();
-            if let Err(e) = adapter.drop_memories().await {
+            if let Err(e) = adapter.drop_memories(&config.memories).await {
                 send_memory_operation_event(
                     sess,
                     &sub_id,
@@ -5813,7 +5839,7 @@ mod handlers {
 
         if config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
             let adapter = crate::agentmemory::AgentmemoryAdapter::new();
-            let result = match adapter.update_memories().await {
+            let result = match adapter.update_memories(&config.memories).await {
                 Ok(result) => result,
                 Err(e) => {
                     send_memory_operation_event(
@@ -5924,7 +5950,12 @@ mod handlers {
         let session_id = sess.conversation_id.to_string();
 
         match adapter
-            .recall_for_runtime(&session_id, config.cwd.as_ref(), query.as_deref())
+            .recall_for_runtime(
+                &session_id,
+                config.cwd.as_ref(),
+                query.as_deref(),
+                &config.memories,
+            )
             .await
         {
             Ok(result) if result.recalled => {
@@ -6942,11 +6973,13 @@ pub(crate) async fn run_turn(
                     {
                         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
                         let payload = stop_request.clone();
+                        let memories = turn_context.config.memories.clone();
                         tokio::spawn(async move {
                             adapter
                                 .capture_event(
                                     "Stop",
                                     serde_json::to_value(&payload).unwrap_or_default(),
+                                    &memories,
                                 )
                                 .await;
                         });

@@ -218,6 +218,7 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
         Some(crate::tools::registry::PreToolUsePayload {
             tool_name: "exec_command".to_string(),
             command: "printf exec command".to_string(),
+            agentmemory_input: None,
         })
     );
 }

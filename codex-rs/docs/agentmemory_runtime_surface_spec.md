@@ -123,6 +123,33 @@ Design rule:
 Instead, create or retain one small shared core helper and have all public
 surfaces call that helper.
 
+## Operator Configuration
+
+For Claude-parity hook injection, the primary operator surface is
+`~/.codex/config.toml`.
+
+Required settings:
+
+- `[memories]`
+  - `backend = "agentmemory"`
+- `[memories.agentmemory]`
+  - `base_url`
+  - `inject_context`
+  - `secret_env_var`
+
+Claude-compatible environment variables remain supported as overrides:
+
+- `AGENTMEMORY_URL`
+- `AGENTMEMORY_SECRET`
+- `AGENTMEMORY_INJECT_CONTEXT`
+
+Design rule:
+
+- persistent setup belongs in `config.toml`
+- env vars remain compatibility and override inputs
+- the assistant-facing `memory_recall` tool is complementary to hook
+  injection, not a replacement for it
+
 ## Session Lifecycle
 
 When `config.memories.backend == Agentmemory`, Codex must register session
@@ -166,6 +193,20 @@ Design rule:
 
 - session lifecycle registration is part of the runtime contract for
   `agentmemory`, not an optional convenience behavior
+
+## Hook Injection Parity
+
+When `config.memories.backend == Agentmemory`, Claude-style hook injection is
+separate from the assistant-facing `memory_recall` tool.
+
+Required behavior:
+
+- startup injection comes from `POST /agentmemory/session/start`
+- pre-tool enrichment comes from `POST /agentmemory/enrich`
+- leaving injection disabled keeps both startup injection and pre-tool
+  enrichment off
+- `Feature::MemoryTool` continues to gate `memory_recall`, but does not disable
+  the hook-based injection lane
 
 ## Runtime Surfaces
 

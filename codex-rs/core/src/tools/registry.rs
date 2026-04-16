@@ -65,6 +65,7 @@ pub trait ToolHandler: Send + Sync {
         Some(PreToolUsePayload {
             tool_name: invocation.tool_name.display(),
             command: invocation.payload.log_payload().into_owned(),
+            agentmemory_input: None,
         })
     }
 
@@ -118,6 +119,7 @@ impl AnyToolResult {
 pub(crate) struct PreToolUsePayload {
     pub(crate) tool_name: String,
     pub(crate) command: String,
+    pub(crate) agentmemory_input: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -125,6 +127,28 @@ pub(crate) struct PostToolUsePayload {
     pub(crate) tool_name: String,
     pub(crate) command: String,
     pub(crate) tool_response: Value,
+}
+
+fn pre_tool_use_hooks_enabled(payload: &PreToolUsePayload) -> bool {
+    matches!(
+        payload.tool_name.as_str(),
+        "shell"
+            | "shell_command"
+            | "local_shell"
+            | "exec_command"
+            | "Edit"
+            | "Write"
+            | "Read"
+            | "Glob"
+            | "Grep"
+    )
+}
+
+fn post_tool_use_hooks_enabled(payload: &PostToolUsePayload) -> bool {
+    matches!(
+        payload.tool_name.as_str(),
+        "shell" | "shell_command" | "local_shell" | "exec_command"
+    )
 }
 
 trait AnyToolHandler: Send + Sync {
@@ -295,21 +319,31 @@ impl ToolRegistry {
             return Err(FunctionCallError::Fatal(message));
         }
 
-        let pre_tool_use_payload = handler.pre_tool_use_payload(&invocation);
-        if let Some(ref payload) = pre_tool_use_payload
-            && let Some(reason) = run_pre_tool_use_hooks(
+        let pre_tool_use_payload = handler
+            .pre_tool_use_payload(&invocation)
+            .filter(pre_tool_use_hooks_enabled);
+        if let Some(ref payload) = pre_tool_use_payload {
+            let pre_tool_use_outcome = run_pre_tool_use_hooks(
                 &invocation.session,
                 &invocation.turn,
                 payload.tool_name.clone(),
                 invocation.call_id.clone(),
                 payload.command.clone(),
+                payload.agentmemory_input.clone(),
             )
-            .await
-        {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "Command blocked by PreToolUse hook: {reason}. Command: {}",
-                payload.command
-            )));
+            .await;
+            record_additional_contexts(
+                &invocation.session,
+                &invocation.turn,
+                pre_tool_use_outcome.additional_contexts,
+            )
+            .await;
+            if let Some(reason) = pre_tool_use_outcome.block_reason {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "Command blocked by PreToolUse hook: {reason}. Command: {}",
+                    payload.command
+                )));
+            }
         }
 
         let is_mutating = handler.is_mutating(&invocation).await;
@@ -356,9 +390,12 @@ impl ToolRegistry {
         emit_metric_for_tool_read(&invocation, success).await;
         let post_tool_use_payload = if success {
             let guard = response_cell.lock().await;
-            guard.as_ref().and_then(|result| {
-                handler.post_tool_use_payload(&invocation, result.result.as_ref())
-            })
+            guard
+                .as_ref()
+                .and_then(|result| {
+                    handler.post_tool_use_payload(&invocation, result.result.as_ref())
+                })
+                .filter(post_tool_use_hooks_enabled)
         } else {
             None
         };

@@ -1037,9 +1037,12 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) =
-                write_pre_tool_use_hook(home, Some("^Bash$"), "json_deny", "blocked by pre hook")
-            {
+            if let Err(error) = write_pre_tool_use_hook(
+                home,
+                Some("^shell_command$"),
+                "json_deny",
+                "blocked by pre hook",
+            ) {
                 panic!("failed to write pre tool use hook test fixture: {error}");
             }
         })
@@ -1084,7 +1087,7 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
     let hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(hook_inputs[0]["hook_event_name"], "PreToolUse");
-    assert_eq!(hook_inputs[0]["tool_name"], "Bash");
+    assert_eq!(hook_inputs[0]["tool_name"], "shell_command");
     assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
     let transcript_path = hook_inputs[0]["transcript_path"]
@@ -1142,9 +1145,12 @@ async fn pre_tool_use_blocks_local_shell_before_execution() -> Result<()> {
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) =
-                write_pre_tool_use_hook(home, Some("^Bash$"), "json_deny", "blocked local shell")
-            {
+            if let Err(error) = write_pre_tool_use_hook(
+                home,
+                Some("^local_shell$"),
+                "json_deny",
+                "blocked local shell",
+            ) {
                 panic!("failed to write pre tool use hook test fixture: {error}");
             }
         })
@@ -1233,9 +1239,12 @@ async fn pre_tool_use_blocks_exec_command_before_execution() -> Result<()> {
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) =
-                write_pre_tool_use_hook(home, Some("^Bash$"), "exit_2", "blocked exec command")
-            {
+            if let Err(error) = write_pre_tool_use_hook(
+                home,
+                Some("^exec_command$"),
+                "exit_2",
+                "blocked exec command",
+            ) {
                 panic!("failed to write pre tool use hook test fixture: {error}");
             }
         })

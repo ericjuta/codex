@@ -65,6 +65,7 @@ impl ToolHandler for MemoryRecallHandler {
                 &session.conversation_id.to_string(),
                 turn.cwd.as_path(),
                 query,
+                &turn.config.memories,
             )
             .await
         {

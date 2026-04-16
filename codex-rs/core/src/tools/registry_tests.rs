@@ -1,5 +1,10 @@
 use super::*;
+use crate::codex::make_session_and_context;
+use crate::tools::context::FunctionToolOutput;
+use crate::turn_diff_tracker::TurnDiffTracker;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 struct TestHandler;
 
@@ -48,4 +53,38 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
             .as_ref()
             .is_some_and(|handler| Arc::ptr_eq(handler, &namespaced_handler))
     );
+}
+
+#[tokio::test]
+async fn default_tool_handler_hook_payloads_are_retained() {
+    let (session, turn) = make_session_and_context().await;
+    let invocation = ToolInvocation {
+        session: session.into(),
+        turn: turn.into(),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+        call_id: "call-1".to_string(),
+        tool_name: codex_tools::ToolName::plain("example_tool"),
+        payload: ToolPayload::Function {
+            arguments: r#"{"alpha":1}"#.to_string(),
+        },
+    };
+
+    assert_eq!(
+        ToolHandler::pre_tool_use_payload(&TestHandler, &invocation),
+        Some(PreToolUsePayload {
+            tool_name: "example_tool".to_string(),
+            command: r#"{"alpha":1}"#.to_string(),
+            agentmemory_input: None,
+        })
+    );
+
+    let post_payload = ToolHandler::post_tool_use_payload(
+        &TestHandler,
+        &invocation,
+        &FunctionToolOutput::from_text("ok".to_string(), None),
+    )
+    .expect("default post-tool payload");
+
+    assert_eq!(post_payload.tool_name, "example_tool");
+    assert_eq!(post_payload.command, r#"{"alpha":1}"#);
 }

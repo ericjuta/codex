@@ -89,3 +89,33 @@ fn write_permissions_for_paths_keep_dirs_outside_workspace_root() {
         Some(vec![expected_outside])
     );
 }
+
+#[test]
+fn agentmemory_patch_tool_name_uses_write_for_add_only_patches() {
+    let patch = r#"*** Begin Patch
+*** Add File: src/new.rs
++fn main() {}
+*** End Patch"#;
+
+    assert_eq!(agentmemory_patch_tool_name(patch), "Write");
+    assert_eq!(
+        patch_paths_from_input(patch),
+        vec!["src/new.rs".to_string()]
+    );
+}
+
+#[test]
+fn agentmemory_patch_tool_name_uses_edit_for_existing_file_patches() {
+    let patch = r#"*** Begin Patch
+*** Update File: src/lib.rs
+@@
+-old
++new
+*** End Patch"#;
+
+    assert_eq!(agentmemory_patch_tool_name(patch), "Edit");
+    assert_eq!(
+        patch_paths_from_input(patch),
+        vec!["src/lib.rs".to_string()]
+    );
+}

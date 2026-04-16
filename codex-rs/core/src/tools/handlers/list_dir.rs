@@ -13,6 +13,7 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
@@ -49,6 +50,26 @@ impl ToolHandler for ListDirHandler {
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
+    }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            return None;
+        };
+        let args: ListDirArgs = parse_arguments(arguments).ok()?;
+        Some(PreToolUsePayload {
+            tool_name: "Glob".to_string(),
+            command: serde_json::to_string(&serde_json::json!({
+                "dir_path": args.dir_path,
+                "offset": args.offset,
+                "limit": args.limit,
+                "depth": args.depth,
+            }))
+            .ok()?,
+            agentmemory_input: Some(serde_json::json!({
+                "dir_path": args.dir_path,
+            })),
+        })
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {

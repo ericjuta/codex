@@ -45,6 +45,11 @@ pub(crate) enum PendingInputRecord {
     },
 }
 
+pub(crate) struct PreToolUseHookRuntimeOutcome {
+    pub block_reason: Option<String>,
+    pub additional_contexts: Vec<String>,
+}
+
 struct ContextInjectingHookOutcome {
     hook_events: Vec<HookCompletedEvent>,
     outcome: HookRuntimeOutcome,
@@ -90,7 +95,10 @@ pub(crate) async fn run_pending_session_start_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
 ) -> bool {
+    let mut pending_additional_contexts =
+        sess.take_pending_session_start_additional_contexts().await;
     let Some(session_start_source) = sess.take_pending_session_start_source().await else {
+        record_additional_contexts(sess, turn_context, pending_additional_contexts).await;
         return false;
     };
 
@@ -106,27 +114,30 @@ pub(crate) async fn run_pending_session_start_hooks(
     if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
         let payload = request.clone();
+        let memories = turn_context.config.memories.clone();
         tokio::spawn(async move {
             adapter
                 .capture_event(
                     "SessionStart",
                     serde_json::to_value(&payload).unwrap_or_default(),
+                    &memories,
                 )
                 .await;
         });
     }
 
     let preview_runs = sess.hooks().preview_session_start(&request);
-    run_context_injecting_hook(
+    let mut outcome = run_context_injecting_hook(
         sess,
         turn_context,
         preview_runs,
         sess.hooks()
             .run_session_start(request, Some(turn_context.sub_id.clone())),
     )
-    .await
-    .record_additional_contexts(sess, turn_context)
-    .await
+    .await;
+    pending_additional_contexts.append(&mut outcome.additional_contexts);
+    outcome.additional_contexts = pending_additional_contexts;
+    outcome.record_additional_contexts(sess, turn_context).await
 }
 
 pub(crate) async fn run_pre_tool_use_hooks(
@@ -135,7 +146,8 @@ pub(crate) async fn run_pre_tool_use_hooks(
     tool_name: String,
     tool_use_id: String,
     command: String,
-) -> Option<String> {
+    agentmemory_input: Option<Value>,
+) -> PreToolUseHookRuntimeOutcome {
     let request = PreToolUseRequest {
         session_id: sess.conversation_id,
         turn_id: turn_context.sub_id.clone(),
@@ -148,17 +160,48 @@ pub(crate) async fn run_pre_tool_use_hooks(
         command,
     };
 
+    let mut additional_contexts = Vec::new();
     if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+        let observe_adapter = adapter.clone();
         let payload = request.clone();
+        let memories = turn_context.config.memories.clone();
+        let observe_memories = memories.clone();
         tokio::spawn(async move {
-            adapter
+            observe_adapter
                 .capture_event(
                     "PreToolUse",
                     serde_json::to_value(&payload).unwrap_or_default(),
+                    &observe_memories,
                 )
                 .await;
         });
+        if adapter.inject_context_enabled(&memories)
+            && matches!(
+                request.tool_name.as_str(),
+                "Edit" | "Write" | "Read" | "Glob" | "Grep"
+            )
+            && let Some(tool_input) = agentmemory_input
+        {
+            match adapter
+                .enrich_context(
+                    &sess.conversation_id.to_string(),
+                    request.tool_name.as_str(),
+                    &tool_input,
+                    &memories,
+                )
+                .await
+            {
+                Ok(context) if !context.trim().is_empty() => additional_contexts.push(context),
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::warn!(
+                        "failed to enrich agentmemory context before tool {}: {err}",
+                        request.tool_name
+                    );
+                }
+            }
+        }
     }
 
     let preview_runs = sess.hooks().preview_pre_tool_use(&request);
@@ -168,10 +211,15 @@ pub(crate) async fn run_pre_tool_use_hooks(
         hook_events,
         should_block,
         block_reason,
+        additional_contexts: hook_additional_contexts,
     } = sess.hooks().run_pre_tool_use(request).await;
     emit_hook_completed_events(sess, turn_context, hook_events).await;
+    additional_contexts.extend(hook_additional_contexts);
 
-    if should_block { block_reason } else { None }
+    PreToolUseHookRuntimeOutcome {
+        block_reason: should_block.then_some(block_reason).flatten(),
+        additional_contexts,
+    }
 }
 
 pub(crate) async fn run_post_tool_use_hooks(
@@ -198,11 +246,13 @@ pub(crate) async fn run_post_tool_use_hooks(
     if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
         let payload = request.clone();
+        let memories = turn_context.config.memories.clone();
         tokio::spawn(async move {
             adapter
                 .capture_event(
                     "PostToolUse",
                     serde_json::to_value(&payload).unwrap_or_default(),
+                    &memories,
                 )
                 .await;
         });
@@ -240,11 +290,13 @@ pub(crate) async fn run_post_tool_use_failure_hooks(
     if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
         let payload = request;
+        let memories = turn_context.config.memories.clone();
         tokio::spawn(async move {
             adapter
                 .capture_event(
                     "PostToolUseFailure",
                     serde_json::to_value(&payload).unwrap_or_default(),
+                    &memories,
                 )
                 .await;
         });
@@ -269,11 +321,13 @@ pub(crate) async fn run_user_prompt_submit_hooks(
     if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
         let adapter = crate::agentmemory::AgentmemoryAdapter::new();
         let payload = request.clone();
+        let memories = turn_context.config.memories.clone();
         tokio::spawn(async move {
             adapter
                 .capture_event(
                     "UserPromptSubmit",
                     serde_json::to_value(&payload).unwrap_or_default(),
+                    &memories,
                 )
                 .await;
         });

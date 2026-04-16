@@ -207,6 +207,7 @@ impl ToolHandler for ShellHandler {
         shell_payload_command(&invocation.payload).map(|command| PreToolUsePayload {
             tool_name: invocation.tool_name.display(),
             command,
+            agentmemory_input: None,
         })
     }
 
@@ -317,6 +318,7 @@ impl ToolHandler for ShellCommandHandler {
         shell_command_payload_command(&invocation.payload).map(|command| PreToolUsePayload {
             tool_name: invocation.tool_name.display(),
             command,
+            agentmemory_input: None,
         })
     }
 
