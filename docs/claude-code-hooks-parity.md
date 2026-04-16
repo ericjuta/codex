@@ -24,9 +24,10 @@ practical behavior for:
 
 - session-start context injection
 - pre-tool enrichment on file/search tools
+- prompt-submit context refresh
 - hook environment variables
 - default-off token-cost posture
-- observation capture for the rest of the lifecycle
+- observation capture and lifecycle side effects for the rest of the session
 
 Parity here means behavioral parity, not merely naming similarity.
 
@@ -49,9 +50,22 @@ At the time of this spec, that contract is:
    - only enriches `Edit|Write|Read|Glob|Grep`
    - calls `POST /agentmemory/enrich`
    - injects returned `context` into the upcoming model turn
-3. `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure`, `PreCompact`,
-   `SubagentStart`, `SubagentStop`, `Notification`, `TaskCompleted`, `Stop`,
-   and `SessionEnd`
+3. `UserPromptSubmit`
+   - always calls `POST /agentmemory/observe`
+   - calls `POST /agentmemory/context/refresh` when the submitted prompt is
+     long enough to justify query-aware retrieval
+   - remains outside the `SessionStart`/`PreToolUse` injection lane, but is
+     still part of full plugin parity
+4. `Stop`
+   - always calls `POST /agentmemory/observe`
+   - always calls `POST /agentmemory/summarize`
+5. `SessionEnd`
+   - always calls `POST /agentmemory/session/end`
+   - when consolidation is enabled, also calls:
+     - `POST /agentmemory/crystals/auto`
+     - `POST /agentmemory/consolidate-pipeline`
+6. `PostToolUse`, `PostToolUseFailure`, `PreCompact`, `SubagentStart`,
+   `SubagentStop`, `Notification`, and `TaskCompleted`
    - are capture-oriented hooks
    - are not part of the context-injection path
 
@@ -93,6 +107,11 @@ Current mismatches:
   than the Claude-style hook contract
 - `PreToolUse` currently rejects `additionalContext`, which blocks Claude-style
   pre-tool enrichment entirely
+- prompt-submit parity is underspecified relative to the plugin's current
+  `observe` plus `context/refresh` behavior
+- stop/session-end parity is underspecified relative to the plugin's current
+  `summarize`, `session/end`, optional `crystals/auto`, and optional
+  `consolidate-pipeline` behavior
 - Codex currently supports `additional_context` after tool execution, which is
   useful but is not a substitute for pre-tool enrichment
 
@@ -281,6 +300,50 @@ In particular:
 If the fork later wants broader enrichment, that belongs in a new spec, not in
 the Claude parity lane.
 
+## UserPromptSubmit Parity
+
+### Required Behavior
+
+`UserPromptSubmit` remains a capture-oriented hook, but full plugin parity
+still requires its current side effects.
+
+Codex must:
+
+1. call `POST /agentmemory/observe`
+2. send the prompt payload in Claude-compatible shape
+3. when the submitted prompt is long enough to justify refresh, call
+   `POST /agentmemory/context/refresh`
+4. inject returned `context` when the backend returns non-empty context and the
+   backend does not mark the request as skipped
+
+Design rule:
+
+- `UserPromptSubmit` is not a substitute for `SessionStart` or `PreToolUse`
+  injection, but it is still part of the current plugin contract
+
+## Stop And SessionEnd Parity
+
+### Stop
+
+Codex must:
+
+1. call `POST /agentmemory/observe`
+2. call `POST /agentmemory/summarize`
+
+This is required parity behavior, not an optional enhancement.
+
+### SessionEnd
+
+Codex must:
+
+1. call `POST /agentmemory/session/end`
+2. when the parity-equivalent consolidation mode is enabled, also call:
+   - `POST /agentmemory/crystals/auto`
+   - `POST /agentmemory/consolidate-pipeline`
+
+The exact config knob may be Codex-native, but the behavior must remain
+equivalent to the plugin's enabled path.
+
 ## Observation Parity
 
 This spec is about context injection parity, but the surrounding hook capture
@@ -343,6 +406,14 @@ This lane is complete only when all of the following are true.
   by config/env precedence
 - `PreToolUse` injection is limited to `Edit|Write|Read|Glob|Grep`
 - `PreToolUse` accepts `additionalContext`
+- `UserPromptSubmit` still calls `observe`
+- `UserPromptSubmit` uses `/agentmemory/context/refresh` for query-aware
+  refresh when appropriate
+- `Stop` still calls `observe`
+- `Stop` still calls `summarize`
+- `SessionEnd` still calls `session/end`
+- when consolidation is enabled, `SessionEnd` also calls `crystals/auto` and
+  `consolidate-pipeline`
 - `memory_recall` remains available only on the assistant tool surface when its
   existing feature/backend gates are satisfied
 - `memories.agentmemory.base_url` controls the backend URL when no override env
@@ -363,6 +434,10 @@ At minimum, add or update tests that prove:
 - pre-tool enrichment injects context for `Edit|Write|Read|Glob|Grep`
 - pre-tool enrichment does not inject for non-matching tools
 - `PreToolUse` parsing accepts valid `additionalContext`
+- prompt-submit parity keeps `observe` and `context/refresh` wired together
+- stop parity keeps `observe` and `summarize` wired together
+- session-end parity keeps `session/end` wired and, when enabled,
+  `crystals/auto` plus `consolidate-pipeline`
 - `memories.agentmemory.base_url` is honored by the parity path
 - `memories.agentmemory.inject_context` is honored by the parity path
 - `memories.agentmemory.secret_env_var` resolves auth correctly
@@ -379,6 +454,10 @@ Update runtime-facing docs so they say:
 - env vars remain compatible overrides
 - startup injection comes from `session/start`
 - pre-tool enrichment comes from `enrich`
+- prompt-submit refresh comes from `context/refresh`
+- stop still summarizes the session
+- session end still closes the session and, when enabled, runs the same
+  maintenance calls as the plugin
 - `memory_recall` is complementary, not a replacement for hook injection
 
 ## Explicit Non-Goals

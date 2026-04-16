@@ -66,8 +66,16 @@ The correct runtime design for this fork is:
 
 1. `agentmemory` is the one authoritative runtime memory backend.
 2. There is one canonical core recall/update/drop implementation.
-3. The human gets an explicit TUI slash-command control plane.
-4. The assistant gets a first-class internal recall tool.
+3. The human gets an explicit TUI memory control plane for:
+   - recall
+   - remember
+   - knowledge review (`lessons`, `crystals`, `insights`)
+   - action orchestration
+4. The assistant gets first-class internal memory tools for:
+   - recall
+   - remember
+   - read-only knowledge access
+   - action-aware coordination when enabled
 5. Both surfaces reuse the same core semantics and backend adapter.
 6. MCP is not part of this lane.
 
@@ -125,9 +133,16 @@ Required calls:
 
 - on session initialization:
   - POST `/agentmemory/session/start`
+- during prompt submission:
+  - POST `/agentmemory/observe`
+  - POST `/agentmemory/context/refresh` when query-aware refresh applies
 - on session shutdown:
+  - POST `/agentmemory/observe`
   - POST `/agentmemory/summarize`
   - POST `/agentmemory/session/end`
+  - when consolidation is enabled:
+    - POST `/agentmemory/crystals/auto`
+    - POST `/agentmemory/consolidate-pipeline`
 
 Required behavior:
 
@@ -160,6 +175,7 @@ Design rule:
 Keep these slash commands:
 
 - `/memory-recall [query]`
+- `/memory-remember [content]`
 - `/memory-update`
 - `/memory-drop`
 
@@ -177,10 +193,88 @@ Required UX behavior:
   - show an explicit "no relevant memory context found" message
 - on recall error:
   - show an error event
+- on remember success:
+  - show a concrete saved-memory acknowledgement
+- on remember failure:
+  - show a concrete error event
 - on update/drop success:
   - show a concrete completion message, not only a vague "triggered" message
 - on recall without a thread:
   - show an explicit thread/session requirement message
+
+### Human Remember Surface
+
+Codex should expose an explicit human-facing durable-write control backed by:
+
+- `POST /agentmemory/remember`
+
+Minimum behavior:
+
+- allow a user to save a durable memory explicitly without relying on passive
+  hook capture
+- keep the write visible in transcript/history UI
+- make success and failure visible to the human
+
+Minimum input shape:
+
+- `content`
+- optional workspace/project context when available
+
+Design rule:
+
+- explicit remember writes are a different product surface from passive
+  observation capture and should not be hidden inside generic update flows
+
+### Human Knowledge Surfaces
+
+Codex should expose first-class human review surfaces for the derived knowledge
+objects already produced by `agentmemory`:
+
+- lessons
+- crystals
+- insights
+
+Minimum backend operations to support:
+
+- `GET /agentmemory/lessons`
+- `POST /agentmemory/lessons/search`
+- `GET /agentmemory/crystals`
+- `POST /agentmemory/crystals/create`
+- `POST /agentmemory/crystals/auto`
+- `POST /agentmemory/reflect`
+- `GET /agentmemory/insights`
+- `POST /agentmemory/insights/search`
+
+The exact UI may be slash commands, dedicated panes, or visible transcript
+cells, but the operator must be able to:
+
+- inspect current lessons/crystals/insights
+- trigger the distillation paths that produce them when appropriate
+
+### Human Action Surface
+
+Codex should expose a first-class human-facing action surface backed by the
+agentmemory orchestration endpoints.
+
+Minimum backend operations to support:
+
+- `GET /agentmemory/actions`
+- `POST /agentmemory/actions`
+- `POST /agentmemory/actions/update`
+- `GET /agentmemory/frontier`
+- `GET /agentmemory/next`
+
+The operator should be able to:
+
+- create actions explicitly
+- inspect current/open actions
+- update action status
+- ask the backend for suggested next work
+
+Design rule:
+
+- actions are not observations and not memories; they are explicit work items
+  and should appear as such in the runtime UX
 
 ### Visual Memory UI
 
@@ -191,6 +285,7 @@ Minimum visual fields:
 
 - operation:
   - recall
+  - remember
   - update
   - drop
 - status:
@@ -201,6 +296,8 @@ Minimum visual fields:
 - query when present
 - whether recalled context was injected into the current thread
 - a wrapped preview body for recalled context or error detail
+- operation-specific summary for remember / lessons / crystals / insights /
+  actions when those surfaces are invoked
 
 Design rule:
 
@@ -214,15 +311,17 @@ Human-surface principle:
 
 ### Assistant Surface
 
-Add one first-class internal tool for recall.
+Add first-class internal memory tools.
 
-Recommended initial tool:
+Minimum required initial tools:
 
 - `memory_recall`
+- `memory_remember`
 
 Recommended initial parameters:
 
 - `query: Option<String>`
+- `content: String` for `memory_remember`
 
 Recommended initial output:
 
@@ -249,16 +348,53 @@ If nothing is found:
 Design rule:
 
 - expose recall to the assistant first
+- expose explicit remember writes rather than forcing the assistant to rely only
+  on passive observation capture
 - do not expose destructive memory-drop behavior to the assistant in this lane
-- do not expose memory-update to the assistant unless a concrete product need
-  emerges later
 
 Rationale:
 
 - recall helps the assistant reason
-- update is operational and low-value per turn
+- remember lets the assistant preserve high-value knowledge explicitly
+- update remains operational and low-value per turn
 - drop is destructive and should remain explicit human control unless policy
   changes later
+
+### Assistant Knowledge Surface
+
+Codex should expose read-oriented assistant tools for the derived knowledge
+objects when the backend is `Agentmemory`.
+
+Minimum useful capabilities:
+
+- list/search lessons
+- list crystals
+- list/search insights
+
+Design rule:
+
+- prefer read-only assistant access for derived knowledge objects
+- triggering distillation jobs like `reflect` or `auto-crystallize` may remain
+  human-initiated unless and until a stronger product need appears
+
+### Assistant Action Surface
+
+Codex should expose action-aware assistant tools when `agentmemory` is enabled
+so the assistant can coordinate around explicit work items rather than only raw
+observations.
+
+Minimum useful capabilities:
+
+- list actions
+- inspect next/frontier suggestions
+
+Stretch capabilities for the same lane:
+
+- create actions
+- update action status
+
+If assistant-side action mutation is enabled, it must remain clearly visible to
+the human as structured memory/action UI, not silent background state changes.
 
 ## Enablement Gates
 
@@ -304,6 +440,15 @@ They should differ only in presentation:
 This means the human and assistant surfaces are parallel views over one memory
 engine, not separate systems.
 
+The same principle applies to:
+
+- explicit remember writes
+- lessons/crystals/insights review
+- action orchestration
+
+There should not be one "human-only real path" and one "assistant-only fake
+path" for those surfaces.
+
 ## Observation and Hook Capture
 
 This lane is not only about recall. It also defines the minimum observation
@@ -323,6 +468,21 @@ runtime events to the backend:
 - `Stop`
 
 These are the minimum required events for this lane.
+
+In addition, the lane requires the current plugin-aligned side effects attached
+to some of those hooks:
+
+- `UserPromptSubmit`
+  - must retain prompt capture via `observe`
+  - must use `context/refresh` for query-aware mid-session retrieval when
+    applicable
+- `Stop`
+  - must retain `observe`
+  - must also call `summarize`
+- `SessionEnd`
+  - must call `session/end`
+  - when consolidation is enabled, must also call `crystals/auto` and
+    `consolidate-pipeline`
 
 ### Declared But Optional Hook Families
 
@@ -453,15 +613,23 @@ This lane does not include:
 ## Rollout Order
 
 1. Stabilize human-visible slash-command behavior for recall/update/drop.
-2. Factor or confirm one shared core recall path backed by `AgentmemoryAdapter`.
-3. Add the assistant-facing `memory_recall` internal tool.
-4. Align runtime instructions and tool-surface documentation with reality.
-5. Add focused tests for:
+2. Add explicit remember surface on the same backend seam.
+3. Add read-oriented lessons/crystals/insights surfaces.
+4. Add action list/frontier/next visibility, then optional action mutation.
+5. Factor or confirm one shared core retrieval/write path backed by
+   `AgentmemoryAdapter`.
+6. Add the assistant-facing `memory_recall` and `memory_remember` tools.
+7. Align runtime instructions and tool-surface documentation with reality.
+8. Add focused tests for:
    - human submit feedback
    - human success/empty/error rendering
    - human inline-query recall rendering
+   - explicit remember writes
+   - lessons/crystals/insights surfaces
+   - action list/frontier/next surfaces
    - assistant tool exposure gates
    - assistant tool recall output
+   - assistant remember output
    - session lifecycle start/summarize/end ordering
    - required hook observation capture
    - replay/resume reconstruction of human-visible memory actions
@@ -476,10 +644,17 @@ The lane is done when all of the following are true:
   the TUI history
 - the recall/update/drop history entries are visually distinct memory cells, not
   generic warnings or info bullets
+- a human can explicitly save durable memory with a visible remember surface
+- a human can inspect lessons, crystals, and insights without leaving Codex
+- a human can view and manage actions/frontier/next work using the backend
 - `/memory-update` and `/memory-drop` visibly acknowledge both submission and
   completion
 - the assistant can call a first-class internal recall tool when memory is
   enabled for `agentmemory`
+- the assistant can explicitly remember durable knowledge when memory is
+  enabled for `agentmemory`
+- the assistant can access read-oriented lessons/crystals/insights surfaces
+- the assistant can access at least action list/frontier/next surfaces
 - the assistant no longer has to infer memory availability from unrelated MCP
   surfaces
 - there is one canonical core recall path, not parallel retrieval
@@ -504,7 +679,8 @@ Expected primary files for this lane:
 - `core/src/tools/spec.rs`
 - `core/src/tools/handlers/mod.rs`
 - `core/src/tools/handlers/`:
-  add a dedicated memory-recall handler module
+  add dedicated memory-recall / memory-remember / knowledge / action handler
+  modules as needed
 - `core/src/tools/spec_tests.rs`
 - `core/tests/suite/agentmemory_session_lifecycle.rs`
 - `core/src/hook_runtime.rs`

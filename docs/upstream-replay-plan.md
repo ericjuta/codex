@@ -55,13 +55,20 @@ Replay first:
 
 Expected shape after cleanup: 3 to 5 commits instead of the original stack.
 
-### 2. Runtime recall and structured memory event lane
+### 2. Runtime memory surface lane
 
 Replay after the backend contract is stable:
 
 - `063e8ea819` Add agentmemory runtime recall surface
 - `09311f040f` Refine proactive agentmemory recall guidance
 - `713dbb3804` Add structured memory operation events
+
+Target shape after replay:
+
+- explicit human/assistant recall
+- explicit remember surface
+- read-oriented lessons/crystals/insights surface
+- action list/frontier/next surface, with mutation support if the lane carries it
 
 Expected shape after cleanup: 1 to 2 commits.
 
