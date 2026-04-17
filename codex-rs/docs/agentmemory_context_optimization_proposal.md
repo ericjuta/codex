@@ -143,7 +143,8 @@ The planner should decide:
 - which backend endpoint to call,
 - what request budget to pass,
 - whether the result should be turn-local or thread-persisted,
-- and whether a previously injected result should be suppressed as a duplicate.
+- and whether an exact duplicate result should be suppressed in the immediate
+  runtime window.
 
 This keeps the current backend contract intact while making behavior coherent.
 It also avoids duplicating backend-side lane ranking, budgeting, and
@@ -285,10 +286,10 @@ Required enabled-path behavior:
   - "thanks"
   - a single-word acknowledgement with no task content
 - the default enabled path must not rely on prompt length as the primary gate
-- the planner may skip only when:
+- the runtime may skip only when:
   - the turn is trivial by the rule above
-  - identical context was injected recently enough to trigger reinjection
-    suppression
+  - exact same context was already injected in the immediate duplicate
+    suppression window
   - retrieval failed and fallback also failed
 
 ### 3. Align with the agentmemory-native retrieval model
@@ -307,47 +308,43 @@ Codex should own only:
 - endpoint selection
 - request-budget selection
 - explicit persistence scope
-- cross-turn reinjection suppression for already injected context blocks
+- exact-duplicate suppression for already injected context blocks in the
+  immediate runtime window
 
 Two layers of dedupe are correct:
 
 - backend dedupe:
   - deduplicate candidate memory blocks within one retrieval result
 - Codex dedupe:
-  - avoid reinjecting the same returned context block on adjacent turns with no
-    new signal
+  - avoid reinjecting the exact same returned context block inside the same
+    request path and across the immediately adjacent turn or two
 
-### 4. Replace prompt-length refresh with signal-based refresh
+### 4. Aggressive User-Turn Retrieval
 
-Stop using prompt length as the main retrieval heuristic.
+Stop using prompt length and weak heuristic steering as the main retrieval
+gate.
 
-Refresh should trigger on signal such as:
+Enabled-path rule:
 
-- prompt references a file, module, bug, ticket, or earlier decision
-- resumed thread or post-compaction turn
-- cwd/project/branch changes
-- the prompt materially changes from the last retrieval query
-- previous tool output created a new retrieval opportunity
+- on every non-trivial user turn, first call `/agentmemory/context/refresh`
+  with the full user-turn query
+- if `/agentmemory/context/refresh` returns non-empty context, inject it
+  immediately into the active turn
+- if `/agentmemory/context/refresh` returns `skipped = true`, empty context, or
+  no context, then always fall back to `/agentmemory/context`
+- if fallback `/agentmemory/context` returns non-empty context, inject it
+  immediately into the active turn
+- if both calls return no usable context, emit a visible "retrieval attempted
+  but empty" result
 
-Refresh should skip when:
+Design rule:
 
-- the prompt is a trivial steer with no new retrieval signal
-- the same reinjection key was injected recently
-- the planner budget is exhausted
+- retrieve aggressively
+- inject aggressively
+- persist selectively
 
-Rationale:
-
-- retrieval value is semantic, not length-based
-
-When refresh is selected:
-
-- first call `/agentmemory/context/refresh` with the query
-- if that returns `skipped = true`, empty context, or no context at all, and
-  retrieval still appears warranted, fall back to `/agentmemory/context` with
-  an explicit budget
-
-That fallback already exists in another `agentmemory` integration and should be
-the Codex behavior too.
+The point of the enabled path is maximum runtime context availability, not
+minimal token spend or elegant sparsity.
 
 Required enabled-path rule:
 
@@ -406,8 +403,11 @@ Aggressive pre-tool behavior:
 - no mode gate or secondary selectiveness gate beyond capability eligibility
 - no shell / exec auto-enrichment
 - no network-mutating auto-enrichment
+- any non-empty enrich result should be injected immediately into the active
+  turn
 - Codex may still suppress exact repeated reinjection of identical returned
-  context within the same turn or on adjacent turns
+  context within the same request path and across the immediately adjacent turn
+  or two
 
 ### 6. Make persistence explicit
 
@@ -432,7 +432,14 @@ Rules:
 
 No silent promotion from `turn` to `thread`.
 
-### 7. Add caller budgets and reinjection suppression
+Design rule:
+
+- more persistence is not the same as more usable context
+- thread persistence should remain selective
+- aggressive automatic retrieval should still prefer turn-local injection by
+  default
+
+### 7. Add caller budgets and exact-duplicate suppression
 
 Introduce explicit caps such as:
 
@@ -447,8 +454,9 @@ Planner requirements:
 - pass explicit request budgets down to `agentmemory`
 - do not re-split hot / warm / cold budgets locally in Codex
 - hash the returned context block before injection
-- avoid reinjecting identical context on adjacent turns unless reason or query
-  changed
+- suppress exact duplicate returned context blocks within the same request path
+  and across the immediate adjacent-turn window
+- do not attempt broad fuzzy semantic suppression in the first implementation
 - record budget requested and budget used when the backend returns that data
 
 ### 8. Make injection visible
@@ -508,6 +516,16 @@ menu of user-facing policy modes.
 If Codex needs numeric tuning such as budgets or reinjection windows, prefer
 internal constants first. Add config knobs only if later evidence shows that
 operators truly need them.
+
+Default runtime meaning of `inject_context=true`:
+
+- always retrieve on every non-trivial user turn
+- always `context/refresh -> context`
+- always inject any non-empty result
+- always enrich every eligible file/search/write tool turn
+- always use `turn` scope for automatic injection
+- only persist selectively
+- only suppress exact duplicate blocks in the immediate runtime window
 
 ## Human / Assistant Surface Alignment
 
@@ -601,10 +619,11 @@ Add or update tests that prove:
   retrieval, but ordinary task-bearing turns may not
 - enabled injection falls back from `/context/refresh` to `/context` when query
   refresh yields no context but retrieval is still warranted
+- any non-empty automatic retrieval result is injected into the current turn
 - capability-based pre-tool enrichment covers tools with structured
   `agentmemory_input`, not just hardcoded names
-- identical recalled context is not reinjected repeatedly without a new reason
-  or stale-window expiry
+- exact duplicate context blocks are suppressed only within the immediate
+  runtime window
 - every eligible capability-class pre-tool turn attempts enrichment when
   injection is enabled
 - human recall persists to thread history with explicit scope metadata
@@ -628,10 +647,12 @@ This proposal is implemented well when all of the following are true:
 - prompt refresh no longer depends on prompt length alone
 - query-aware refresh falls back cleanly to general context retrieval when
   needed
+- any non-empty auto-retrieved context is injected into the active turn
 - file/search/write enrichment is capability-driven, not string-list-driven
 - eligible pre-tool turns attempt enrichment by default when injection is
   enabled
-- token cost and reinjection policy are explicit and testable
+- automatic injection remains `turn` scope by default
+- token cost and exact-duplicate suppression policy are explicit and testable
 - human and assistant recall differ only where the product intentionally says
   they differ
 - every injected memory block has visible provenance and scope
