@@ -87,13 +87,8 @@ Design consequence:
 ### 1. One boolean controls multiple strategies
 
 `inject_context = true` currently means "turn on the parity lane", but it does
-not say how aggressive or conservative retrieval should be. The operator cannot
-express:
-
-- disable auto injection entirely
-- keep the current parity behavior
-- use a more retrieval-forward balanced mode
-- use a more aggressive mode with larger budgets
+not yet deliver the aggressive retrieval behavior desired for always-on
+operators.
 
 ### 2. Automatic retrieval is fragmented
 
@@ -138,9 +133,8 @@ The current design does not expose one clear per-turn policy for:
 
 ## Decision
 
-Codex should add a unified `agentmemory` context planner and treat the current
-boolean injection flag as a compatibility shim, not the long-term product
-surface.
+Codex should add a unified `agentmemory` context planner and keep
+`inject_context` as the only operator-facing switch for automatic injection.
 
 The planner should decide:
 
@@ -153,6 +147,14 @@ The planner should decide:
 This keeps the current backend contract intact while making behavior coherent.
 It also avoids duplicating backend-side lane ranking, budgeting, and
 deduplication that `agentmemory` already performs.
+
+Enabled-path rule:
+
+- `inject_context = false`
+  - no automatic injection
+- `inject_context = true`
+  - one aggressive automatic policy
+  - no additional mode selector
 
 ## Goals
 
@@ -176,27 +178,26 @@ deduplication that `agentmemory` already performs.
 
 ## Proposed Design
 
-### 1. Introduce `context_policy`
+### 1. Keep One Operator Switch
 
-Replace the one-bit model with an explicit policy enum:
+Do not add a policy matrix such as `parity|balanced|aggressive`.
 
-- `off`
-- `parity`
-- `balanced`
-- `aggressive`
+Keep:
 
-Compatibility rules:
+- `inject_context = false`
+- `inject_context = true`
 
-- `inject_context = false` maps to `off`
-- `inject_context = true` with no explicit policy maps to `parity`
-- docs should recommend `balanced` for operators who intentionally run
-  `agentmemory` as a normal always-on part of their workflow
+Meaning:
+
+- `false` disables automatic injection
+- `true` enables the single aggressive automatic strategy defined in this
+  document
 
 Rationale:
 
-- preserves backward compatibility
-- separates "enabled" from "how hard should we optimize"
-- gives the product a place to evolve without overloading one boolean
+- matches the requested product shape
+- avoids a config surface full of vague retrieval personalities
+- forces the design discussion onto actual behavior instead of naming modes
 
 ### 2. Add a unified context planner
 
@@ -321,16 +322,17 @@ Design rule:
 
 - a new file/search tool should become eligible through capability
   classification, not through adding another string comparison
-- do not automatically call `/agentmemory/enrich` on every eligible tool turn
-- pre-tool enrichment should remain the most selective automatic lane because
-  `agentmemory` itself treats this path as expensive when injection is enabled
+- when `inject_context = true`, automatically call `/agentmemory/enrich` on
+  every eligible capability-class tool turn
 
-Pre-tool enrichment should require:
+Aggressive pre-tool behavior:
 
-- structured file or term inputs worth retrieving against
-- no equivalent enrichment already injected earlier in the same turn
-- a dedicated small request budget
-- a hard cap on enrich calls per turn
+- structured file or term inputs should be forwarded whenever available
+- no mode gate or secondary selectiveness gate beyond capability eligibility
+- no shell / exec auto-enrichment
+- no network-mutating auto-enrichment
+- Codex may still suppress exact repeated reinjection of identical returned
+  context within the same turn or on adjacent turns
 
 ### 6. Make persistence explicit
 
@@ -362,7 +364,6 @@ Introduce explicit caps such as:
 - `query_context_budget_tokens`
 - `pretool_context_budget_tokens`
 - `max_auto_injections_per_turn`
-- `max_pretool_injections_per_turn`
 - `reinject_after_turns`
 
 Planner requirements:
@@ -372,7 +373,6 @@ Planner requirements:
 - hash the returned context block before injection
 - avoid reinjecting identical context on adjacent turns unless reason or query
   changed
-- avoid re-enriching the same file/tool payload repeatedly inside one turn
 - record budget requested and budget used when the backend returns that data
 
 ### 8. Make injection visible
@@ -409,58 +409,29 @@ This proposal does not require a new backend planning endpoint up front.
 
 ## Configuration Proposal
 
-Add a richer config surface:
+Keep the operator surface minimal:
 
 ```toml
 [memories.agentmemory]
-context_policy = "parity" # off | parity | balanced | aggressive
-default_context_budget_tokens = 600
-query_context_budget_tokens = 900
-pretool_context_budget_tokens = 300
-max_auto_injections_per_turn = 2
-max_pretool_injections_per_turn = 1
-reinject_after_turns = 8
-assistant_recall_thread_injection = "explicit" # explicit | disabled
+inject_context = true
 ```
 
-Compatibility rules:
+Meaning:
 
-- existing `inject_context` remains supported
-- config loading maps old boolean semantics when `context_policy` is absent
-- environment overrides remain supported for compatibility, but docs should
-  prefer the policy-based config surface
+- `inject_context = false`
+  - no automatic injection
+- `inject_context = true`
+  - startup injection enabled
+  - query-aware refresh enabled
+  - `/context/refresh -> /context` fallback enabled
+  - aggressive capability-class pre-tool enrichment enabled
 
-## Behavior By Policy
+The rest of the behavior in this proposal should be runtime defaults, not a
+menu of user-facing policy modes.
 
-### `off`
-
-- no startup injection
-- no prompt-refresh injection
-- no pre-tool enrichment
-- explicit human/assistant recall still works when invoked directly
-
-### `parity`
-
-- preserve current Claude-parity behavior
-- keep conservative tool coverage
-- useful as the compatibility/default mapping for old boolean setups
-
-### `balanced`
-
-- recommended for operators who intentionally run `agentmemory` as part of
-  normal workflow
-- signal-based refresh on meaningful user turns
-- `/context/refresh` first, `/context` fallback when retrieval is still
-  warranted
-- capability-based pre-tool enrichment with strong selectivity
-- strict caller budgets and reinjection controls
-- explicit visibility for every inject/skip decision
-
-### `aggressive`
-
-- same planner model, looser budgets
-- more willingness to refresh after large context shifts
-- still no shell/exec auto-enrichment
+If Codex needs numeric tuning such as budgets or reinjection windows, prefer
+internal constants first. Add config knobs only if later evidence shows that
+operators truly need them.
 
 ## Human / Assistant Surface Alignment
 
@@ -493,10 +464,9 @@ Primary files:
 
 Deliverables:
 
-- `context_policy` config
 - planner output type
 - budget/dedupe tracking
-- no behavior expansion beyond `parity`
+- `inject_context=true` maps to the aggressive automatic strategy
 
 ### Phase 2. Replace brittle heuristics
 
@@ -511,6 +481,7 @@ Deliverables:
 - signal-based prompt refresh
 - `/context/refresh` to `/context` fallback behavior
 - capability-based pre-tool eligibility
+- aggressive pre-tool enrichment for every eligible capability-class tool turn
 - tests for reinjection suppression and skip reasons
 
 ### Phase 3. Align recall semantics
@@ -538,24 +509,26 @@ Primary files:
 Deliverables:
 
 - clear operator guidance
-- recommendation to use `balanced` when `agentmemory` is intentionally
-  always-on
+- make it explicit that `inject_context=true` means aggressive automatic
+  injection
 - full acceptance-test coverage
 
 ## Verification
 
 Add or update tests that prove:
 
-- `parity` mode preserves current behavior
-- `balanced` mode can inject on meaningful user turns without the prompt-length
-  heuristic
-- `balanced` mode falls back from `/context/refresh` to `/context` when query
+- `inject_context=false` disables automatic injection
+- `inject_context=true` enables aggressive automatic injection
+- enabled injection can inject on meaningful user turns without the
+  prompt-length heuristic
+- enabled injection falls back from `/context/refresh` to `/context` when query
   refresh yields no context but retrieval is still warranted
 - capability-based pre-tool enrichment covers tools with structured
   `agentmemory_input`, not just hardcoded names
 - identical recalled context is not reinjected repeatedly without a new reason
   or stale-window expiry
-- identical tool payloads do not repeatedly trigger enrich within one turn
+- every eligible capability-class pre-tool turn attempts enrichment when
+  injection is enabled
 - human recall persists to thread history with explicit scope metadata
 - assistant recall can remain turn-local or explicitly persist to thread
 - replay/resume shows why a memory block was injected and under what scope
@@ -567,24 +540,23 @@ Add or update tests that prove:
 
 This proposal is implemented well when all of the following are true:
 
-- users who already run with `agentmemory` enabled get more relevant automatic
-  recall than the current parity lane
+- users who run with `agentmemory` enabled get more relevant automatic recall
+  than the current parity lane
 - prompt refresh no longer depends on prompt length alone
 - query-aware refresh falls back cleanly to general context retrieval when
   needed
 - file/search/write enrichment is capability-driven, not string-list-driven
+- eligible pre-tool turns attempt enrichment by default when injection is
+  enabled
 - token cost and reinjection policy are explicit and testable
 - human and assistant recall differ only where the product intentionally says
   they differ
 - every injected memory block has visible provenance and scope
 - Codex acts as a strong caller of `agentmemory`'s retrieval model rather than
   reimplementing it
-- parity users can stay conservative without opt-in breakage
 
 ## Open Questions
 
-- Should `balanced` become the documented recommendation as soon as the
-  planner lands, or only after token-cost validation?
 - Is assistant thread injection better modeled as a `memory_recall` scope enum
   or as a second explicit tool?
 - Do we eventually want a backend endpoint that returns ranked candidates plus
