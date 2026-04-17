@@ -15,6 +15,18 @@ Short answer: no. The current implementation is conservative and coherent
 enough for parity, but it is not yet optimized for retrieval yield,
 deduplication, or clear persistence semantics.
 
+After verification against the local `agentmemory` repository, one correction
+is important up front: `agentmemory` already owns substantial retrieval logic.
+Its `mem::context` path already implements:
+
+- hot / warm / cold retrieval lanes
+- query-aware lane budgeting
+- cross-lane fingerprint deduplication
+- session working-set and turn-capsule freshness handling
+
+So the Codex problem is not "missing retrieval architecture" on the backend.
+The Codex problem is that it is still a weak caller of that architecture.
+
 This proposal assumes the operator baseline is already:
 
 ```toml
@@ -46,6 +58,29 @@ Relevant current implementation lives in:
 
 That shape is reasonable for a conservative parity lane. It is not a
 min-maxed memory system.
+
+## Verified Agentmemory Constraints
+
+The proposal below should align with these existing `agentmemory` realities:
+
+- `mem::context` already budgets hot / warm / cold lanes at 40/30/30 without a
+  query and 20/40/40 with a query
+- `mem::context` already performs cross-lane deduplication before emitting the
+  final `<agentmemory-context ...>` block
+- `/agentmemory/context/refresh` is the query-aware re-ranking path, not a
+  different memory system
+- at least one other integration (`integrations/openclaw`) already falls back
+  from `/agentmemory/context/refresh` to `/agentmemory/context`
+- `memory_recall` / `mem::search` already support token-budgeted outputs
+
+Design consequence:
+
+- Codex should not implement a second retrieval-ranking engine on top of
+  `agentmemory`
+- Codex should decide when to retrieve, what query to send, what budget to
+  request, and what persistence scope to apply
+- `agentmemory` should remain the owner of freshness ranking and intra-response
+  deduplication
 
 ## Current Problems
 
@@ -111,11 +146,13 @@ The planner should decide:
 
 - whether retrieval is warranted,
 - which backend endpoint to call,
-- how much context budget is available,
+- what request budget to pass,
 - whether the result should be turn-local or thread-persisted,
-- and whether a candidate should be suppressed as a duplicate.
+- and whether a previously injected result should be suppressed as a duplicate.
 
 This keeps the current backend contract intact while making behavior coherent.
+It also avoids duplicating backend-side lane ranking, budgeting, and
+deduplication that `agentmemory` already performs.
 
 ## Goals
 
@@ -188,20 +225,47 @@ The planner returns a structured decision:
   - `context/refresh`
   - `enrich`
   - `context`
-- `budget_tokens`
+- `request_budget_tokens`
 - `inject_scope`
   - `none`
   - `turn`
   - `thread`
-- `dedupe_key`
+- `reinject_key`
 - `skip_reason`, when suppressed
 
 Design rule:
 
-- backend endpoints are transport details
-- product semantics live in the planner
+- backend retrieval/ranking stays in `agentmemory`
+- caller-side timing, budget selection, scope, and reinjection suppression live
+  in the planner
 
-### 3. Replace prompt-length refresh with signal-based refresh
+### 3. Align with the agentmemory-native retrieval model
+
+Codex should treat `agentmemory` as the retrieval engine of record.
+
+That means:
+
+- do not recreate hot / warm / cold lane assembly in Codex
+- do not recreate query-aware lane splits in Codex
+- do not attempt content-level deduplication inside the returned context block
+
+Codex should own only:
+
+- trigger selection
+- endpoint selection
+- request-budget selection
+- explicit persistence scope
+- cross-turn reinjection suppression for already injected context blocks
+
+Two layers of dedupe are correct:
+
+- backend dedupe:
+  - deduplicate candidate memory blocks within one retrieval result
+- Codex dedupe:
+  - avoid reinjecting the same returned context block on adjacent turns with no
+    new signal
+
+### 4. Replace prompt-length refresh with signal-based refresh
 
 Stop using prompt length as the main retrieval heuristic.
 
@@ -216,14 +280,24 @@ Refresh should trigger on signal such as:
 Refresh should skip when:
 
 - the prompt is a trivial steer with no new retrieval signal
-- the same dedupe key was injected recently
+- the same reinjection key was injected recently
 - the planner budget is exhausted
 
 Rationale:
 
 - retrieval value is semantic, not length-based
 
-### 4. Classify tool enrichment by capability
+When refresh is selected:
+
+- first call `/agentmemory/context/refresh` with the query
+- if that returns `skipped = true`, empty context, or no context at all, and
+  retrieval still appears warranted, fall back to `/agentmemory/context` with
+  an explicit budget
+
+That fallback already exists in another `agentmemory` integration and should be
+the Codex behavior too.
+
+### 5. Classify tool enrichment by capability
 
 Stop deciding enrichment solely from a hardcoded tool-name list.
 
@@ -247,8 +321,18 @@ Design rule:
 
 - a new file/search tool should become eligible through capability
   classification, not through adding another string comparison
+- do not automatically call `/agentmemory/enrich` on every eligible tool turn
+- pre-tool enrichment should remain the most selective automatic lane because
+  `agentmemory` itself treats this path as expensive when injection is enabled
 
-### 5. Make persistence explicit
+Pre-tool enrichment should require:
+
+- structured file or term inputs worth retrieving against
+- no equivalent enrichment already injected earlier in the same turn
+- a dedicated small request budget
+- a hard cap on enrich calls per turn
+
+### 6. Make persistence explicit
 
 Define three scopes:
 
@@ -270,33 +354,37 @@ Rules:
 
 No silent promotion from `turn` to `thread`.
 
-### 6. Add budgets and dedupe
+### 7. Add caller budgets and reinjection suppression
 
 Introduce explicit caps such as:
 
-- `startup_context_budget_tokens`
-- `turn_context_budget_tokens`
+- `default_context_budget_tokens`
+- `query_context_budget_tokens`
 - `pretool_context_budget_tokens`
 - `max_auto_injections_per_turn`
+- `max_pretool_injections_per_turn`
 - `reinject_after_turns`
 
 Planner requirements:
 
-- hash normalized context before injection
+- pass explicit request budgets down to `agentmemory`
+- do not re-split hot / warm / cold budgets locally in Codex
+- hash the returned context block before injection
 - avoid reinjecting identical context on adjacent turns unless reason or query
   changed
-- down-rank stale context that was already seen recently
-- record token estimates for each injected block
+- avoid re-enriching the same file/tool payload repeatedly inside one turn
+- record budget requested and budget used when the backend returns that data
 
-### 7. Make injection visible
+### 8. Make injection visible
 
 Every inject or skip decision should emit structured state:
 
 - source endpoint
 - reason
 - query
-- estimated token count
-- dedupe outcome
+- request budget
+- tokens used, when returned by the backend
+- dedupe / reinjection outcome
 - scope
 - whether content was actually injected
 
@@ -306,8 +394,9 @@ Human-visible surfaces should make it obvious:
 - why it did so
 - whether it persisted to thread history
 - whether it skipped due to dedupe or budget
+- whether a refresh result fell back to `/context`
 
-### 8. Keep the initial backend contract stable
+### 9. Keep the initial backend contract stable
 
 The first implementation phase should keep using the existing endpoints:
 
@@ -325,10 +414,11 @@ Add a richer config surface:
 ```toml
 [memories.agentmemory]
 context_policy = "parity" # off | parity | balanced | aggressive
-startup_context_budget_tokens = 300
-turn_context_budget_tokens = 600
+default_context_budget_tokens = 600
+query_context_budget_tokens = 900
 pretool_context_budget_tokens = 300
 max_auto_injections_per_turn = 2
+max_pretool_injections_per_turn = 1
 reinject_after_turns = 8
 assistant_recall_thread_injection = "explicit" # explicit | disabled
 ```
@@ -360,8 +450,10 @@ Compatibility rules:
 - recommended for operators who intentionally run `agentmemory` as part of
   normal workflow
 - signal-based refresh on meaningful user turns
-- capability-based pre-tool enrichment
-- strict token and dedupe budgets
+- `/context/refresh` first, `/context` fallback when retrieval is still
+  warranted
+- capability-based pre-tool enrichment with strong selectivity
+- strict caller budgets and reinjection controls
 - explicit visibility for every inject/skip decision
 
 ### `aggressive`
@@ -417,8 +509,9 @@ Primary files:
 Deliverables:
 
 - signal-based prompt refresh
+- `/context/refresh` to `/context` fallback behavior
 - capability-based pre-tool eligibility
-- tests for dedupe and skip reasons
+- tests for reinjection suppression and skip reasons
 
 ### Phase 3. Align recall semantics
 
@@ -456,14 +549,19 @@ Add or update tests that prove:
 - `parity` mode preserves current behavior
 - `balanced` mode can inject on meaningful user turns without the prompt-length
   heuristic
+- `balanced` mode falls back from `/context/refresh` to `/context` when query
+  refresh yields no context but retrieval is still warranted
 - capability-based pre-tool enrichment covers tools with structured
   `agentmemory_input`, not just hardcoded names
 - identical recalled context is not reinjected repeatedly without a new reason
   or stale-window expiry
+- identical tool payloads do not repeatedly trigger enrich within one turn
 - human recall persists to thread history with explicit scope metadata
 - assistant recall can remain turn-local or explicitly persist to thread
 - replay/resume shows why a memory block was injected and under what scope
-- token budgets cap injected context deterministically
+- caller budgets are passed to `agentmemory` deterministically
+- Codex does not duplicate agentmemory-side lane ranking or intra-response
+  deduplication logic
 
 ## Acceptance Criteria
 
@@ -472,11 +570,15 @@ This proposal is implemented well when all of the following are true:
 - users who already run with `agentmemory` enabled get more relevant automatic
   recall than the current parity lane
 - prompt refresh no longer depends on prompt length alone
+- query-aware refresh falls back cleanly to general context retrieval when
+  needed
 - file/search/write enrichment is capability-driven, not string-list-driven
-- token cost and dedupe policy are explicit and testable
+- token cost and reinjection policy are explicit and testable
 - human and assistant recall differ only where the product intentionally says
   they differ
 - every injected memory block has visible provenance and scope
+- Codex acts as a strong caller of `agentmemory`'s retrieval model rather than
+  reimplementing it
 - parity users can stay conservative without opt-in breakage
 
 ## Open Questions
