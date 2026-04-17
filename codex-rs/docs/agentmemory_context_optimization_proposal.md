@@ -98,7 +98,8 @@ and makes it hard to reason about:
 
 - why context appeared,
 - why it did not appear,
-- and whether the token cost was justified.
+- and whether the enabled path is actually aggressive enough to match operator
+  intent.
 
 ### 3. Prompt refresh uses a weak trigger
 
@@ -273,6 +274,23 @@ Design rule:
 - caller-side timing, budget selection, scope, and reinjection suppression live
   in the planner
 
+Required enabled-path behavior:
+
+- when `inject_context = true`, every non-trivial user turn must attempt
+  retrieval
+- "non-trivial user turn" means any user turn with non-empty input that is not
+  solely a minimal steer such as:
+  - "continue"
+  - "ok"
+  - "thanks"
+  - a single-word acknowledgement with no task content
+- the default enabled path must not rely on prompt length as the primary gate
+- the planner may skip only when:
+  - the turn is trivial by the rule above
+  - identical context was injected recently enough to trigger reinjection
+    suppression
+  - retrieval failed and fallback also failed
+
 ### 3. Align with the agentmemory-native retrieval model
 
 Codex should treat `agentmemory` as the retrieval engine of record.
@@ -331,6 +349,15 @@ When refresh is selected:
 That fallback already exists in another `agentmemory` integration and should be
 the Codex behavior too.
 
+Required enabled-path rule:
+
+- for every non-trivial user turn under `inject_context = true`, Codex must do
+  one of:
+  - inject non-empty context from `/agentmemory/context/refresh`
+  - inject non-empty context from fallback `/agentmemory/context`
+  - emit a visible "retrieval attempted but empty" result after both paths
+    returned no usable context
+
 ### 5. Classify tool enrichment by capability
 
 Stop deciding enrichment solely from a hardcoded tool-name list.
@@ -358,6 +385,21 @@ Design rule:
 - when `inject_context = true`, automatically call `/agentmemory/enrich` on
   every eligible capability-class tool turn
 
+Canonical current eligible tool set:
+
+- `Edit`
+- `Write`
+- `Read`
+- `Glob`
+- `Grep`
+- `apply_patch` paths that map to `Edit` or `Write`
+- `list_dir` / directory-enumeration paths that map to `Glob`
+
+If a current Codex tool handler already emits `PreToolUsePayload` with
+structured `agentmemory_input` and maps semantically into one of the capability
+classes above, it must be treated as eligible even if the user-visible tool
+name differs from the internal lane name.
+
 Aggressive pre-tool behavior:
 
 - structured file or term inputs should be forwarded whenever available
@@ -383,9 +425,10 @@ Rules:
 - automatic startup / refresh / pre-tool injection uses `turn`
 - human `/memory-recall` uses `thread`
 - assistant `memory_recall` remains turn-local by default
-- if assistant needs durable injection, it must request it explicitly via:
-  - `memory_recall` with `scope: "thread"`, or
-  - a second explicit tool if we prefer not to widen the current schema
+- assistant-triggered thread persistence should use explicit `scope: "thread"`
+  on `memory_recall`
+- do not introduce a second assistant recall tool solely to express persistence
+  scope
 
 No silent promotion from `turn` to `thread`.
 
@@ -552,8 +595,10 @@ Add or update tests that prove:
 
 - `inject_context=false` disables automatic injection
 - `inject_context=true` enables aggressive automatic injection
-- enabled injection can inject on meaningful user turns without the
-  prompt-length heuristic
+- enabled injection attempts retrieval on every non-trivial user turn without
+  using the prompt-length heuristic as the main gate
+- trivial acknowledgements such as `ok`, `thanks`, or bare `continue` may skip
+  retrieval, but ordinary task-bearing turns may not
 - enabled injection falls back from `/context/refresh` to `/context` when query
   refresh yields no context but retrieval is still warranted
 - capability-based pre-tool enrichment covers tools with structured
@@ -563,7 +608,8 @@ Add or update tests that prove:
 - every eligible capability-class pre-tool turn attempts enrichment when
   injection is enabled
 - human recall persists to thread history with explicit scope metadata
-- assistant recall can remain turn-local or explicitly persist to thread
+- assistant recall can remain turn-local or explicitly persist to thread via
+  `scope: "thread"`
 - replay/resume shows why a memory block was injected and under what scope
 - caller budgets are passed to `agentmemory` deterministically
 - Codex does not duplicate agentmemory-side lane ranking or intra-response
@@ -575,6 +621,10 @@ This proposal is implemented well when all of the following are true:
 
 - users who run with `agentmemory` enabled get more relevant automatic recall
   than the current parity lane
+- retrieval is attempted on every non-trivial user turn when injection is
+  enabled
+- trivial acknowledgements are the only normal user-turn class allowed to skip
+  retrieval by default
 - prompt refresh no longer depends on prompt length alone
 - query-aware refresh falls back cleanly to general context retrieval when
   needed
@@ -590,8 +640,6 @@ This proposal is implemented well when all of the following are true:
 
 ## Open Questions
 
-- Is assistant thread injection better modeled as a `memory_recall` scope enum
-  or as a second explicit tool?
 - Do we eventually want a backend endpoint that returns ranked candidates plus
   token estimates, or is Codex-side planning sufficient?
 
