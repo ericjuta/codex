@@ -176,6 +176,39 @@ Enabled-path rule:
 - Silent persistence of assistant recall.
 - Requiring new backend endpoints in the initial implementation phase.
 
+## What This Unlocks
+
+If Codex adopts this proposal, enabling `inject_context` stops meaning
+"conservative parity leftovers are on" and starts meaning "Codex aggressively
+uses agentmemory during execution."
+
+Concretely, this unlocks:
+
+- better first-turn startup context when a session begins
+- query-aware retrieval on normal user turns without relying on prompt length
+  as the gate
+- `/context/refresh -> /context` fallback so retrieval does not silently stop
+  when refresh returns empty or skipped
+- aggressive pre-tool enrichment on every eligible capability-class file/search
+  tool turn
+- broader use of agentmemory's existing hot / warm / cold retrieval engine
+  during real execution, not only during explicit recall
+- less split-brain between "memory exists in the backend" and "the model is
+  actually seeing memory now"
+- explicit reinjection suppression so aggressive automatic retrieval does not
+  collapse into blindly pasting the same block over and over
+- a clearer product story: `inject_context=true` means one strong automatic
+  behavior, not a half-conservative compatibility mode
+
+This is most useful for:
+
+- long debugging sessions
+- multi-file refactors
+- resumed threads
+- repeated search / read / edit / patch loops
+- tasks where earlier failures, recent conclusions, and touched files should
+  continue shaping the model without manual recap
+
 ## Proposed Design
 
 ### 1. Keep One Operator Switch
