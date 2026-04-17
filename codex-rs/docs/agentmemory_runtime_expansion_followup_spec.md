@@ -28,6 +28,11 @@ That work is tracked by:
 
 This follow-up spec covers what remains after that baseline.
 
+Retrieval-quality and context-injection optimization beyond the current
+runtime-surface expansion is tracked separately in:
+
+- [`agentmemory_context_optimization_proposal.md`](./agentmemory_context_optimization_proposal.md)
+
 Current branch implementation now includes:
 
 - human slash surfaces for:
