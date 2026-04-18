@@ -4638,6 +4638,20 @@ impl Session {
         state.take_pending_session_start_additional_contexts()
     }
 
+    pub(crate) async fn begin_agentmemory_turn(&self) -> u64 {
+        let mut state = self.state.lock().await;
+        state.begin_agentmemory_turn()
+    }
+
+    pub(crate) async fn register_agentmemory_auto_injection(
+        &self,
+        lane_key: &str,
+        context: &str,
+    ) -> crate::agentmemory::context_planner::AutoInjectionRegistration {
+        let mut state = self.state.lock().await;
+        state.register_agentmemory_auto_injection(lane_key, context)
+    }
+
     async fn refresh_mcp_servers_inner(
         &self,
         turn_context: &TurnContext,

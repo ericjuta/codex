@@ -234,6 +234,7 @@ async fn shell_pre_tool_use_payload_uses_joined_command() {
             tool_name: "shell".to_string(),
             command: "bash -lc 'printf hi'".to_string(),
             agentmemory_input: None,
+            agentmemory_capability: None,
         })
     );
 }
@@ -261,6 +262,7 @@ async fn shell_command_pre_tool_use_payload_uses_raw_command() {
             tool_name: "shell_command".to_string(),
             command: "printf shell command".to_string(),
             agentmemory_input: None,
+            agentmemory_capability: None,
         })
     );
 }

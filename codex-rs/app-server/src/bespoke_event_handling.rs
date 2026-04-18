@@ -277,6 +277,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     source: event.source.into(),
                     operation: event.operation.into(),
                     status: event.status.into(),
+                    scope: event.scope.into(),
                     query: event.query,
                     summary: event.summary,
                     detail: event.detail,

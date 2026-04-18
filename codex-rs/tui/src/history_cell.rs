@@ -52,6 +52,7 @@ use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::items::MemoryOperationKind;
+use codex_protocol::items::MemoryOperationScope;
 use codex_protocol::items::MemoryOperationStatus;
 #[cfg(test)]
 use codex_protocol::mcp::Resource;
@@ -2273,6 +2274,7 @@ pub(crate) struct MemoryHistoryCell {
     source: MemoryOperationSource,
     operation: MemoryOperationKind,
     status: MemoryOperationStatus,
+    scope: MemoryOperationScope,
     query: Option<String>,
     summary: String,
     detail: Option<String>,
@@ -2284,6 +2286,7 @@ impl MemoryHistoryCell {
         source: MemoryOperationSource,
         operation: MemoryOperationKind,
         status: MemoryOperationStatus,
+        scope: MemoryOperationScope,
         query: Option<String>,
         summary: String,
         detail: Option<String>,
@@ -2292,6 +2295,7 @@ impl MemoryHistoryCell {
             source,
             operation,
             status,
+            scope,
             query,
             summary,
             detail: detail
@@ -2326,6 +2330,7 @@ impl MemoryHistoryCell {
             MemoryOperationStatus::Pending => "Pending".cyan().bold(),
             MemoryOperationStatus::Ready => "Ready".green().bold(),
             MemoryOperationStatus::Empty => "Empty".magenta().bold(),
+            MemoryOperationStatus::Skipped => "Skipped".bold().dim(),
             MemoryOperationStatus::Error => "Error".red().bold(),
         }
     }
@@ -2351,6 +2356,7 @@ impl MemoryHistoryCell {
         self.source = event.source;
         self.operation = event.operation;
         self.status = event.status;
+        self.scope = event.scope;
         self.query = event.query;
         self.summary = event.summary;
         self.detail = event
@@ -2387,8 +2393,23 @@ impl HistoryCell for MemoryHistoryCell {
             lines.push(Line::from(vec!["  Injected: ".dim(), injected.into()]));
         }
 
-        if self.source == MemoryOperationSource::Assistant {
-            lines.push(Line::from(vec!["  Source: ".dim(), "assistant tool".dim()]));
+        if self.status != MemoryOperationStatus::Pending {
+            let scope = match self.scope {
+                MemoryOperationScope::None => "none",
+                MemoryOperationScope::Turn => "turn",
+                MemoryOperationScope::Thread => "thread",
+            };
+            lines.push(Line::from(vec!["  Scope: ".dim(), scope.into()]));
+        }
+
+        match self.source {
+            MemoryOperationSource::Human => {}
+            MemoryOperationSource::Assistant => {
+                lines.push(Line::from(vec!["  Source: ".dim(), "assistant tool".dim()]));
+            }
+            MemoryOperationSource::Automatic => {
+                lines.push(Line::from(vec!["  Source: ".dim(), "automatic".dim()]));
+            }
         }
 
         let summary_line = Line::from(vec!["  ".into(), self.summary.clone().into()]);
@@ -2421,6 +2442,7 @@ fn new_memory_submission(
         MemoryOperationSource::Human,
         operation,
         MemoryOperationStatus::Pending,
+        MemoryOperationScope::None,
         query,
         summary,
         detail,
@@ -2572,6 +2594,7 @@ pub(crate) fn new_memory_operation_event(event: MemoryOperationEvent) -> MemoryH
         event.source,
         event.operation,
         event.status,
+        event.scope,
         event.query,
         event.summary,
         event.detail,
@@ -3596,6 +3619,7 @@ mod tests {
             source: MemoryOperationSource::Human,
             operation: MemoryOperationKind::Recall,
             status: MemoryOperationStatus::Ready,
+            scope: MemoryOperationScope::Turn,
             query: Some("retrieval freshness".to_string()),
             summary: "Recalled memory context and injected it into the current thread.".to_string(),
             detail: Some("<agentmemory-context>remember this</agentmemory-context>".to_string()),
@@ -3606,9 +3630,32 @@ mod tests {
 🧠 Memory Recall Ready
   Query: retrieval freshness
   Injected: yes
+  Scope: turn
   Recalled memory context and injected it into the current thread.
   Preview:
     <agentmemory-context>remember this</agentmemory-context>
+"###);
+    }
+
+    #[test]
+    fn memory_recall_skipped_snapshot() {
+        let cell = new_memory_operation_event(MemoryOperationEvent {
+            source: MemoryOperationSource::Automatic,
+            operation: MemoryOperationKind::Recall,
+            status: MemoryOperationStatus::Skipped,
+            scope: MemoryOperationScope::None,
+            query: None,
+            summary: "Skipped duplicate memory injection for this turn.".to_string(),
+            detail: None,
+            context_injected: false,
+        });
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+🧠 Memory Recall Skipped
+  Injected: no
+  Scope: none
+  Source: automatic
+  Skipped duplicate memory injection for this turn.
 "###);
     }
 

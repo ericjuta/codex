@@ -46,9 +46,14 @@ fn memory_recall_output_schema() -> JsonValue {
             "context": {
                 "type": "string",
                 "description": "Recalled memory context. Empty when nothing relevant was found."
+            },
+            "scope": {
+                "type": "string",
+                "enum": ["turn", "thread"],
+                "description": "The scope applied to the recalled context."
             }
         },
-        "required": ["recalled", "context"],
+        "required": ["recalled", "context", "scope"],
         "additionalProperties": false
     })
 }
@@ -201,13 +206,25 @@ fn create_memory_next_tool() -> ToolSpec {
 }
 
 fn create_memory_recall_tool() -> ToolSpec {
-    let properties = std::collections::BTreeMap::from([(
-        "query".to_string(),
-        JsonSchema::string(Some(
-            "Optional targeted memory recall query. When omitted, recall uses the current thread and project context only."
-                .to_string(),
-        )),
-    )]);
+    let properties = std::collections::BTreeMap::from([
+        (
+            "query".to_string(),
+            JsonSchema::string(Some(
+                "Optional targeted memory recall query. When omitted, recall uses the current thread and project context only."
+                    .to_string(),
+            )),
+        ),
+        (
+            "scope".to_string(),
+            JsonSchema::string_enum(
+                vec![json!("turn"), json!("thread")],
+                Some(
+                    "Optional recall scope. Defaults to `turn`; use `thread` to persist the recalled context into conversation history."
+                        .to_string(),
+                ),
+            ),
+        ),
+    ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "memory_recall".to_string(),

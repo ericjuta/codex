@@ -3,6 +3,7 @@
 //! This module provides the seam for integrating the `agentmemory` service
 //! as a replacement for Codex's native memory engine.
 
+pub(crate) mod context_planner;
 mod observe_payload;
 
 use crate::agentmemory::observe_payload::build_observe_payload;
@@ -28,11 +29,13 @@ pub struct AgentmemoryAdapter {
 /// Reusing the client allows connection pooling (keep-alive) for high throughput.
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
-pub(crate) const DEFAULT_RUNTIME_RECALL_TOKEN_BUDGET: usize = 2_000;
+pub(crate) const DEFAULT_RUNTIME_RECALL_TOKEN_BUDGET: usize =
+    context_planner::DEFAULT_CONTEXT_BUDGET_TOKENS;
 const MEMORY_RUNTIME_DEVELOPER_INSTRUCTIONS: &str = "Use `memory_recall` for prior work, earlier decisions, previous failures, resumed threads, or other historical context that is not already present in the current thread.\n\
      Use `memory_remember` only for durable, high-value knowledge that should survive beyond the current turn.\n\
      Use `memory_lessons`, `memory_crystals`, `memory_insights`, `memory_actions`, `memory_frontier`, and `memory_next` as read-oriented agentmemory review surfaces when they would materially help with coordination or retrieval.\n\
      Agentmemory startup context may be attached below when available.\n\
+     Assistant `memory_recall` stays turn-local unless it explicitly passes `scope: \"thread\"`.\n\
      Prefer targeted queries naming the feature, file, bug, or decision you need.\n\
      If the current runtime exposes tools through a wrapper surface (for example, `exec` with nested `tools`), treat the callable nested tool surface as authoritative when checking whether these memory tools are available.\n\
      Do not call memory tools on every turn; first use the current thread context, then reach for agentmemory when that context appears insufficient.";

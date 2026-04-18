@@ -690,6 +690,7 @@ async fn replayed_memory_operation_item_renders_memory_cell() {
             source: codex_app_server_protocol::MemoryOperationSource::Human,
             operation: codex_app_server_protocol::MemoryOperationKind::Recall,
             status: codex_app_server_protocol::MemoryOperationStatus::Ready,
+            scope: codex_app_server_protocol::MemoryOperationScope::Turn,
             query: Some("auth failures".to_string()),
             summary: "Recalled memory context and injected it into the current thread.".to_string(),
             detail: Some("recent auth failure context".to_string()),
@@ -708,6 +709,7 @@ async fn replayed_memory_operation_item_renders_memory_cell() {
     assert!(rendered.contains("Memory Recall"));
     assert!(rendered.contains("Ready"));
     assert!(rendered.contains("auth failures"));
+    assert!(rendered.contains("Scope: turn"));
     assert!(rendered.contains("recent auth failure context"));
 }
 
@@ -721,6 +723,7 @@ async fn replayed_memory_action_item_renders_memory_cell() {
             source: codex_app_server_protocol::MemoryOperationSource::Assistant,
             operation: codex_app_server_protocol::MemoryOperationKind::ActionCreate,
             status: codex_app_server_protocol::MemoryOperationStatus::Ready,
+            scope: codex_app_server_protocol::MemoryOperationScope::Thread,
             query: None,
             summary: "Created action `act-123`.".to_string(),
             detail: Some("{\"success\":true}".to_string()),
@@ -738,6 +741,7 @@ async fn replayed_memory_action_item_renders_memory_cell() {
     };
     assert!(rendered.contains("Memory Action Create"));
     assert!(rendered.contains("assistant tool"));
+    assert!(rendered.contains("Scope: thread"));
     assert!(rendered.contains("Created action `act-123`."));
 }
 

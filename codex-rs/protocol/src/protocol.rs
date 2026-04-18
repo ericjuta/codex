@@ -28,6 +28,7 @@ use crate::dynamic_tools::DynamicToolCallRequest;
 use crate::dynamic_tools::DynamicToolResponse;
 use crate::dynamic_tools::DynamicToolSpec;
 use crate::items::MemoryOperationKind;
+use crate::items::MemoryOperationScope;
 use crate::items::MemoryOperationStatus;
 use crate::items::TurnItem;
 use crate::mcp::CallToolResult;
@@ -2118,6 +2119,7 @@ pub struct WarningEvent {
 pub enum MemoryOperationSource {
     Human,
     Assistant,
+    Automatic,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2126,6 +2128,8 @@ pub struct MemoryOperationEvent {
     pub source: MemoryOperationSource,
     pub operation: MemoryOperationKind,
     pub status: MemoryOperationStatus,
+    #[serde(default)]
+    pub scope: MemoryOperationScope,
     pub query: Option<String>,
     pub summary: String,
     pub detail: Option<String>,

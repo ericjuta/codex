@@ -2,7 +2,22 @@
 
 ## Status
 
-Proposal for post-parity retrieval and context-injection optimization.
+Implemented in `codex-rs` on 2026-04-17, with current backend endpoint
+constraints still applying.
+
+Implementation notes:
+
+- automatic retrieval now uses a unified caller-side planner with exact
+  duplicate suppression and visible memory-operation events
+- non-trivial user turns now attempt `context/refresh` first and fall back to
+  `context` when refresh is skipped, empty, or errors
+- eligible pre-tool enrichment is now capability-driven via structured
+  `agentmemory_input`, rather than a hook-runtime string whitelist
+- assistant `memory_recall` now accepts `scope: "thread"` for explicit
+  thread persistence
+- `agentmemory/context` currently accepts caller budgets directly; current
+  `context/refresh` and `enrich` endpoint contracts do not, so those lanes
+  still rely on backend defaults
 
 This document answers a narrower question than the existing runtime-surface
 specs:

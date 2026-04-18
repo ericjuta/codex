@@ -26,7 +26,9 @@ Current branch state:
 - non-shell post-tool capture now covers the same native tool-name lane as the
   enrichment matcher when Codex emits `Edit|Write|Read|Glob|Grep`
 - `UserPromptSubmit` retains `observe` and now issues
-  `POST /agentmemory/context/refresh` for long-enough prompts
+  `POST /agentmemory/context/refresh` on every non-trivial user turn, with
+  fallback to `POST /agentmemory/context` when refresh is skipped, empty, or
+  errors
 - shutdown emits `Stop` observation plus summarize, then `SessionEnd`
   observation plus `session/end`, but bare shutdown markers are now classified
   as non-persistent sender diagnostics instead of ordinary observations
@@ -76,8 +78,9 @@ At the time of this spec, that contract is:
    - injects returned `context` into the upcoming model turn
 3. `UserPromptSubmit`
    - always calls `POST /agentmemory/observe`
-   - calls `POST /agentmemory/context/refresh` when the submitted prompt is
-     long enough to justify query-aware retrieval
+   - calls `POST /agentmemory/context/refresh` on every non-trivial user turn
+   - falls back to `POST /agentmemory/context` when refresh is skipped, empty,
+     or errors
    - remains outside the `SessionStart`/`PreToolUse` injection lane, but is
      still part of full plugin parity
 4. `Stop`
@@ -453,7 +456,8 @@ This lane is complete only when all of the following are true.
 - `PreToolUse` accepts `additionalContext`
 - `UserPromptSubmit` still calls `observe`
 - `UserPromptSubmit` uses `/agentmemory/context/refresh` for query-aware
-  refresh when appropriate
+  refresh on every non-trivial user turn and falls back to `/agentmemory/context`
+  when refresh yields no usable context
 - native observe payloads include explicit sender metadata:
   `source`, `payload_version`, `event_id`, `capabilities`, and
   `persistence_class`
@@ -506,12 +510,15 @@ Update runtime-facing docs so they say:
 - startup injection comes from `session/start`
 - pre-tool enrichment comes from `enrich`
 - prompt-submit refresh comes from `context/refresh`
+- prompt-submit fallback retrieval comes from `context`
 - native observe payloads are explicitly versioned and attributed
 - bare shutdown lifecycle markers are sender-classified as non-persistent
 - stop still summarizes the session
 - session end still closes the session and, when enabled, runs the same
   maintenance calls as the plugin
 - `memory_recall` is complementary, not a replacement for hook injection
+- assistant `memory_recall` may explicitly persist to thread history via
+  `scope: "thread"`
 
 ## Explicit Non-Goals
 

@@ -4,6 +4,7 @@ use crate::agentmemory::AgentmemoryAdapter;
 use crate::agentmemory::workspace_project;
 use crate::config::Config;
 use codex_protocol::items::MemoryOperationKind;
+use codex_protocol::items::MemoryOperationScope;
 use codex_protocol::items::MemoryOperationStatus;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseItem;
@@ -14,17 +15,26 @@ use serde_json::Value as JsonValue;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-struct MemoryOperationEventArgs {
-    source: MemoryOperationSource,
-    operation: MemoryOperationKind,
-    status: MemoryOperationStatus,
-    query: Option<String>,
-    summary: String,
-    detail: Option<String>,
-    context_injected: bool,
+pub(crate) struct MemoryOperationEventArgs {
+    pub(crate) source: MemoryOperationSource,
+    pub(crate) operation: MemoryOperationKind,
+    pub(crate) status: MemoryOperationStatus,
+    pub(crate) query: Option<String>,
+    pub(crate) summary: String,
+    pub(crate) detail: Option<String>,
+    pub(crate) context_injected: bool,
 }
 
 async fn send_memory_operation_event(sess: &Session, sub_id: &str, args: MemoryOperationEventArgs) {
+    send_memory_operation_event_with_scope(sess, sub_id, args, MemoryOperationScope::None).await;
+}
+
+pub(crate) async fn send_memory_operation_event_with_scope(
+    sess: &Session,
+    sub_id: &str,
+    args: MemoryOperationEventArgs,
+    scope: MemoryOperationScope,
+) {
     let MemoryOperationEventArgs {
         source,
         operation,
@@ -43,6 +53,7 @@ async fn send_memory_operation_event(sess: &Session, sub_id: &str, args: MemoryO
             query,
             summary,
             detail,
+            scope,
             context_injected,
         }),
     })
@@ -455,7 +466,7 @@ pub(crate) async fn recall_memories(
             .into();
             sess.record_conversation_items(&turn_context, std::slice::from_ref(&message))
                 .await;
-            send_memory_operation_event(
+            send_memory_operation_event_with_scope(
                 sess,
                 &sub_id,
                 MemoryOperationEventArgs {
@@ -468,6 +479,7 @@ pub(crate) async fn recall_memories(
                     detail: Some(context),
                     context_injected: true,
                 },
+                MemoryOperationScope::Thread,
             )
             .await;
         }

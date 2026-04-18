@@ -137,6 +137,7 @@ impl ToolHandler for UnifiedExecHandler {
                 tool_name: invocation.tool_name.display(),
                 command: args.cmd,
                 agentmemory_input: None,
+                agentmemory_capability: None,
             })
     }
 

@@ -29,6 +29,7 @@ use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::MemoryOperationKind as CoreMemoryOperationKind;
+use codex_protocol::items::MemoryOperationScope as CoreMemoryOperationScope;
 use codex_protocol::items::MemoryOperationStatus as CoreMemoryOperationStatus;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::CallToolResult as CoreMcpCallToolResult;
@@ -3191,6 +3192,7 @@ pub enum MemoryOperationStatus {
     Pending,
     Ready,
     Empty,
+    Skipped,
     Error,
 }
 
@@ -3200,6 +3202,7 @@ impl From<CoreMemoryOperationStatus> for MemoryOperationStatus {
             CoreMemoryOperationStatus::Pending => Self::Pending,
             CoreMemoryOperationStatus::Ready => Self::Ready,
             CoreMemoryOperationStatus::Empty => Self::Empty,
+            CoreMemoryOperationStatus::Skipped => Self::Skipped,
             CoreMemoryOperationStatus::Error => Self::Error,
         }
     }
@@ -3211,6 +3214,7 @@ impl From<CoreMemoryOperationStatus> for MemoryOperationStatus {
 pub enum MemoryOperationSource {
     Human,
     Assistant,
+    Automatic,
 }
 
 impl From<CoreMemoryOperationSource> for MemoryOperationSource {
@@ -3218,6 +3222,27 @@ impl From<CoreMemoryOperationSource> for MemoryOperationSource {
         match value {
             CoreMemoryOperationSource::Human => Self::Human,
             CoreMemoryOperationSource::Assistant => Self::Assistant,
+            CoreMemoryOperationSource::Automatic => Self::Automatic,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum MemoryOperationScope {
+    #[default]
+    None,
+    Turn,
+    Thread,
+}
+
+impl From<CoreMemoryOperationScope> for MemoryOperationScope {
+    fn from(value: CoreMemoryOperationScope) -> Self {
+        match value {
+            CoreMemoryOperationScope::None => Self::None,
+            CoreMemoryOperationScope::Turn => Self::Turn,
+            CoreMemoryOperationScope::Thread => Self::Thread,
         }
     }
 }
@@ -4612,6 +4637,8 @@ pub enum ThreadItem {
         source: MemoryOperationSource,
         operation: MemoryOperationKind,
         status: MemoryOperationStatus,
+        #[serde(default)]
+        scope: MemoryOperationScope,
         query: Option<String>,
         summary: String,
         detail: Option<String>,
@@ -5639,6 +5666,8 @@ pub struct MemoryOperationNotification {
     pub source: MemoryOperationSource,
     pub operation: MemoryOperationKind,
     pub status: MemoryOperationStatus,
+    #[serde(default)]
+    pub scope: MemoryOperationScope,
     pub query: Option<String>,
     pub summary: String,
     pub detail: Option<String>,

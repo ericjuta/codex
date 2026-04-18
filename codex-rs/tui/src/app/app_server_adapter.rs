@@ -120,6 +120,9 @@ fn app_server_memory_source(
         codex_app_server_protocol::MemoryOperationSource::Assistant => {
             codex_protocol::protocol::MemoryOperationSource::Assistant
         }
+        codex_app_server_protocol::MemoryOperationSource::Automatic => {
+            codex_protocol::protocol::MemoryOperationSource::Automatic
+        }
     }
 }
 
@@ -190,8 +193,28 @@ fn app_server_memory_status(
         codex_app_server_protocol::MemoryOperationStatus::Empty => {
             codex_protocol::items::MemoryOperationStatus::Empty
         }
+        codex_app_server_protocol::MemoryOperationStatus::Skipped => {
+            codex_protocol::items::MemoryOperationStatus::Skipped
+        }
         codex_app_server_protocol::MemoryOperationStatus::Error => {
             codex_protocol::items::MemoryOperationStatus::Error
+        }
+    }
+}
+
+#[cfg(test)]
+fn app_server_memory_scope(
+    scope: codex_app_server_protocol::MemoryOperationScope,
+) -> codex_protocol::items::MemoryOperationScope {
+    match scope {
+        codex_app_server_protocol::MemoryOperationScope::None => {
+            codex_protocol::items::MemoryOperationScope::None
+        }
+        codex_app_server_protocol::MemoryOperationScope::Turn => {
+            codex_protocol::items::MemoryOperationScope::Turn
+        }
+        codex_app_server_protocol::MemoryOperationScope::Thread => {
+            codex_protocol::items::MemoryOperationScope::Thread
         }
     }
 }
@@ -671,6 +694,7 @@ fn server_notification_thread_events(
                     source: app_server_memory_source(notification.source),
                     operation: app_server_memory_kind(notification.operation),
                     status: app_server_memory_status(notification.status),
+                    scope: app_server_memory_scope(notification.scope),
                     query: notification.query,
                     summary: notification.summary,
                     detail: notification.detail,

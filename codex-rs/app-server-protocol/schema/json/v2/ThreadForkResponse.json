@@ -606,10 +606,19 @@
       ],
       "type": "string"
     },
+    "MemoryOperationScope": {
+      "enum": [
+        "none",
+        "turn",
+        "thread"
+      ],
+      "type": "string"
+    },
     "MemoryOperationSource": {
       "enum": [
         "human",
-        "assistant"
+        "assistant",
+        "automatic"
       ],
       "type": "string"
     },
@@ -618,6 +627,7 @@
         "pending",
         "ready",
         "empty",
+        "skipped",
         "error"
       ],
       "type": "string"
@@ -1258,6 +1268,14 @@
                 "string",
                 "null"
               ]
+            },
+            "scope": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/MemoryOperationScope"
+                }
+              ],
+              "default": "none"
             },
             "source": {
               "$ref": "#/definitions/MemoryOperationSource"

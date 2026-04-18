@@ -199,6 +199,7 @@ export type { MemoryCitation } from "./MemoryCitation";
 export type { MemoryCitationEntry } from "./MemoryCitationEntry";
 export type { MemoryOperationKind } from "./MemoryOperationKind";
 export type { MemoryOperationNotification } from "./MemoryOperationNotification";
+export type { MemoryOperationScope } from "./MemoryOperationScope";
 export type { MemoryOperationSource } from "./MemoryOperationSource";
 export type { MemoryOperationStatus } from "./MemoryOperationStatus";
 export type { MergeStrategy } from "./MergeStrategy";

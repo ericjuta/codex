@@ -9604,6 +9604,14 @@
               "null"
             ]
           },
+          "scope": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/MemoryOperationScope"
+              }
+            ],
+            "default": "none"
+          },
           "source": {
             "$ref": "#/definitions/v2/MemoryOperationSource"
           },
@@ -9628,10 +9636,19 @@
         "title": "MemoryOperationNotification",
         "type": "object"
       },
+      "MemoryOperationScope": {
+        "enum": [
+          "none",
+          "turn",
+          "thread"
+        ],
+        "type": "string"
+      },
       "MemoryOperationSource": {
         "enum": [
           "human",
-          "assistant"
+          "assistant",
+          "automatic"
         ],
         "type": "string"
       },
@@ -9640,6 +9657,7 @@
           "pending",
           "ready",
           "empty",
+          "skipped",
           "error"
         ],
         "type": "string"
@@ -13255,6 +13273,14 @@
                   "string",
                   "null"
                 ]
+              },
+              "scope": {
+                "allOf": [
+                  {
+                    "$ref": "#/definitions/v2/MemoryOperationScope"
+                  }
+                ],
+                "default": "none"
               },
               "source": {
                 "$ref": "#/definitions/v2/MemoryOperationSource"

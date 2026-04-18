@@ -208,6 +208,7 @@ impl ToolHandler for ShellHandler {
             tool_name: invocation.tool_name.display(),
             command,
             agentmemory_input: None,
+            agentmemory_capability: None,
         })
     }
 
@@ -319,6 +320,7 @@ impl ToolHandler for ShellCommandHandler {
             tool_name: invocation.tool_name.display(),
             command,
             agentmemory_input: None,
+            agentmemory_capability: None,
         })
     }
 

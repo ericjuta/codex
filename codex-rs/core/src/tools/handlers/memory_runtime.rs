@@ -1,4 +1,6 @@
 use crate::agentmemory::AgentmemoryAdapter;
+use crate::codex::agentmemory_ops::MemoryOperationEventArgs;
+use crate::codex::agentmemory_ops::send_memory_operation_event_with_scope;
 use crate::config::types::MemoryBackend;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
@@ -8,17 +10,35 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::items::MemoryOperationKind;
+use codex_protocol::items::MemoryOperationScope;
 use codex_protocol::items::MemoryOperationStatus;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::MemoryOperationEvent;
+use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::protocol::MemoryOperationSource;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum MemoryRecallScopeArg {
+    Turn,
+    Thread,
+}
+
+impl From<MemoryRecallScopeArg> for MemoryOperationScope {
+    fn from(value: MemoryRecallScopeArg) -> Self {
+        match value {
+            MemoryRecallScopeArg::Turn => Self::Turn,
+            MemoryRecallScopeArg::Thread => Self::Thread,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
 struct MemoryRecallArgs {
     #[serde(default)]
     query: Option<String>,
+    #[serde(default)]
+    scope: Option<MemoryRecallScopeArg>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,20 +82,30 @@ async fn emit_event(
     summary: String,
     detail: Option<String>,
 ) {
-    session
-        .send_event(
-            turn,
-            EventMsg::MemoryOperation(MemoryOperationEvent {
-                source: MemoryOperationSource::Assistant,
-                operation,
-                status,
-                query,
-                summary,
-                detail,
-                context_injected: false,
-            }),
-        )
-        .await;
+    emit_event_with_scope(
+        session,
+        turn,
+        MemoryOperationEventArgs {
+            source: MemoryOperationSource::Assistant,
+            operation,
+            status,
+            query,
+            summary,
+            detail,
+            context_injected: false,
+        },
+        MemoryOperationScope::None,
+    )
+    .await;
+}
+
+async fn emit_event_with_scope(
+    session: &crate::codex::Session,
+    turn: &crate::codex::TurnContext,
+    args: MemoryOperationEventArgs,
+    scope: MemoryOperationScope,
+) {
+    send_memory_operation_event_with_scope(session, &turn.sub_id, args, scope).await;
 }
 
 fn require_agentmemory_backend(
@@ -147,6 +177,8 @@ async fn handle_recall(
         .as_deref()
         .map(str::trim)
         .filter(|query| !query.is_empty());
+    let scope = args.scope.unwrap_or(MemoryRecallScopeArg::Turn);
+    let applied_scope = MemoryOperationScope::from(scope);
 
     let adapter = AgentmemoryAdapter::new();
     let response = match adapter
@@ -160,14 +192,19 @@ async fn handle_recall(
     {
         Ok(response) => response,
         Err(err) => {
-            emit_event(
+            emit_event_with_scope(
                 &session,
                 turn.as_ref(),
-                MemoryOperationKind::Recall,
-                MemoryOperationStatus::Error,
-                args.query.clone(),
-                "Assistant memory recall failed.".to_string(),
-                Some(err.clone()),
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Assistant,
+                    operation: MemoryOperationKind::Recall,
+                    status: MemoryOperationStatus::Error,
+                    query: args.query.clone(),
+                    summary: "Assistant memory recall failed.".to_string(),
+                    detail: Some(err.clone()),
+                    context_injected: false,
+                },
+                applied_scope,
             )
             .await;
             return Err(FunctionCallError::RespondToModel(format!(
@@ -176,25 +213,52 @@ async fn handle_recall(
         }
     };
 
-    emit_event(
+    if response.recalled && applied_scope == MemoryOperationScope::Thread {
+        let message: codex_protocol::models::ResponseItem = DeveloperInstructions::new(format!(
+            "<agentmemory-recall>\n{}\n</agentmemory-recall>",
+            response.context
+        ))
+        .into();
+        session
+            .record_conversation_items(turn.as_ref(), std::slice::from_ref(&message))
+            .await;
+    }
+
+    emit_event_with_scope(
         &session,
         turn.as_ref(),
-        MemoryOperationKind::Recall,
-        if response.recalled {
-            MemoryOperationStatus::Ready
-        } else {
-            MemoryOperationStatus::Empty
+        MemoryOperationEventArgs {
+            source: MemoryOperationSource::Assistant,
+            operation: MemoryOperationKind::Recall,
+            status: if response.recalled {
+                MemoryOperationStatus::Ready
+            } else {
+                MemoryOperationStatus::Empty
+            },
+            query: args.query.clone(),
+            summary: if response.recalled && applied_scope == MemoryOperationScope::Thread {
+                "Assistant recalled memory context and persisted it to the thread.".to_string()
+            } else if response.recalled {
+                "Assistant recalled memory context for this turn.".to_string()
+            } else {
+                "Assistant found no relevant memory context for this turn.".to_string()
+            },
+            detail: response.recalled.then_some(response.context.clone()),
+            context_injected: response.recalled && applied_scope == MemoryOperationScope::Thread,
         },
-        args.query.clone(),
-        if response.recalled {
-            "Assistant recalled memory context for this turn.".to_string()
-        } else {
-            "Assistant found no relevant memory context for this turn.".to_string()
-        },
-        response.recalled.then_some(response.context.clone()),
+        applied_scope,
     )
     .await;
 
+    let response = serde_json::json!({
+        "recalled": response.recalled,
+        "context": response.context,
+        "scope": match applied_scope {
+            MemoryOperationScope::Turn => "turn",
+            MemoryOperationScope::Thread => "thread",
+            MemoryOperationScope::None => "none",
+        },
+    });
     let response = serde_json::to_value(response).map_err(|err| {
         FunctionCallError::Fatal(format!("failed to encode memory_recall response: {err}"))
     })?;

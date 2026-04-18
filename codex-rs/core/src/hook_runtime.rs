@@ -1,6 +1,15 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use crate::agentmemory::context_planner::AgentmemoryContextEndpoint;
+use crate::agentmemory::context_planner::AgentmemoryContextEventDetail;
+use crate::agentmemory::context_planner::AgentmemoryContextReason;
+use crate::agentmemory::context_planner::AgentmemoryContextSkipReason;
+use crate::agentmemory::context_planner::AgentmemoryToolCapability;
+use crate::agentmemory::context_planner::AutoInjectionRegistration;
+use crate::agentmemory::context_planner::PRETOOL_CONTEXT_BUDGET_TOKENS;
+use crate::agentmemory::context_planner::QUERY_CONTEXT_BUDGET_TOKENS;
+use crate::agentmemory::context_planner::is_trivial_user_turn;
 use codex_hooks::PostToolUseOutcome;
 use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
@@ -8,6 +17,9 @@ use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
 use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
+use codex_protocol::items::MemoryOperationKind;
+use codex_protocol::items::MemoryOperationScope;
+use codex_protocol::items::MemoryOperationStatus;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
@@ -17,6 +29,8 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookStartedEvent;
+use codex_protocol::protocol::MemoryOperationEvent;
+use codex_protocol::protocol::MemoryOperationSource;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 
@@ -48,6 +62,170 @@ pub(crate) enum PendingInputRecord {
 pub(crate) struct PreToolUseHookRuntimeOutcome {
     pub block_reason: Option<String>,
     pub additional_contexts: Vec<String>,
+}
+
+struct AutomaticContextInjectionArgs {
+    reason: AgentmemoryContextReason,
+    tool_name: Option<String>,
+    tool_capability: Option<AgentmemoryToolCapability>,
+    query: Option<String>,
+    endpoint: AgentmemoryContextEndpoint,
+    fallback_endpoint: Option<AgentmemoryContextEndpoint>,
+    request_budget_tokens: Option<usize>,
+    context: String,
+}
+
+async fn emit_automatic_memory_event(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    status: MemoryOperationStatus,
+    query: Option<String>,
+    summary: String,
+    detail: AgentmemoryContextEventDetail,
+    context_injected: bool,
+) {
+    sess.send_event(
+        turn_context,
+        EventMsg::MemoryOperation(MemoryOperationEvent {
+            source: MemoryOperationSource::Automatic,
+            operation: MemoryOperationKind::Recall,
+            status,
+            query,
+            summary,
+            detail: detail.to_pretty_json(),
+            scope: detail.scope,
+            context_injected,
+        }),
+    )
+    .await;
+}
+
+async fn register_automatic_context_injection(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    args: AutomaticContextInjectionArgs,
+) -> Option<String> {
+    let AutomaticContextInjectionArgs {
+        reason,
+        tool_name,
+        tool_capability,
+        query,
+        endpoint,
+        fallback_endpoint,
+        request_budget_tokens,
+        context,
+    } = args;
+    let lane_key = reason.lane_key(tool_name.as_deref());
+    match sess
+        .register_agentmemory_auto_injection(&lane_key, &context)
+        .await
+    {
+        AutoInjectionRegistration::Allowed => {
+            emit_automatic_memory_event(
+                sess,
+                turn_context,
+                MemoryOperationStatus::Ready,
+                query.clone(),
+                automatic_ready_summary(reason, tool_name.as_deref()),
+                AgentmemoryContextEventDetail {
+                    reason: reason.summary_label(),
+                    tool_name,
+                    tool_capability,
+                    query,
+                    endpoint: Some(endpoint),
+                    fallback_endpoint,
+                    request_budget_tokens,
+                    backend_error: None,
+                    scope: MemoryOperationScope::Turn,
+                    skip_reason: None,
+                    duplicate_suppressed: false,
+                    fallback_used: fallback_endpoint.is_some(),
+                    retrieval_attempted: true,
+                    context_injected: true,
+                },
+                true,
+            )
+            .await;
+            Some(context)
+        }
+        AutoInjectionRegistration::DuplicateSuppressed => {
+            emit_automatic_memory_event(
+                sess,
+                turn_context,
+                MemoryOperationStatus::Skipped,
+                query.clone(),
+                format!(
+                    "Skipped duplicate agentmemory context for {}.",
+                    reason.summary_label()
+                ),
+                AgentmemoryContextEventDetail {
+                    reason: reason.summary_label(),
+                    tool_name,
+                    tool_capability,
+                    query,
+                    endpoint: Some(endpoint),
+                    fallback_endpoint,
+                    request_budget_tokens,
+                    backend_error: None,
+                    scope: MemoryOperationScope::None,
+                    skip_reason: Some(AgentmemoryContextSkipReason::DuplicateSuppressed),
+                    duplicate_suppressed: true,
+                    fallback_used: fallback_endpoint.is_some(),
+                    retrieval_attempted: true,
+                    context_injected: false,
+                },
+                false,
+            )
+            .await;
+            None
+        }
+        AutoInjectionRegistration::MaxAutoInjectionsPerTurn => {
+            emit_automatic_memory_event(
+                sess,
+                turn_context,
+                MemoryOperationStatus::Skipped,
+                query.clone(),
+                "Skipped agentmemory auto-injection because the per-turn injection cap was reached."
+                    .to_string(),
+                AgentmemoryContextEventDetail {
+                    reason: reason.summary_label(),
+                    tool_name,
+                    tool_capability,
+                    query,
+                    endpoint: Some(endpoint),
+                    fallback_endpoint,
+                    request_budget_tokens,
+                    backend_error: None,
+                    scope: MemoryOperationScope::None,
+                    skip_reason: Some(AgentmemoryContextSkipReason::MaxAutoInjectionsPerTurn),
+                    duplicate_suppressed: false,
+                    fallback_used: fallback_endpoint.is_some(),
+                    retrieval_attempted: true,
+                    context_injected: false,
+                },
+                false,
+            )
+            .await;
+            None
+        }
+    }
+}
+
+fn automatic_ready_summary(reason: AgentmemoryContextReason, tool_name: Option<&str>) -> String {
+    match (reason, tool_name) {
+        (AgentmemoryContextReason::SessionStart, _) => {
+            "Auto-injected agentmemory context for session start.".to_string()
+        }
+        (AgentmemoryContextReason::UserTurn, _) => {
+            "Auto-injected agentmemory context for this user turn.".to_string()
+        }
+        (AgentmemoryContextReason::PreTool, Some(tool_name)) => {
+            format!("Auto-injected agentmemory context before tool `{tool_name}`.")
+        }
+        (AgentmemoryContextReason::PreTool, None) => {
+            "Auto-injected agentmemory context before a tool call.".to_string()
+        }
+    }
 }
 
 struct ContextInjectingHookOutcome {
@@ -98,6 +276,37 @@ pub(crate) async fn run_pending_session_start_hooks(
     let mut pending_additional_contexts =
         sess.take_pending_session_start_additional_contexts().await;
     let Some(session_start_source) = sess.take_pending_session_start_source().await else {
+        if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory
+            && !pending_additional_contexts.is_empty()
+        {
+            for _ in &pending_additional_contexts {
+                emit_automatic_memory_event(
+                    sess,
+                    turn_context,
+                    MemoryOperationStatus::Ready,
+                    None,
+                    "Auto-injected agentmemory context for session start.".to_string(),
+                    AgentmemoryContextEventDetail {
+                        reason: AgentmemoryContextReason::SessionStart.summary_label(),
+                        tool_name: None,
+                        tool_capability: None,
+                        query: None,
+                        endpoint: Some(AgentmemoryContextEndpoint::SessionStart),
+                        fallback_endpoint: None,
+                        request_budget_tokens: None,
+                        backend_error: None,
+                        scope: MemoryOperationScope::Turn,
+                        skip_reason: None,
+                        duplicate_suppressed: false,
+                        fallback_used: false,
+                        retrieval_attempted: true,
+                        context_injected: true,
+                    },
+                    true,
+                )
+                .await;
+            }
+        }
         record_additional_contexts(sess, turn_context, pending_additional_contexts).await;
         return false;
     };
@@ -135,6 +344,37 @@ pub(crate) async fn run_pending_session_start_hooks(
             .run_session_start(request, Some(turn_context.sub_id.clone())),
     )
     .await;
+    if turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory
+        && !pending_additional_contexts.is_empty()
+    {
+        for _ in &pending_additional_contexts {
+            emit_automatic_memory_event(
+                sess,
+                turn_context,
+                MemoryOperationStatus::Ready,
+                None,
+                "Auto-injected agentmemory context for session start.".to_string(),
+                AgentmemoryContextEventDetail {
+                    reason: AgentmemoryContextReason::SessionStart.summary_label(),
+                    tool_name: None,
+                    tool_capability: None,
+                    query: None,
+                    endpoint: Some(AgentmemoryContextEndpoint::SessionStart),
+                    fallback_endpoint: None,
+                    request_budget_tokens: None,
+                    backend_error: None,
+                    scope: MemoryOperationScope::Turn,
+                    skip_reason: None,
+                    duplicate_suppressed: false,
+                    fallback_used: false,
+                    retrieval_attempted: true,
+                    context_injected: true,
+                },
+                true,
+            )
+            .await;
+        }
+    }
     pending_additional_contexts.append(&mut outcome.additional_contexts);
     outcome.additional_contexts = pending_additional_contexts;
     outcome.record_additional_contexts(sess, turn_context).await
@@ -147,6 +387,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
     tool_use_id: String,
     command: String,
     agentmemory_input: Option<Value>,
+    agentmemory_capability: Option<AgentmemoryToolCapability>,
 ) -> PreToolUseHookRuntimeOutcome {
     let request = PreToolUseRequest {
         session_id: sess.conversation_id,
@@ -176,30 +417,135 @@ pub(crate) async fn run_pre_tool_use_hooks(
                 )
                 .await;
         });
-        if adapter.inject_context_enabled(&memories)
-            && matches!(
-                request.tool_name.as_str(),
-                "Edit" | "Write" | "Read" | "Glob" | "Grep"
-            )
-            && let Some(tool_input) = agentmemory_input
-        {
-            match adapter
-                .enrich_context(
-                    &sess.conversation_id.to_string(),
-                    request.tool_name.as_str(),
-                    &tool_input,
-                    &memories,
-                )
-                .await
-            {
-                Ok(context) if !context.trim().is_empty() => additional_contexts.push(context),
-                Ok(_) => {}
-                Err(err) => {
-                    tracing::warn!(
-                        "failed to enrich agentmemory context before tool {}: {err}",
-                        request.tool_name
-                    );
+        if adapter.inject_context_enabled(&memories) {
+            match (agentmemory_capability, agentmemory_input) {
+                (Some(tool_capability), Some(tool_input)) => {
+                    match adapter
+                        .enrich_context(
+                            &sess.conversation_id.to_string(),
+                            request.tool_name.as_str(),
+                            &tool_input,
+                            &memories,
+                        )
+                        .await
+                    {
+                        Ok(context) if !context.trim().is_empty() => {
+                            if let Some(context) = register_automatic_context_injection(
+                                sess,
+                                turn_context,
+                                AutomaticContextInjectionArgs {
+                                    reason: AgentmemoryContextReason::PreTool,
+                                    tool_name: Some(request.tool_name.clone()),
+                                    tool_capability: Some(tool_capability),
+                                    query: None,
+                                    endpoint: AgentmemoryContextEndpoint::Enrich,
+                                    fallback_endpoint: None,
+                                    request_budget_tokens: Some(PRETOOL_CONTEXT_BUDGET_TOKENS),
+                                    context,
+                                },
+                            )
+                            .await
+                            {
+                                additional_contexts.push(context);
+                            }
+                        }
+                        Ok(_) => {
+                            emit_automatic_memory_event(
+                                sess,
+                                turn_context,
+                                MemoryOperationStatus::Empty,
+                                None,
+                                format!(
+                                    "Agentmemory enrichment returned no usable context before tool `{}`.",
+                                    request.tool_name
+                                ),
+                                AgentmemoryContextEventDetail {
+                                    reason: AgentmemoryContextReason::PreTool.summary_label(),
+                                    tool_name: Some(request.tool_name.clone()),
+                                    tool_capability: Some(tool_capability),
+                                    query: None,
+                                    endpoint: Some(AgentmemoryContextEndpoint::Enrich),
+                                    fallback_endpoint: None,
+                                    request_budget_tokens: Some(PRETOOL_CONTEXT_BUDGET_TOKENS),
+                                    backend_error: None,
+                                    scope: MemoryOperationScope::None,
+                                    skip_reason: Some(AgentmemoryContextSkipReason::EmptyResult),
+                                    duplicate_suppressed: false,
+                                    fallback_used: false,
+                                    retrieval_attempted: true,
+                                    context_injected: false,
+                                },
+                                false,
+                            )
+                            .await;
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                "failed to enrich agentmemory context before tool {}: {err}",
+                                request.tool_name
+                            );
+                            emit_automatic_memory_event(
+                                sess,
+                                turn_context,
+                                MemoryOperationStatus::Error,
+                                None,
+                                format!(
+                                    "Agentmemory enrichment failed before tool `{}`.",
+                                    request.tool_name
+                                ),
+                                AgentmemoryContextEventDetail {
+                                    reason: AgentmemoryContextReason::PreTool.summary_label(),
+                                    tool_name: Some(request.tool_name.clone()),
+                                    tool_capability: Some(tool_capability),
+                                    query: None,
+                                    endpoint: Some(AgentmemoryContextEndpoint::Enrich),
+                                    fallback_endpoint: None,
+                                    request_budget_tokens: Some(PRETOOL_CONTEXT_BUDGET_TOKENS),
+                                    backend_error: Some(err),
+                                    scope: MemoryOperationScope::None,
+                                    skip_reason: Some(AgentmemoryContextSkipReason::BackendError),
+                                    duplicate_suppressed: false,
+                                    fallback_used: false,
+                                    retrieval_attempted: true,
+                                    context_injected: false,
+                                },
+                                false,
+                            )
+                            .await;
+                        }
+                    }
                 }
+                (Some(tool_capability), None) => {
+                    emit_automatic_memory_event(
+                        sess,
+                        turn_context,
+                        MemoryOperationStatus::Skipped,
+                        None,
+                        format!(
+                            "Skipped agentmemory enrichment before tool `{}` because no structured input was available.",
+                            request.tool_name
+                        ),
+                        AgentmemoryContextEventDetail {
+                            reason: AgentmemoryContextReason::PreTool.summary_label(),
+                            tool_name: Some(request.tool_name.clone()),
+                            tool_capability: Some(tool_capability),
+                            query: None,
+                            endpoint: Some(AgentmemoryContextEndpoint::Enrich),
+                            fallback_endpoint: None,
+                            request_budget_tokens: Some(PRETOOL_CONTEXT_BUDGET_TOKENS),
+                            backend_error: None,
+                            scope: MemoryOperationScope::None,
+                            skip_reason: Some(AgentmemoryContextSkipReason::MissingStructuredInput),
+                            duplicate_suppressed: false,
+                            fallback_used: false,
+                            retrieval_attempted: false,
+                            context_injected: false,
+                        },
+                        false,
+                    )
+                    .await;
+                }
+                (None, _) => {}
             }
         }
     }
@@ -333,32 +679,190 @@ pub(crate) async fn run_user_prompt_submit_hooks(
                 .await;
         });
 
-        if request.prompt.trim().len() > 10 {
-            match adapter
-                .refresh_context(
-                    &sess.conversation_id.to_string(),
-                    turn_context.cwd.as_path(),
-                    request.prompt.as_str(),
-                    &turn_context.config.memories,
+        if adapter.inject_context_enabled(&turn_context.config.memories) {
+            sess.begin_agentmemory_turn().await;
+            let trimmed_prompt = request.prompt.trim();
+            let query = (!trimmed_prompt.is_empty()).then(|| trimmed_prompt.to_string());
+            if is_trivial_user_turn(trimmed_prompt) {
+                emit_automatic_memory_event(
+                    sess,
+                    turn_context,
+                    MemoryOperationStatus::Skipped,
+                    query,
+                    "Skipped automatic agentmemory retrieval for a trivial user turn.".to_string(),
+                    AgentmemoryContextEventDetail {
+                        reason: AgentmemoryContextReason::UserTurn.summary_label(),
+                        tool_name: None,
+                        tool_capability: None,
+                        query: None,
+                        endpoint: None,
+                        fallback_endpoint: None,
+                        request_budget_tokens: None,
+                        backend_error: None,
+                        scope: MemoryOperationScope::None,
+                        skip_reason: Some(AgentmemoryContextSkipReason::TrivialUserTurn),
+                        duplicate_suppressed: false,
+                        fallback_used: false,
+                        retrieval_attempted: false,
+                        context_injected: false,
+                    },
+                    false,
                 )
-                .await
-            {
-                Ok((context, skipped)) if !skipped && !context.trim().is_empty() => {
-                    let preview_runs = sess.hooks().preview_user_prompt_submit(&request);
-                    let mut outcome = run_context_injecting_hook(
-                        sess,
-                        turn_context,
-                        preview_runs,
-                        sess.hooks().run_user_prompt_submit(request),
+                .await;
+            } else {
+                let session_id = sess.conversation_id.to_string();
+                let query = trimmed_prompt.to_string();
+                let mut resolved_context = None;
+                let mut refresh_error = None;
+                let refresh_result = adapter
+                    .refresh_context(
+                        &session_id,
+                        turn_context.cwd.as_path(),
+                        query.as_str(),
+                        &turn_context.config.memories,
                     )
                     .await;
+
+                match refresh_result {
+                    Ok((context, skipped)) if !skipped && !context.trim().is_empty() => {
+                        resolved_context = register_automatic_context_injection(
+                            sess,
+                            turn_context,
+                            AutomaticContextInjectionArgs {
+                                reason: AgentmemoryContextReason::UserTurn,
+                                tool_name: None,
+                                tool_capability: None,
+                                query: Some(query.clone()),
+                                endpoint: AgentmemoryContextEndpoint::ContextRefresh,
+                                fallback_endpoint: None,
+                                request_budget_tokens: None,
+                                context,
+                            },
+                        )
+                        .await;
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        tracing::warn!(
+                            "failed to refresh agentmemory context on prompt submit: {err}"
+                        );
+                        refresh_error = Some(err);
+                    }
+                }
+
+                if resolved_context.is_none() {
+                    match adapter
+                        .recall_context(
+                            &session_id,
+                            turn_context.cwd.as_path(),
+                            Some(query.as_str()),
+                            QUERY_CONTEXT_BUDGET_TOKENS,
+                            &turn_context.config.memories,
+                        )
+                        .await
+                    {
+                        Ok(context) if !context.trim().is_empty() => {
+                            resolved_context = register_automatic_context_injection(
+                                sess,
+                                turn_context,
+                                AutomaticContextInjectionArgs {
+                                    reason: AgentmemoryContextReason::UserTurn,
+                                    tool_name: None,
+                                    tool_capability: None,
+                                    query: Some(query.clone()),
+                                    endpoint: AgentmemoryContextEndpoint::Context,
+                                    fallback_endpoint: Some(
+                                        AgentmemoryContextEndpoint::ContextRefresh,
+                                    ),
+                                    request_budget_tokens: Some(QUERY_CONTEXT_BUDGET_TOKENS),
+                                    context,
+                                },
+                            )
+                            .await;
+                        }
+                        Ok(_) => {
+                            emit_automatic_memory_event(
+                                sess,
+                                turn_context,
+                                MemoryOperationStatus::Empty,
+                                Some(query.clone()),
+                                "Agentmemory retrieval returned no usable context for this user turn."
+                                    .to_string(),
+                                AgentmemoryContextEventDetail {
+                                    reason: AgentmemoryContextReason::UserTurn.summary_label(),
+                                    tool_name: None,
+                                    tool_capability: None,
+                                    query: Some(query.clone()),
+                                    endpoint: Some(AgentmemoryContextEndpoint::Context),
+                                    fallback_endpoint: Some(
+                                        AgentmemoryContextEndpoint::ContextRefresh,
+                                    ),
+                                    request_budget_tokens: Some(QUERY_CONTEXT_BUDGET_TOKENS),
+                                    backend_error: refresh_error,
+                                    scope: MemoryOperationScope::None,
+                                    skip_reason: Some(AgentmemoryContextSkipReason::EmptyResult),
+                                    duplicate_suppressed: false,
+                                    fallback_used: true,
+                                    retrieval_attempted: true,
+                                    context_injected: false,
+                                },
+                                false,
+                            )
+                            .await;
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                "failed to fall back to /agentmemory/context on prompt submit: {err}"
+                            );
+                            let backend_error = match refresh_error {
+                                Some(refresh_error) => {
+                                    Some(format!("refresh: {refresh_error}; fallback: {err}"))
+                                }
+                                None => Some(err),
+                            };
+                            emit_automatic_memory_event(
+                                sess,
+                                turn_context,
+                                MemoryOperationStatus::Error,
+                                Some(query.clone()),
+                                "Agentmemory retrieval failed for this user turn.".to_string(),
+                                AgentmemoryContextEventDetail {
+                                    reason: AgentmemoryContextReason::UserTurn.summary_label(),
+                                    tool_name: None,
+                                    tool_capability: None,
+                                    query: Some(query),
+                                    endpoint: Some(AgentmemoryContextEndpoint::Context),
+                                    fallback_endpoint: Some(
+                                        AgentmemoryContextEndpoint::ContextRefresh,
+                                    ),
+                                    request_budget_tokens: Some(QUERY_CONTEXT_BUDGET_TOKENS),
+                                    backend_error,
+                                    scope: MemoryOperationScope::None,
+                                    skip_reason: Some(AgentmemoryContextSkipReason::BackendError),
+                                    duplicate_suppressed: false,
+                                    fallback_used: true,
+                                    retrieval_attempted: true,
+                                    context_injected: false,
+                                },
+                                false,
+                            )
+                            .await;
+                        }
+                    }
+                }
+
+                let preview_runs = sess.hooks().preview_user_prompt_submit(&request);
+                let mut outcome = run_context_injecting_hook(
+                    sess,
+                    turn_context,
+                    preview_runs,
+                    sess.hooks().run_user_prompt_submit(request),
+                )
+                .await;
+                if let Some(context) = resolved_context {
                     outcome.additional_contexts.push(context);
-                    return outcome;
                 }
-                Ok(_) => {}
-                Err(err) => {
-                    tracing::warn!("failed to refresh agentmemory context on prompt submit: {err}");
-                }
+                return outcome;
             }
         }
     }
