@@ -679,7 +679,7 @@ pub(crate) async fn run_user_prompt_submit_hooks(
                 .await;
         });
 
-        if adapter.inject_context_enabled(&turn_context.config.memories) {
+        {
             sess.begin_agentmemory_turn().await;
             let trimmed_prompt = request.prompt.trim();
             let query = (!trimmed_prompt.is_empty()).then(|| trimmed_prompt.to_string());

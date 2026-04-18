@@ -213,6 +213,7 @@ async fn pre_tool_enrichment_injects_context_for_write_lane() -> Result<()> {
     assert_eq!(
         normalized["capabilities"],
         json!([
+            "assistant_result",
             "structured_post_tool_payload",
             "query_aware_context",
             "event_identity",
@@ -420,6 +421,82 @@ async fn glob_lane_enrichment_and_post_tool_capture_use_native_contract() -> Res
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial(agentmemory_env)]
+async fn assistant_result_is_emitted_as_native_observe_payload() -> Result<()> {
+    let model_server = start_mock_server().await;
+    let agentmemory_server = MockServer::start().await;
+    mount_agentmemory_runtime(&agentmemory_server).await;
+
+    let mut builder = test_codex().with_config({
+        let agentmemory_base_url = agentmemory_server.uri();
+        move |config| {
+            config.memories.backend = MemoryBackend::Agentmemory;
+            config.memories.agentmemory.base_url = agentmemory_base_url;
+            config
+                .features
+                .disable(Feature::MemoryTool)
+                .expect("test config should allow feature update");
+        }
+    });
+    let test = builder.build(&model_server).await?;
+    let responses = mount_sse_sequence(
+        &model_server,
+        vec![sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "final harbor answer"),
+            ev_completed("resp-1"),
+        ])],
+    )
+    .await;
+
+    test.submit_turn("summarize the harbor status").await?;
+    test.codex.shutdown_and_wait().await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 1);
+    let assistant_result = agentmemory_server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|request| request.url.path() == "/agentmemory/observe")
+        .map(|request| {
+            serde_json::from_slice::<serde_json::Value>(&request.body)
+                .expect("agentmemory observe body should be valid json")
+        })
+        .find(|payload| payload["hookType"] == "assistant_result")
+        .expect("assistant message should emit assistant_result observe payload");
+    let normalized = normalized_observe_payload(assistant_result);
+    assert_eq!(normalized["source"], "codex-native");
+    assert_eq!(normalized["payload_version"], "1");
+    assert_eq!(normalized["event_id"], "__EVENT_ID__");
+    assert_eq!(
+        normalized["capabilities"],
+        json!([
+            "assistant_result",
+            "structured_post_tool_payload",
+            "query_aware_context",
+            "event_identity",
+        ]),
+    );
+    assert_eq!(normalized["persistence_class"], "persistent");
+    assert_eq!(
+        normalized["data"]["session_id"],
+        test.session_configured.session_id.to_string(),
+    );
+    assert_eq!(
+        normalized["data"]["cwd"],
+        test.config.cwd.display().to_string(),
+    );
+    assert_eq!(normalized["data"]["assistant_text"], "final harbor answer");
+    assert_eq!(normalized["data"]["is_final"], true);
+    assert!(normalized["data"]["turn_id"].is_string());
+    assert!(normalized["data"]["model"].is_string());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(agentmemory_env)]
 async fn user_turn_retrieval_falls_back_to_context_and_emits_automatic_ready_event() -> Result<()> {
     let model_server = start_mock_server().await;
     let agentmemory_server = MockServer::start().await;
@@ -510,7 +587,7 @@ async fn assistant_memory_recall_thread_scope_persists_and_reports_scope() -> Re
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "context": "<agentmemory-context>thread recall note</agentmemory-context>",
         })))
-        .expect(1)
+        .expect(2)
         .mount(&agentmemory_server)
         .await;
 

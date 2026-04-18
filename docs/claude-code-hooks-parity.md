@@ -35,8 +35,9 @@ Current branch state:
 - when consolidation is enabled, shutdown also issues
   `POST /agentmemory/crystals/auto` and
   `POST /agentmemory/consolidate-pipeline`
-- current sender capabilities still do not advertise `assistant_result`;
-  freshness remains stop/task-completed driven on the Codex side
+- native sender capabilities now advertise `assistant_result`
+- finalized assistant messages emit `AssistantResult`, so freshness is no
+  longer stop/task-completed driven only
 
 Those documents define the memory backend and the runtime memory surface at a
 higher level. This document defines the hook-level operator contract that must

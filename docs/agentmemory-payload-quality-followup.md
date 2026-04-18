@@ -12,6 +12,14 @@ That earlier document captured the full sender-side target state. Much of it is
 now implemented. This follow-up spec exists to avoid re-opening already-closed
 lanes and to focus the next change set on the actual remaining sender gaps.
 
+## Status
+
+The required follow-up work in this document is now implemented on this branch.
+
+What remains after this change is optional hardening only:
+
+- shared cross-repo compatibility fixtures or corpus generation
+
 ## Audit Result
 
 As of this audit, the following sender-side lanes are already landed in
@@ -51,7 +59,7 @@ As of this audit, the following sender-side lanes are already landed in
   - refresh-to-context fallback
   - shutdown lifecycle observe payloads
 
-## Remaining Required Work
+## Implemented Follow-up Work
 
 ### 1. Emit real `AssistantResult` events
 

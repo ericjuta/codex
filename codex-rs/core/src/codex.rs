@@ -42,6 +42,7 @@ use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
+use crate::stream_events_utils::maybe_capture_agentmemory_assistant_result;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
 use crate::turn_metadata::TurnMetadataState;
@@ -8135,6 +8136,7 @@ async fn handle_assistant_item_done_in_plan_mode(
 
         record_completed_response_item(sess, turn_context, item).await;
         if let Some(agent_message) = last_assistant_message_from_item(item, /*plan_mode*/ true) {
+            maybe_capture_agentmemory_assistant_result(sess, turn_context, &agent_message);
             *last_agent_message = Some(agent_message);
         }
         return true;
