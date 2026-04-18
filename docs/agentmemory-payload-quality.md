@@ -13,6 +13,15 @@ the runtime is:
 This is primarily a Codex-owned spec because most of the current gaps are on
 the emitting side, not the ingest side.
 
+### Status Note
+
+This document captures the full sender-side target state from before the main
+payload-quality landing.
+
+Much of the gap list below is now closed in code. For the narrower post-landing
+audit and the actual remaining sender work, see
+[`agentmemory-payload-quality-followup.md`](./agentmemory-payload-quality-followup.md).
+
 ### Ownership
 
 Codex owns:
