@@ -36,7 +36,7 @@ pub(crate) const DEFAULT_RUNTIME_RECALL_TOKEN_BUDGET: usize =
     context_planner::DEFAULT_CONTEXT_BUDGET_TOKENS;
 const MEMORY_RUNTIME_DEVELOPER_INSTRUCTIONS: &str = "Use `memory_recall` for prior work, earlier decisions, previous failures, resumed threads, or other historical context that is not already present in the current thread.\n\
      Use `memory_remember` only for durable, high-value knowledge that should survive beyond the current turn.\n\
-     Use `memory_lessons`, `memory_crystals`, `memory_insights`, `memory_actions`, `memory_missions`, `memory_handoffs`, `memory_handoff_generate`, `memory_frontier`, and `memory_next` as read-oriented agentmemory review surfaces when they would materially help with coordination or retrieval.\n\
+     Use `memory_lessons`, `memory_crystals`, `memory_insights`, `memory_actions`, `memory_missions`, `memory_handoffs`, `memory_handoff_generate`, `memory_branch_overlays`, `memory_guardrails`, `memory_decisions`, `memory_dossiers`, `memory_routine_candidates`, `memory_frontier`, and `memory_next` as read-oriented agentmemory review surfaces when they would materially help with coordination or retrieval.\n\
      Agentmemory startup context may be attached below when available.\n\
      Assistant `memory_recall` stays turn-local unless it explicitly passes `scope: \"thread\"`.\n\
      Prefer targeted queries naming the feature, file, bug, or decision you need.\n\
@@ -841,6 +841,186 @@ impl AgentmemoryAdapter {
         }
         if let Some(limit) = limit {
             query.push(("limit".to_string(), limit.to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn list_branch_overlays(
+        &self,
+        project: &Path,
+        branch: Option<&str>,
+        limit: Option<u32>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/branch-overlays", self.api_base(memories));
+        let mut query = vec![("project".to_string(), project.display().to_string())];
+        if let Some(branch) = branch {
+            query.push(("branch".to_string(), branch.to_string()));
+        }
+        if let Some(limit) = limit {
+            query.push(("limit".to_string(), limit.to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn list_guardrails(
+        &self,
+        project: &Path,
+        branch: Option<&str>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/guardrails", self.api_base(memories));
+        let mut query = vec![("project".to_string(), project.display().to_string())];
+        if let Some(branch) = branch {
+            query.push(("branch".to_string(), branch.to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn search_guardrails(
+        &self,
+        query: &str,
+        project: &Path,
+        branch: Option<&str>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/guardrails/search", self.api_base(memories));
+        let mut body = json!({
+            "query": query,
+            "project": project.display().to_string(),
+        });
+        if let Some(branch) = branch {
+            body["branch"] = JsonValue::String(branch.to_string());
+        }
+        let res = self
+            .request_builder(reqwest::Method::POST, &url, memories)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn list_decisions(
+        &self,
+        project: &Path,
+        branch: Option<&str>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/decisions", self.api_base(memories));
+        let mut query = vec![("project".to_string(), project.display().to_string())];
+        if let Some(branch) = branch {
+            query.push(("branch".to_string(), branch.to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn search_decisions(
+        &self,
+        query: &str,
+        project: &Path,
+        branch: Option<&str>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/decisions/search", self.api_base(memories));
+        let mut body = json!({
+            "query": query,
+            "project": project.display().to_string(),
+        });
+        if let Some(branch) = branch {
+            body["branch"] = JsonValue::String(branch.to_string());
+        }
+        let res = self
+            .request_builder(reqwest::Method::POST, &url, memories)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn list_dossiers(
+        &self,
+        project: &Path,
+        branch: Option<&str>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/dossiers", self.api_base(memories));
+        let mut query = vec![("project".to_string(), project.display().to_string())];
+        if let Some(branch) = branch {
+            query.push(("branch".to_string(), branch.to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn get_dossier(
+        &self,
+        project: &Path,
+        file_path: &str,
+        branch: Option<&str>,
+        refresh: bool,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/dossiers/get", self.api_base(memories));
+        let mut query = vec![
+            ("project".to_string(), project.display().to_string()),
+            ("filePath".to_string(), file_path.to_string()),
+        ];
+        if let Some(branch) = branch {
+            query.push(("branch".to_string(), branch.to_string()));
+        }
+        if refresh {
+            query.push(("refresh".to_string(), "true".to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn list_routine_candidates(
+        &self,
+        project: &Path,
+        branch: Option<&str>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/routine-candidates", self.api_base(memories));
+        let mut query = vec![("project".to_string(), project.display().to_string())];
+        if let Some(branch) = branch {
+            query.push(("branch".to_string(), branch.to_string()));
         }
         let res = self
             .request_builder(reqwest::Method::GET, &url, memories)

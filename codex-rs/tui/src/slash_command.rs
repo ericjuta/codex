@@ -71,6 +71,11 @@ pub enum SlashCommand {
     MemoryReflect,
     MemoryActions,
     MemoryMissions,
+    MemoryBranchOverlays,
+    MemoryGuardrails,
+    MemoryDecisions,
+    MemoryDossiers,
+    MemoryRoutineCandidates,
     MemoryActionCreate,
     MemoryActionUpdate,
     MemoryHandoffs,
@@ -119,6 +124,11 @@ impl SlashCommand {
             SlashCommand::MemoryReflect => "generate reflected insights",
             SlashCommand::MemoryActions => "review tracked action work items",
             SlashCommand::MemoryMissions => "review tracked mission containers",
+            SlashCommand::MemoryBranchOverlays => "review branch-scoped overlay notes",
+            SlashCommand::MemoryGuardrails => "review negative memory guardrails",
+            SlashCommand::MemoryDecisions => "review durable decision memory",
+            SlashCommand::MemoryDossiers => "review file-level component dossiers",
+            SlashCommand::MemoryRoutineCandidates => "review routine compiler proposals",
             SlashCommand::MemoryActionCreate => "create a tracked action work item",
             SlashCommand::MemoryActionUpdate => "update a tracked action work item",
             SlashCommand::MemoryHandoffs => "review durable handoff packets",
@@ -176,6 +186,10 @@ impl SlashCommand {
                 | SlashCommand::MemoryReflect
                 | SlashCommand::MemoryActions
                 | SlashCommand::MemoryMissions
+                | SlashCommand::MemoryBranchOverlays
+                | SlashCommand::MemoryGuardrails
+                | SlashCommand::MemoryDecisions
+                | SlashCommand::MemoryDossiers
                 | SlashCommand::MemoryActionCreate
                 | SlashCommand::MemoryActionUpdate
                 | SlashCommand::MemoryHandoffs
@@ -215,6 +229,11 @@ impl SlashCommand {
             | SlashCommand::MemoryReflect
             | SlashCommand::MemoryActions
             | SlashCommand::MemoryMissions
+            | SlashCommand::MemoryBranchOverlays
+            | SlashCommand::MemoryGuardrails
+            | SlashCommand::MemoryDecisions
+            | SlashCommand::MemoryDossiers
+            | SlashCommand::MemoryRoutineCandidates
             | SlashCommand::MemoryActionCreate
             | SlashCommand::MemoryActionUpdate
             | SlashCommand::MemoryHandoffs

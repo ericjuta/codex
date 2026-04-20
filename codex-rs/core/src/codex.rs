@@ -5014,6 +5014,26 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         .await;
                     false
                 }
+                Op::ReviewBranchOverlays { branch } => {
+                    handlers::review_branch_overlays(&sess, &config, sub.id.clone(), branch).await;
+                    false
+                }
+                Op::ReviewGuardrails { query } => {
+                    handlers::review_guardrails(&sess, &config, sub.id.clone(), query).await;
+                    false
+                }
+                Op::ReviewDecisions { query } => {
+                    handlers::review_decisions(&sess, &config, sub.id.clone(), query).await;
+                    false
+                }
+                Op::ReviewDossiers { file_path } => {
+                    handlers::review_dossiers(&sess, &config, sub.id.clone(), file_path).await;
+                    false
+                }
+                Op::ReviewRoutineCandidates => {
+                    handlers::review_routine_candidates(&sess, &config, sub.id.clone()).await;
+                    false
+                }
                 Op::CreateAction { title } => {
                     handlers::create_action(&sess, &config, sub.id.clone(), title).await;
                     false
@@ -5933,6 +5953,50 @@ mod handlers {
         status: Option<String>,
     ) {
         super::agentmemory_ops::review_missions(sess, config, sub_id, mission_id, status).await;
+    }
+
+    pub async fn review_branch_overlays(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        branch: Option<String>,
+    ) {
+        super::agentmemory_ops::review_branch_overlays(sess, config, sub_id, branch).await;
+    }
+
+    pub async fn review_guardrails(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        query: Option<String>,
+    ) {
+        super::agentmemory_ops::review_guardrails(sess, config, sub_id, query).await;
+    }
+
+    pub async fn review_decisions(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        query: Option<String>,
+    ) {
+        super::agentmemory_ops::review_decisions(sess, config, sub_id, query).await;
+    }
+
+    pub async fn review_dossiers(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        file_path: Option<String>,
+    ) {
+        super::agentmemory_ops::review_dossiers(sess, config, sub_id, file_path).await;
+    }
+
+    pub async fn review_routine_candidates(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+    ) {
+        super::agentmemory_ops::review_routine_candidates(sess, config, sub_id).await;
     }
 
     pub async fn create_action(

@@ -908,6 +908,21 @@ impl ThreadHistoryBuilder {
                 codex_protocol::items::MemoryOperationKind::HandoffGenerate => {
                     MemoryOperationKind::HandoffGenerate
                 }
+                codex_protocol::items::MemoryOperationKind::BranchOverlays => {
+                    MemoryOperationKind::BranchOverlays
+                }
+                codex_protocol::items::MemoryOperationKind::Guardrails => {
+                    MemoryOperationKind::Guardrails
+                }
+                codex_protocol::items::MemoryOperationKind::Decisions => {
+                    MemoryOperationKind::Decisions
+                }
+                codex_protocol::items::MemoryOperationKind::Dossiers => {
+                    MemoryOperationKind::Dossiers
+                }
+                codex_protocol::items::MemoryOperationKind::RoutineCandidates => {
+                    MemoryOperationKind::RoutineCandidates
+                }
                 codex_protocol::items::MemoryOperationKind::Frontier => {
                     MemoryOperationKind::Frontier
                 }

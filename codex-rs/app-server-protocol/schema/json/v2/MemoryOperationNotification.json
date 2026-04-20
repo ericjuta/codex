@@ -19,6 +19,11 @@
         "missions",
         "handoffs",
         "handoff_generate",
+        "branch_overlays",
+        "guardrails",
+        "decisions",
+        "dossiers",
+        "routine_candidates",
         "frontier",
         "next"
       ],

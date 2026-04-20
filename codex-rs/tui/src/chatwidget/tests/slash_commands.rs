@@ -663,6 +663,82 @@ async fn slash_memory_missions_with_status_shows_pending_cell_and_submits_op() {
 }
 
 #[tokio::test]
+async fn slash_memory_branch_overlays_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryBranchOverlays);
+
+    assert!(active_blob(&chat).contains("Memory Branch Overlays Pending"));
+    assert!(active_blob(&chat).contains("Reviewing branch overlays for this workspace."));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ReviewBranchOverlays { branch }) if branch.is_none()
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_guardrails_with_query_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(
+        SlashCommand::MemoryGuardrails,
+        "localhost binding".to_string(),
+        Vec::new(),
+    );
+
+    assert!(active_blob(&chat).contains("Memory Guardrails Pending"));
+    assert!(active_blob(&chat).contains("localhost binding"));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ReviewGuardrails { query }) if query == Some("localhost binding".to_string())
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_decisions_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryDecisions);
+
+    assert!(active_blob(&chat).contains("Memory Decisions Pending"));
+    assert!(active_blob(&chat).contains("Reviewing decision memory for this workspace."));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ReviewDecisions { query }) if query.is_none()
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_dossiers_with_file_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(
+        SlashCommand::MemoryDossiers,
+        "src/functions/context.ts".to_string(),
+        Vec::new(),
+    );
+
+    assert!(active_blob(&chat).contains("Memory Dossiers Pending"));
+    assert!(active_blob(&chat).contains("src/functions/context.ts"));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ReviewDossiers { file_path })
+            if file_path == Some("src/functions/context.ts".to_string())
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_routine_candidates_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryRoutineCandidates);
+
+    assert!(active_blob(&chat).contains("Memory Routine Candidates Pending"));
+    assert!(active_blob(&chat).contains("Reviewing routine compiler proposals"));
+    assert_matches!(op_rx.try_recv(), Ok(Op::ReviewRoutineCandidates));
+}
+
+#[tokio::test]
 async fn slash_memory_handoffs_shows_pending_cell_and_submits_op() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

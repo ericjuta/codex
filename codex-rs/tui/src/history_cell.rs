@@ -2323,6 +2323,11 @@ impl MemoryHistoryCell {
             MemoryOperationKind::Missions => "Memory Missions",
             MemoryOperationKind::Handoffs => "Memory Handoffs",
             MemoryOperationKind::HandoffGenerate => "Memory Handoff Generate",
+            MemoryOperationKind::BranchOverlays => "Memory Branch Overlays",
+            MemoryOperationKind::Guardrails => "Memory Guardrails",
+            MemoryOperationKind::Decisions => "Memory Decisions",
+            MemoryOperationKind::Dossiers => "Memory Dossiers",
+            MemoryOperationKind::RoutineCandidates => "Memory Routine Candidates",
             MemoryOperationKind::Frontier => "Memory Frontier",
             MemoryOperationKind::Next => "Memory Next",
         }
@@ -2558,6 +2563,51 @@ pub(crate) fn new_memory_missions_submission(query: Option<String>) -> MemoryHis
         MemoryOperationKind::Missions,
         query,
         "Reviewing missions for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_branch_overlays_submission(query: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::BranchOverlays,
+        query,
+        "Reviewing branch overlays for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_guardrails_submission(query: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Guardrails,
+        query,
+        "Reviewing guardrails for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_decisions_submission(query: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Decisions,
+        query,
+        "Reviewing decision memory for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_dossiers_submission(query: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Dossiers,
+        query,
+        "Reviewing component dossiers for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_routine_candidates_submission() -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::RoutineCandidates,
+        None,
+        "Reviewing routine compiler proposals for this workspace.".to_string(),
         None,
     )
 }

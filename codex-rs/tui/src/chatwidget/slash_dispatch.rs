@@ -446,6 +446,36 @@ impl ChatWidget {
                     status: None,
                 });
             }
+            SlashCommand::MemoryBranchOverlays => {
+                self.show_pending_memory_operation(
+                    history_cell::new_memory_branch_overlays_submission(None),
+                );
+                self.submit_op(Op::ReviewBranchOverlays { branch: None });
+            }
+            SlashCommand::MemoryGuardrails => {
+                self.show_pending_memory_operation(history_cell::new_memory_guardrails_submission(
+                    None,
+                ));
+                self.submit_op(Op::ReviewGuardrails { query: None });
+            }
+            SlashCommand::MemoryDecisions => {
+                self.show_pending_memory_operation(history_cell::new_memory_decisions_submission(
+                    None,
+                ));
+                self.submit_op(Op::ReviewDecisions { query: None });
+            }
+            SlashCommand::MemoryDossiers => {
+                self.show_pending_memory_operation(history_cell::new_memory_dossiers_submission(
+                    None,
+                ));
+                self.submit_op(Op::ReviewDossiers { file_path: None });
+            }
+            SlashCommand::MemoryRoutineCandidates => {
+                self.show_pending_memory_operation(
+                    history_cell::new_memory_routine_candidates_submission(),
+                );
+                self.submit_op(Op::ReviewRoutineCandidates);
+            }
             SlashCommand::MemoryActionCreate => {
                 self.add_error_message("Usage: /memory-action-create <title>".to_string());
             }
@@ -819,6 +849,56 @@ impl ChatWidget {
                     mission_id.clone().or(status.clone()),
                 ));
                 self.submit_op(Op::ReviewMissions { mission_id, status });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryBranchOverlays if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                self.show_pending_memory_operation(
+                    history_cell::new_memory_branch_overlays_submission(Some(
+                        prepared_args.clone(),
+                    )),
+                );
+                self.submit_op(Op::ReviewBranchOverlays {
+                    branch: Some(prepared_args),
+                });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryGuardrails if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                self.show_pending_memory_operation(history_cell::new_memory_guardrails_submission(
+                    Some(prepared_args.clone()),
+                ));
+                self.submit_op(Op::ReviewGuardrails {
+                    query: Some(prepared_args),
+                });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryDecisions if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                self.show_pending_memory_operation(history_cell::new_memory_decisions_submission(
+                    Some(prepared_args.clone()),
+                ));
+                self.submit_op(Op::ReviewDecisions {
+                    query: Some(prepared_args),
+                });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryDossiers if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                self.show_pending_memory_operation(history_cell::new_memory_dossiers_submission(
+                    Some(prepared_args.clone()),
+                ));
+                self.submit_op(Op::ReviewDossiers {
+                    file_path: Some(prepared_args),
+                });
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::MemoryActionCreate if !trimmed.is_empty() => {

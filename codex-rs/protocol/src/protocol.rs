@@ -703,6 +703,33 @@ pub enum Op {
         status: Option<String>,
     },
 
+    /// Review branch-scoped overlay notes for the active project.
+    ReviewBranchOverlays {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
+    },
+
+    /// Review durable guardrails, optionally scoped by a search query.
+    ReviewGuardrails {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+
+    /// Review durable decision memory, optionally scoped by a search query.
+    ReviewDecisions {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+
+    /// Review file-level component dossiers or refresh a specific file dossier.
+    ReviewDossiers {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_path: Option<String>,
+    },
+
+    /// Review routine compiler proposals for repeated successful chains.
+    ReviewRoutineCandidates,
+
     /// Create a new explicit action work item.
     CreateAction { title: String },
 
@@ -878,6 +905,11 @@ impl Op {
             Self::ReviewInsights { .. } => "review_insights",
             Self::ListActions { .. } => "list_actions",
             Self::ReviewMissions { .. } => "review_missions",
+            Self::ReviewBranchOverlays { .. } => "review_branch_overlays",
+            Self::ReviewGuardrails { .. } => "review_guardrails",
+            Self::ReviewDecisions { .. } => "review_decisions",
+            Self::ReviewDossiers { .. } => "review_dossiers",
+            Self::ReviewRoutineCandidates => "review_routine_candidates",
             Self::CreateAction { .. } => "create_action",
             Self::UpdateAction { .. } => "update_action",
             Self::ReviewHandoffs { .. } => "review_handoffs",

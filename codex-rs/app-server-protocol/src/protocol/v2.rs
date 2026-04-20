@@ -3162,6 +3162,11 @@ pub enum MemoryOperationKind {
     Missions,
     Handoffs,
     HandoffGenerate,
+    BranchOverlays,
+    Guardrails,
+    Decisions,
+    Dossiers,
+    RoutineCandidates,
     Frontier,
     Next,
 }
@@ -3185,6 +3190,11 @@ impl From<CoreMemoryOperationKind> for MemoryOperationKind {
             CoreMemoryOperationKind::Missions => Self::Missions,
             CoreMemoryOperationKind::Handoffs => Self::Handoffs,
             CoreMemoryOperationKind::HandoffGenerate => Self::HandoffGenerate,
+            CoreMemoryOperationKind::BranchOverlays => Self::BranchOverlays,
+            CoreMemoryOperationKind::Guardrails => Self::Guardrails,
+            CoreMemoryOperationKind::Decisions => Self::Decisions,
+            CoreMemoryOperationKind::Dossiers => Self::Dossiers,
+            CoreMemoryOperationKind::RoutineCandidates => Self::RoutineCandidates,
             CoreMemoryOperationKind::Frontier => Self::Frontier,
             CoreMemoryOperationKind::Next => Self::Next,
         }

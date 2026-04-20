@@ -147,6 +147,11 @@ pub enum MemoryOperationKind {
     Missions,
     Handoffs,
     HandoffGenerate,
+    BranchOverlays,
+    Guardrails,
+    Decisions,
+    Dossiers,
+    RoutineCandidates,
     Frontier,
     Next,
 }

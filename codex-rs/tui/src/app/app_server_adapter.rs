@@ -179,6 +179,21 @@ fn app_server_memory_kind(
         codex_app_server_protocol::MemoryOperationKind::HandoffGenerate => {
             codex_protocol::items::MemoryOperationKind::HandoffGenerate
         }
+        codex_app_server_protocol::MemoryOperationKind::BranchOverlays => {
+            codex_protocol::items::MemoryOperationKind::BranchOverlays
+        }
+        codex_app_server_protocol::MemoryOperationKind::Guardrails => {
+            codex_protocol::items::MemoryOperationKind::Guardrails
+        }
+        codex_app_server_protocol::MemoryOperationKind::Decisions => {
+            codex_protocol::items::MemoryOperationKind::Decisions
+        }
+        codex_app_server_protocol::MemoryOperationKind::Dossiers => {
+            codex_protocol::items::MemoryOperationKind::Dossiers
+        }
+        codex_app_server_protocol::MemoryOperationKind::RoutineCandidates => {
+            codex_protocol::items::MemoryOperationKind::RoutineCandidates
+        }
         codex_app_server_protocol::MemoryOperationKind::Frontier => {
             codex_protocol::items::MemoryOperationKind::Frontier
         }

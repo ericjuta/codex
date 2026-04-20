@@ -107,6 +107,11 @@ fn operation_label(operation: MemoryOperationKind) -> &'static str {
         MemoryOperationKind::Missions => "Memory missions review",
         MemoryOperationKind::Handoffs => "Memory handoffs review",
         MemoryOperationKind::HandoffGenerate => "Memory handoff generation",
+        MemoryOperationKind::BranchOverlays => "Memory branch overlays review",
+        MemoryOperationKind::Guardrails => "Memory guardrails review",
+        MemoryOperationKind::Decisions => "Memory decisions review",
+        MemoryOperationKind::Dossiers => "Memory dossiers review",
+        MemoryOperationKind::RoutineCandidates => "Memory routine candidates review",
         MemoryOperationKind::Frontier => "Memory frontier review",
         MemoryOperationKind::Next => "Memory next review",
     }
@@ -1156,6 +1161,458 @@ pub(crate) async fn review_missions(
                     status: MemoryOperationStatus::Error,
                     query,
                     summary: "Mission review failed.".to_string(),
+                    detail: Some(err),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+    }
+}
+
+pub(crate) async fn review_branch_overlays(
+    sess: &Arc<Session>,
+    config: &Arc<Config>,
+    sub_id: String,
+    branch: Option<String>,
+) {
+    if config.memories.backend != crate::config::types::MemoryBackend::Agentmemory {
+        send_requires_agentmemory_backend(
+            sess,
+            &sub_id,
+            MemoryOperationKind::BranchOverlays,
+            branch.clone(),
+        )
+        .await;
+        return;
+    }
+
+    let adapter = AgentmemoryAdapter::new();
+    let project = project_path(config);
+    match adapter
+        .list_branch_overlays(project.as_path(), branch.as_deref(), None, &config.memories)
+        .await
+    {
+        Ok(response) if response_success(&response) => {
+            let count = response_count(&response, "overlays");
+            let status = if count > 0 {
+                MemoryOperationStatus::Ready
+            } else {
+                MemoryOperationStatus::Empty
+            };
+            let summary = if let Some(branch) = branch.as_deref() {
+                if count > 0 {
+                    format!("Reviewed {count} overlays for branch `{branch}`.")
+                } else {
+                    format!("No overlays were found for branch `{branch}`.")
+                }
+            } else if count > 0 {
+                format!("Reviewed {count} branch overlays.")
+            } else {
+                "No branch overlays are available yet.".to_string()
+            };
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::BranchOverlays,
+                    status,
+                    query: branch,
+                    summary,
+                    detail: response_pretty_json(&response),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+        Ok(response) => {
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::BranchOverlays,
+                    status: MemoryOperationStatus::Error,
+                    query: branch,
+                    summary: "Branch overlay review failed.".to_string(),
+                    detail: response_detail(&response),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+        Err(err) => {
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::BranchOverlays,
+                    status: MemoryOperationStatus::Error,
+                    query: branch,
+                    summary: "Branch overlay review failed.".to_string(),
+                    detail: Some(err),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+    }
+}
+
+pub(crate) async fn review_guardrails(
+    sess: &Arc<Session>,
+    config: &Arc<Config>,
+    sub_id: String,
+    query: Option<String>,
+) {
+    if config.memories.backend != crate::config::types::MemoryBackend::Agentmemory {
+        send_requires_agentmemory_backend(sess, &sub_id, MemoryOperationKind::Guardrails, query)
+            .await;
+        return;
+    }
+
+    let adapter = AgentmemoryAdapter::new();
+    let project = project_path(config);
+    let response = match query.as_deref() {
+        Some(query) => {
+            adapter
+                .search_guardrails(query, project.as_path(), None, &config.memories)
+                .await
+        }
+        None => {
+            adapter
+                .list_guardrails(project.as_path(), None, &config.memories)
+                .await
+        }
+    };
+
+    match response {
+        Ok(response) if response_success(&response) => {
+            let count = response_count(&response, "guardrails");
+            let status = if count > 0 {
+                MemoryOperationStatus::Ready
+            } else {
+                MemoryOperationStatus::Empty
+            };
+            let summary = if count > 0 {
+                format!("Reviewed {count} guardrails.")
+            } else if query.is_some() {
+                "No matching guardrails were found.".to_string()
+            } else {
+                "No guardrails are available yet.".to_string()
+            };
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Guardrails,
+                    status,
+                    query,
+                    summary,
+                    detail: response_pretty_json(&response),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+        Ok(response) => {
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Guardrails,
+                    status: MemoryOperationStatus::Error,
+                    query,
+                    summary: "Guardrail review failed.".to_string(),
+                    detail: response_detail(&response),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+        Err(err) => {
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Guardrails,
+                    status: MemoryOperationStatus::Error,
+                    query,
+                    summary: "Guardrail review failed.".to_string(),
+                    detail: Some(err),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+    }
+}
+
+pub(crate) async fn review_decisions(
+    sess: &Arc<Session>,
+    config: &Arc<Config>,
+    sub_id: String,
+    query: Option<String>,
+) {
+    if config.memories.backend != crate::config::types::MemoryBackend::Agentmemory {
+        send_requires_agentmemory_backend(sess, &sub_id, MemoryOperationKind::Decisions, query)
+            .await;
+        return;
+    }
+
+    let adapter = AgentmemoryAdapter::new();
+    let project = project_path(config);
+    let response = match query.as_deref() {
+        Some(query) => {
+            adapter
+                .search_decisions(query, project.as_path(), None, &config.memories)
+                .await
+        }
+        None => {
+            adapter
+                .list_decisions(project.as_path(), None, &config.memories)
+                .await
+        }
+    };
+
+    match response {
+        Ok(response) if response_success(&response) => {
+            let count = response_count(&response, "decisions");
+            let status = if count > 0 {
+                MemoryOperationStatus::Ready
+            } else {
+                MemoryOperationStatus::Empty
+            };
+            let summary = if count > 0 {
+                format!("Reviewed {count} decisions.")
+            } else if query.is_some() {
+                "No matching decisions were found.".to_string()
+            } else {
+                "No decision memory is available yet.".to_string()
+            };
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Decisions,
+                    status,
+                    query,
+                    summary,
+                    detail: response_pretty_json(&response),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+        Ok(response) => {
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Decisions,
+                    status: MemoryOperationStatus::Error,
+                    query,
+                    summary: "Decision review failed.".to_string(),
+                    detail: response_detail(&response),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+        Err(err) => {
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Decisions,
+                    status: MemoryOperationStatus::Error,
+                    query,
+                    summary: "Decision review failed.".to_string(),
+                    detail: Some(err),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+    }
+}
+
+pub(crate) async fn review_dossiers(
+    sess: &Arc<Session>,
+    config: &Arc<Config>,
+    sub_id: String,
+    file_path: Option<String>,
+) {
+    if config.memories.backend != crate::config::types::MemoryBackend::Agentmemory {
+        send_requires_agentmemory_backend(sess, &sub_id, MemoryOperationKind::Dossiers, file_path)
+            .await;
+        return;
+    }
+
+    let adapter = AgentmemoryAdapter::new();
+    let project = project_path(config);
+    let response = match file_path.as_deref() {
+        Some(file_path) => {
+            adapter
+                .get_dossier(project.as_path(), file_path, None, false, &config.memories)
+                .await
+        }
+        None => {
+            adapter
+                .list_dossiers(project.as_path(), None, &config.memories)
+                .await
+        }
+    };
+
+    match response {
+        Ok(response) if response_success(&response) => {
+            let count = response_count(&response, "dossiers");
+            let has_dossier = response.get("dossier").is_some();
+            let status = if has_dossier || count > 0 {
+                MemoryOperationStatus::Ready
+            } else {
+                MemoryOperationStatus::Empty
+            };
+            let summary = if let Some(file_path) = file_path.as_deref() {
+                format!("Reviewed dossier for `{file_path}`.")
+            } else if count > 0 {
+                format!("Reviewed {count} dossiers.")
+            } else {
+                "No dossiers are available yet.".to_string()
+            };
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Dossiers,
+                    status,
+                    query: file_path,
+                    summary,
+                    detail: response_pretty_json(&response),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+        Ok(response) => {
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Dossiers,
+                    status: MemoryOperationStatus::Error,
+                    query: file_path,
+                    summary: "Dossier review failed.".to_string(),
+                    detail: response_detail(&response),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+        Err(err) => {
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Dossiers,
+                    status: MemoryOperationStatus::Error,
+                    query: file_path,
+                    summary: "Dossier review failed.".to_string(),
+                    detail: Some(err),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+    }
+}
+
+pub(crate) async fn review_routine_candidates(
+    sess: &Arc<Session>,
+    config: &Arc<Config>,
+    sub_id: String,
+) {
+    if config.memories.backend != crate::config::types::MemoryBackend::Agentmemory {
+        send_requires_agentmemory_backend(
+            sess,
+            &sub_id,
+            MemoryOperationKind::RoutineCandidates,
+            None,
+        )
+        .await;
+        return;
+    }
+
+    let adapter = AgentmemoryAdapter::new();
+    let project = project_path(config);
+    match adapter
+        .list_routine_candidates(project.as_path(), None, &config.memories)
+        .await
+    {
+        Ok(response) if response_success(&response) => {
+            let count = response_count(&response, "routineCandidates");
+            let status = if count > 0 {
+                MemoryOperationStatus::Ready
+            } else {
+                MemoryOperationStatus::Empty
+            };
+            let summary = if count > 0 {
+                format!("Reviewed {count} routine candidates.")
+            } else {
+                "No routine candidates are available yet.".to_string()
+            };
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::RoutineCandidates,
+                    status,
+                    query: None,
+                    summary,
+                    detail: response_pretty_json(&response),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+        Ok(response) => {
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::RoutineCandidates,
+                    status: MemoryOperationStatus::Error,
+                    query: None,
+                    summary: "Routine candidate review failed.".to_string(),
+                    detail: response_detail(&response),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+        Err(err) => {
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::RoutineCandidates,
+                    status: MemoryOperationStatus::Error,
+                    query: None,
+                    summary: "Routine candidate review failed.".to_string(),
                     detail: Some(err),
                     context_injected: false,
                 },

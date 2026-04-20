@@ -277,6 +277,128 @@ fn create_memory_handoffs_tool() -> ToolSpec {
     })
 }
 
+fn create_memory_branch_overlays_tool() -> ToolSpec {
+    let properties = std::collections::BTreeMap::from([
+        (
+            "branch".to_string(),
+            JsonSchema::string(Some(
+                "Optional branch filter. When omitted, returns branch overlays for the current project."
+                    .to_string(),
+            )),
+        ),
+        (
+            "limit".to_string(),
+            JsonSchema::number(Some(
+                "Optional maximum number of overlays to return.".to_string(),
+            )),
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "memory_branch_overlays".to_string(),
+        description:
+            "Review branch-scoped overlay notes tracked by agentmemory for the current project."
+                .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(properties, None, Some(false.into())),
+        output_schema: Some(memory_success_output_schema("overlays")),
+    })
+}
+
+fn create_memory_guardrails_tool() -> ToolSpec {
+    let properties = std::collections::BTreeMap::from([(
+        "query".to_string(),
+        JsonSchema::string(Some(
+            "Optional targeted guardrail search query. When omitted, returns the current guardrail list for this project."
+                .to_string(),
+        )),
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "memory_guardrails".to_string(),
+        description: "Review guardrails derived by agentmemory for the current project. Use a query to search, or omit it to list current guardrails."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(properties, None, Some(false.into())),
+        output_schema: Some(memory_success_output_schema("guardrails")),
+    })
+}
+
+fn create_memory_decisions_tool() -> ToolSpec {
+    let properties = std::collections::BTreeMap::from([(
+        "query".to_string(),
+        JsonSchema::string(Some(
+            "Optional targeted decision search query. When omitted, returns the current decision list for this project."
+                .to_string(),
+        )),
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "memory_decisions".to_string(),
+        description: "Review decision memory derived by agentmemory for the current project. Use a query to search, or omit it to list current decisions."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(properties, None, Some(false.into())),
+        output_schema: Some(memory_success_output_schema("decisions")),
+    })
+}
+
+fn create_memory_dossiers_tool() -> ToolSpec {
+    let properties = std::collections::BTreeMap::from([
+        (
+            "file_path".to_string(),
+            JsonSchema::string(Some(
+                "Optional file path to fetch a specific dossier. When omitted, returns the dossier list for the current project."
+                    .to_string(),
+            )),
+        ),
+        (
+            "refresh".to_string(),
+            JsonSchema::boolean(Some(
+                "When true and file_path is provided, refresh the dossier before returning it."
+                    .to_string(),
+            )),
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "memory_dossiers".to_string(),
+        description:
+            "Review file-level component dossiers tracked by agentmemory for the current project."
+                .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(properties, None, Some(false.into())),
+        output_schema: Some(json!({
+            "type": "object",
+            "properties": {
+                "success": { "type": "boolean" },
+                "dossier": { "type": ["object", "null"] },
+                "dossiers": { "type": ["array", "null"] },
+                "error": { "type": ["string", "null"] }
+            },
+            "required": ["success"],
+            "additionalProperties": true
+        })),
+    })
+}
+
+fn create_memory_routine_candidates_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: "memory_routine_candidates".to_string(),
+        description:
+            "Review proposal-only routine candidates mined from repeated successful action chains."
+                .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(std::collections::BTreeMap::new(), None, Some(false.into())),
+        output_schema: Some(memory_success_output_schema("routineCandidates")),
+    })
+}
+
 fn create_memory_handoff_generate_tool() -> ToolSpec {
     let properties = std::collections::BTreeMap::from([
         (
@@ -426,8 +548,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::MemoryActionsHandler;
+    use crate::tools::handlers::MemoryBranchOverlaysHandler;
     use crate::tools::handlers::MemoryCrystalsHandler;
+    use crate::tools::handlers::MemoryDecisionsHandler;
+    use crate::tools::handlers::MemoryDossiersHandler;
     use crate::tools::handlers::MemoryFrontierHandler;
+    use crate::tools::handlers::MemoryGuardrailsHandler;
     use crate::tools::handlers::MemoryHandoffGenerateHandler;
     use crate::tools::handlers::MemoryHandoffsHandler;
     use crate::tools::handlers::MemoryInsightsHandler;
@@ -436,6 +562,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::MemoryNextHandler;
     use crate::tools::handlers::MemoryRecallHandler;
     use crate::tools::handlers::MemoryRememberHandler;
+    use crate::tools::handlers::MemoryRoutineCandidatesHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
     use crate::tools::handlers::RequestUserInputHandler;
@@ -508,8 +635,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
         default_mode_request_user_input: config.default_mode_request_user_input,
     });
     let memory_actions_handler = Arc::new(MemoryActionsHandler);
+    let memory_branch_overlays_handler = Arc::new(MemoryBranchOverlaysHandler);
     let memory_crystals_handler = Arc::new(MemoryCrystalsHandler);
+    let memory_decisions_handler = Arc::new(MemoryDecisionsHandler);
+    let memory_dossiers_handler = Arc::new(MemoryDossiersHandler);
     let memory_frontier_handler = Arc::new(MemoryFrontierHandler);
+    let memory_guardrails_handler = Arc::new(MemoryGuardrailsHandler);
     let memory_handoff_generate_handler = Arc::new(MemoryHandoffGenerateHandler);
     let memory_handoffs_handler = Arc::new(MemoryHandoffsHandler);
     let memory_insights_handler = Arc::new(MemoryInsightsHandler);
@@ -518,6 +649,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let memory_next_handler = Arc::new(MemoryNextHandler);
     let memory_recall_handler = Arc::new(MemoryRecallHandler);
     let memory_remember_handler = Arc::new(MemoryRememberHandler);
+    let memory_routine_candidates_handler = Arc::new(MemoryRoutineCandidatesHandler);
     let mut tool_search_handler = None;
     let tool_suggest_handler = Arc::new(ToolSuggestHandler);
     let code_mode_handler = Arc::new(CodeModeExecuteHandler);
@@ -648,12 +780,21 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.push_spec(create_memory_actions_tool());
         builder.push_spec(create_memory_missions_tool());
         builder.push_spec(create_memory_handoffs_tool());
+        builder.push_spec(create_memory_branch_overlays_tool());
+        builder.push_spec(create_memory_guardrails_tool());
+        builder.push_spec(create_memory_decisions_tool());
+        builder.push_spec(create_memory_dossiers_tool());
+        builder.push_spec(create_memory_routine_candidates_tool());
         builder.push_spec(create_memory_handoff_generate_tool());
         builder.push_spec(create_memory_frontier_tool());
         builder.push_spec(create_memory_next_tool());
         builder.register_handler("memory_actions", memory_actions_handler);
+        builder.register_handler("memory_branch_overlays", memory_branch_overlays_handler);
         builder.register_handler("memory_crystals", memory_crystals_handler);
+        builder.register_handler("memory_decisions", memory_decisions_handler);
+        builder.register_handler("memory_dossiers", memory_dossiers_handler);
         builder.register_handler("memory_frontier", memory_frontier_handler);
+        builder.register_handler("memory_guardrails", memory_guardrails_handler);
         builder.register_handler("memory_handoff_generate", memory_handoff_generate_handler);
         builder.register_handler("memory_handoffs", memory_handoffs_handler);
         builder.register_handler("memory_insights", memory_insights_handler);
@@ -662,6 +803,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler("memory_next", memory_next_handler);
         builder.register_handler("memory_recall", memory_recall_handler);
         builder.register_handler("memory_remember", memory_remember_handler);
+        builder.register_handler(
+            "memory_routine_candidates",
+            memory_routine_candidates_handler,
+        );
     }
     if let Some(deferred_mcp_tools) = deferred_mcp_tools.as_ref() {
         for (name, _) in deferred_mcp_tools.iter().filter(|(name, _)| {

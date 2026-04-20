@@ -375,6 +375,26 @@ fn memory_recall_is_exposed_with_memory_tool_feature_on_and_agentmemory_backend(
         create_memory_missions_tool()
     );
     assert_eq!(
+        find_tool(&tools, "memory_branch_overlays").spec,
+        create_memory_branch_overlays_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_guardrails").spec,
+        create_memory_guardrails_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_decisions").spec,
+        create_memory_decisions_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_dossiers").spec,
+        create_memory_dossiers_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_routine_candidates").spec,
+        create_memory_routine_candidates_tool()
+    );
+    assert_eq!(
         find_tool(&tools, "memory_handoffs").spec,
         create_memory_handoffs_tool()
     );

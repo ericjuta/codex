@@ -96,6 +96,22 @@ struct MemoryFrontierArgs {
     limit: Option<u32>,
 }
 
+#[derive(Debug, Deserialize)]
+struct MemoryBranchOverlaysArgs {
+    #[serde(default)]
+    branch: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryDossiersArgs {
+    #[serde(default)]
+    file_path: Option<String>,
+    #[serde(default)]
+    refresh: Option<bool>,
+}
+
 pub struct MemoryRecallHandler;
 pub struct MemoryRememberHandler;
 pub struct MemoryLessonsHandler;
@@ -103,6 +119,11 @@ pub struct MemoryCrystalsHandler;
 pub struct MemoryInsightsHandler;
 pub struct MemoryActionsHandler;
 pub struct MemoryMissionsHandler;
+pub struct MemoryBranchOverlaysHandler;
+pub struct MemoryGuardrailsHandler;
+pub struct MemoryDecisionsHandler;
+pub struct MemoryDossiersHandler;
+pub struct MemoryRoutineCandidatesHandler;
 pub struct MemoryHandoffsHandler;
 pub struct MemoryHandoffGenerateHandler;
 pub struct MemoryFrontierHandler;
@@ -684,6 +705,304 @@ async fn handle_missions(
     }
 }
 
+async fn handle_branch_overlays(
+    invocation: ToolInvocation,
+) -> Result<FunctionToolOutput, FunctionCallError> {
+    let ToolInvocation {
+        session,
+        turn,
+        payload,
+        ..
+    } = invocation;
+
+    let arguments = match payload {
+        ToolPayload::Function { arguments } => arguments,
+        _ => {
+            return Err(FunctionCallError::RespondToModel(
+                "memory_branch_overlays handler received unsupported payload".to_string(),
+            ));
+        }
+    };
+    require_agentmemory_backend(turn.as_ref(), "memory_branch_overlays")?;
+
+    let args: MemoryBranchOverlaysArgs = parse_arguments(&arguments)?;
+    let adapter = AgentmemoryAdapter::new();
+    let project = crate::agentmemory::workspace_project(turn.cwd.as_path());
+    let response = adapter
+        .list_branch_overlays(
+            project.as_path(),
+            args.branch.as_deref(),
+            args.limit,
+            &turn.config.memories,
+        )
+        .await;
+
+    handle_review_response(
+        session.as_ref(),
+        turn.as_ref(),
+        MemoryOperationKind::BranchOverlays,
+        args.branch,
+        response,
+        "memory_branch_overlays",
+        "overlays",
+    )
+    .await
+}
+
+async fn handle_guardrails(
+    invocation: ToolInvocation,
+) -> Result<FunctionToolOutput, FunctionCallError> {
+    let ToolInvocation {
+        session,
+        turn,
+        payload,
+        ..
+    } = invocation;
+
+    let arguments = match payload {
+        ToolPayload::Function { arguments } => arguments,
+        _ => {
+            return Err(FunctionCallError::RespondToModel(
+                "memory_guardrails handler received unsupported payload".to_string(),
+            ));
+        }
+    };
+    require_agentmemory_backend(turn.as_ref(), "memory_guardrails")?;
+
+    let args: MemoryQueryArgs = parse_arguments(&arguments)?;
+    let adapter = AgentmemoryAdapter::new();
+    let project = crate::agentmemory::workspace_project(turn.cwd.as_path());
+    let response = match args
+        .query
+        .as_deref()
+        .map(str::trim)
+        .filter(|query| !query.is_empty())
+    {
+        Some(query) => {
+            adapter
+                .search_guardrails(query, project.as_path(), None, &turn.config.memories)
+                .await
+        }
+        None => {
+            adapter
+                .list_guardrails(project.as_path(), None, &turn.config.memories)
+                .await
+        }
+    };
+
+    handle_review_response(
+        session.as_ref(),
+        turn.as_ref(),
+        MemoryOperationKind::Guardrails,
+        args.query,
+        response,
+        "memory_guardrails",
+        "guardrails",
+    )
+    .await
+}
+
+async fn handle_decisions(
+    invocation: ToolInvocation,
+) -> Result<FunctionToolOutput, FunctionCallError> {
+    let ToolInvocation {
+        session,
+        turn,
+        payload,
+        ..
+    } = invocation;
+
+    let arguments = match payload {
+        ToolPayload::Function { arguments } => arguments,
+        _ => {
+            return Err(FunctionCallError::RespondToModel(
+                "memory_decisions handler received unsupported payload".to_string(),
+            ));
+        }
+    };
+    require_agentmemory_backend(turn.as_ref(), "memory_decisions")?;
+
+    let args: MemoryQueryArgs = parse_arguments(&arguments)?;
+    let adapter = AgentmemoryAdapter::new();
+    let project = crate::agentmemory::workspace_project(turn.cwd.as_path());
+    let response = match args
+        .query
+        .as_deref()
+        .map(str::trim)
+        .filter(|query| !query.is_empty())
+    {
+        Some(query) => {
+            adapter
+                .search_decisions(query, project.as_path(), None, &turn.config.memories)
+                .await
+        }
+        None => {
+            adapter
+                .list_decisions(project.as_path(), None, &turn.config.memories)
+                .await
+        }
+    };
+
+    handle_review_response(
+        session.as_ref(),
+        turn.as_ref(),
+        MemoryOperationKind::Decisions,
+        args.query,
+        response,
+        "memory_decisions",
+        "decisions",
+    )
+    .await
+}
+
+async fn handle_dossiers(
+    invocation: ToolInvocation,
+) -> Result<FunctionToolOutput, FunctionCallError> {
+    let ToolInvocation {
+        session,
+        turn,
+        payload,
+        ..
+    } = invocation;
+
+    let arguments = match payload {
+        ToolPayload::Function { arguments } => arguments,
+        _ => {
+            return Err(FunctionCallError::RespondToModel(
+                "memory_dossiers handler received unsupported payload".to_string(),
+            ));
+        }
+    };
+    require_agentmemory_backend(turn.as_ref(), "memory_dossiers")?;
+
+    let args: MemoryDossiersArgs = parse_arguments(&arguments)?;
+    let adapter = AgentmemoryAdapter::new();
+    let project = crate::agentmemory::workspace_project(turn.cwd.as_path());
+    let response = match args
+        .file_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|file_path| !file_path.is_empty())
+    {
+        Some(file_path) => {
+            adapter
+                .get_dossier(
+                    project.as_path(),
+                    file_path,
+                    None,
+                    args.refresh.unwrap_or(false),
+                    &turn.config.memories,
+                )
+                .await
+        }
+        None => {
+            adapter
+                .list_dossiers(project.as_path(), None, &turn.config.memories)
+                .await
+        }
+    };
+
+    match response {
+        Ok(response) if json_success(&response) => {
+            let has_dossier = response.get("dossier").is_some();
+            let count = json_count(&response, "dossiers");
+            let status = if has_dossier || count > 0 {
+                MemoryOperationStatus::Ready
+            } else {
+                MemoryOperationStatus::Empty
+            };
+            let summary = if let Some(file_path) = args.file_path.as_deref() {
+                format!("Reviewed dossier for `{file_path}`.")
+            } else if count > 0 {
+                format!("Assistant reviewed {count} dossiers.")
+            } else {
+                "Assistant found no dossiers.".to_string()
+            };
+            emit_event(
+                &session,
+                turn.as_ref(),
+                MemoryOperationKind::Dossiers,
+                status,
+                args.file_path.clone(),
+                summary,
+                serde_json::to_string_pretty(&response).ok(),
+            )
+            .await;
+            json_text_output(response)
+        }
+        Ok(response) => {
+            let detail = json_error_detail(&response);
+            emit_event(
+                &session,
+                turn.as_ref(),
+                MemoryOperationKind::Dossiers,
+                MemoryOperationStatus::Error,
+                args.file_path.clone(),
+                "Assistant dossier review failed.".to_string(),
+                detail.clone(),
+            )
+            .await;
+            Err(FunctionCallError::RespondToModel(
+                detail.unwrap_or_else(|| "memory_dossiers failed".to_string()),
+            ))
+        }
+        Err(err) => {
+            emit_event(
+                &session,
+                turn.as_ref(),
+                MemoryOperationKind::Dossiers,
+                MemoryOperationStatus::Error,
+                args.file_path,
+                "Assistant dossier review failed.".to_string(),
+                Some(err.clone()),
+            )
+            .await;
+            Err(FunctionCallError::RespondToModel(format!(
+                "memory_dossiers failed: {err}"
+            )))
+        }
+    }
+}
+
+async fn handle_routine_candidates(
+    invocation: ToolInvocation,
+) -> Result<FunctionToolOutput, FunctionCallError> {
+    let ToolInvocation {
+        session,
+        turn,
+        payload,
+        ..
+    } = invocation;
+
+    let arguments = match payload {
+        ToolPayload::Function { arguments } => arguments,
+        _ => {
+            return Err(FunctionCallError::RespondToModel(
+                "memory_routine_candidates handler received unsupported payload".to_string(),
+            ));
+        }
+    };
+    require_agentmemory_backend(turn.as_ref(), "memory_routine_candidates")?;
+    let _: MemoryQueryArgs = parse_arguments(&arguments)?;
+
+    let adapter = AgentmemoryAdapter::new();
+    let project = crate::agentmemory::workspace_project(turn.cwd.as_path());
+    let response = adapter
+        .list_routine_candidates(project.as_path(), None, &turn.config.memories)
+        .await;
+
+    handle_review_response(
+        session.as_ref(),
+        turn.as_ref(),
+        MemoryOperationKind::RoutineCandidates,
+        None,
+        response,
+        "memory_routine_candidates",
+        "routineCandidates",
+    )
+    .await
+}
+
 async fn handle_handoffs(
     invocation: ToolInvocation,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
@@ -1244,6 +1563,66 @@ impl ToolHandler for MemoryMissionsHandler {
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         handle_missions(invocation).await
+    }
+}
+
+impl ToolHandler for MemoryBranchOverlaysHandler {
+    type Output = FunctionToolOutput;
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        handle_branch_overlays(invocation).await
+    }
+}
+
+impl ToolHandler for MemoryGuardrailsHandler {
+    type Output = FunctionToolOutput;
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        handle_guardrails(invocation).await
+    }
+}
+
+impl ToolHandler for MemoryDecisionsHandler {
+    type Output = FunctionToolOutput;
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        handle_decisions(invocation).await
+    }
+}
+
+impl ToolHandler for MemoryDossiersHandler {
+    type Output = FunctionToolOutput;
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        handle_dossiers(invocation).await
+    }
+}
+
+impl ToolHandler for MemoryRoutineCandidatesHandler {
+    type Output = FunctionToolOutput;
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        handle_routine_candidates(invocation).await
     }
 }
 
