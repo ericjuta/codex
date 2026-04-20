@@ -359,6 +359,7 @@ pub(crate) struct ChatComposer {
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
+    agentmemory_enabled: bool,
     windows_degraded_sandbox_active: bool,
     is_zellij: bool,
     status_line_value: Option<Line<'static>>,
@@ -494,6 +495,7 @@ impl ChatComposer {
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
+            agentmemory_enabled: false,
             windows_degraded_sandbox_active: false,
             is_zellij: matches!(
                 codex_terminal_detection::terminal_info().multiplexer,
@@ -593,6 +595,10 @@ impl ChatComposer {
 
     pub fn set_audio_device_selection_enabled(&mut self, enabled: bool) {
         self.audio_device_selection_enabled = enabled;
+    }
+
+    pub fn set_agentmemory_enabled(&mut self, enabled: bool) {
+        self.agentmemory_enabled = enabled;
     }
 
     /// Compatibility shim for tests that still toggle the removed steer mode flag.
@@ -2960,6 +2966,16 @@ impl ChatComposer {
             }
         };
 
+        let mut status_line_value = self.status_line_value.clone();
+        if self.agentmemory_enabled {
+            if let Some(existing) = status_line_value.as_mut() {
+                existing.spans.push(" · ".into());
+                existing.spans.push("Agentmemory".dim());
+            } else {
+                status_line_value = Some(Line::from("Agentmemory".dim()));
+            }
+        }
+
         FooterProps {
             mode,
             esc_backtrack_hint: self.esc_backtrack_hint,
@@ -2970,7 +2986,7 @@ impl ChatComposer {
             is_wsl,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
-            status_line_value: self.status_line_value.clone(),
+            status_line_value,
             status_line_enabled: self.status_line_enabled,
             active_agent_label: self.active_agent_label.clone(),
         }
@@ -4351,6 +4367,19 @@ mod tests {
                     .handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
                 let _ = composer
                     .handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+            },
+        );
+    }
+
+    #[test]
+    fn footer_status_line_shows_agentmemory_indicator() {
+        snapshot_composer_state(
+            "footer_status_line_with_agentmemory_indicator",
+            true,
+            |composer| {
+                composer.set_status_line_enabled(true);
+                composer.set_status_line(Some(Line::from("Status line content".to_string())));
+                composer.set_agentmemory_enabled(true);
             },
         );
     }
