@@ -4144,6 +4144,46 @@ after resume
 "###);
     }
 
+    #[test]
+    fn memory_handoffs_automatic_result_snapshot() {
+        let cell = new_memory_operation_event(MemoryOperationEvent {
+            source: MemoryOperationSource::Automatic,
+            operation: MemoryOperationKind::Handoffs,
+            status: MemoryOperationStatus::Ready,
+            scope: MemoryOperationScope::None,
+            query: Some("session thr_123".to_string()),
+            summary: "Reviewed 1 `session` handoff packets for `thr_123`.".to_string(),
+            detail: Some(
+                serde_json::to_string_pretty(&json!({
+                    "success": true,
+                    "handoffPackets": [
+                        {
+                            "summary": "Resume the deferred memory polish work",
+                            "scopeType": "session",
+                            "scopeId": "thr_123",
+                            "recommendedNextStep": "Verify replay and app-server rendering",
+                            "blockers": ["finish TUI snapshots"]
+                        }
+                    ]
+                }))
+                .expect("handoff response should serialize"),
+            ),
+            context_injected: false,
+        });
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+🧠 Memory Handoffs Ready
+  Query: session thr_123
+  Scope: none
+  Source: automatic
+  Reviewed 1 `session` handoff packets for `thr_123`.
+  Packet: Resume the deferred memory polish work
+  Scope: session thr_123
+  Next: Verify replay and app-server rendering
+  Blockers: finish TUI snapshots
+"###);
+    }
+
     #[tokio::test]
     async fn mcp_tools_output_masks_sensitive_values() {
         let mut config = test_config().await;

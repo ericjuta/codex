@@ -746,6 +746,52 @@ async fn replayed_memory_action_item_renders_memory_cell() {
 }
 
 #[tokio::test]
+async fn replayed_automatic_handoff_item_renders_resume_packet_cell() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.replay_thread_item(
+        AppServerThreadItem::MemoryOperation {
+            id: "memory-handoff-1".to_string(),
+            source: codex_app_server_protocol::MemoryOperationSource::Automatic,
+            operation: codex_app_server_protocol::MemoryOperationKind::Handoffs,
+            status: codex_app_server_protocol::MemoryOperationStatus::Ready,
+            scope: codex_app_server_protocol::MemoryOperationScope::None,
+            query: Some("session thr_123".to_string()),
+            summary: "Reviewed 1 `session` handoff packets for `thr_123`.".to_string(),
+            detail: Some(
+                serde_json::to_string_pretty(&json!({
+                    "success": true,
+                    "handoffPackets": [
+                        {
+                            "summary": "Resume the deferred memory polish work",
+                            "scopeType": "session",
+                            "scopeId": "thr_123",
+                            "recommendedNextStep": "Verify replay and app-server rendering",
+                            "blockers": ["finish TUI snapshots"]
+                        }
+                    ]
+                }))
+                .expect("handoff detail should serialize"),
+            ),
+            context_injected: false,
+        },
+        "turn-1".to_string(),
+        ReplayKind::ThreadSnapshot,
+    );
+
+    let rendered = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            lines_to_single_string(&cell.transcript_lines(/*width*/ 80))
+        }
+        other => panic!("expected InsertHistoryCell, got {other:?}"),
+    };
+    assert!(rendered.contains("Memory Handoffs"));
+    assert!(rendered.contains("Source: automatic"));
+    assert!(rendered.contains("session thr_123"));
+    assert!(rendered.contains("Resume the deferred memory polish work"));
+}
+
+#[tokio::test]
 async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
