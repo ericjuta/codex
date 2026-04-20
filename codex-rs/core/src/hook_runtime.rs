@@ -10,6 +10,7 @@ use crate::agentmemory::context_planner::AutoInjectionRegistration;
 use crate::agentmemory::context_planner::PRETOOL_CONTEXT_BUDGET_TOKENS;
 use crate::agentmemory::context_planner::QUERY_CONTEXT_BUDGET_TOKENS;
 use crate::agentmemory::context_planner::is_trivial_user_turn;
+use crate::agentmemory::retrieval_trace::AgentmemoryRetrievalTraceSummary;
 use codex_hooks::PostToolUseOutcome;
 use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
@@ -73,6 +74,7 @@ struct AutomaticContextInjectionArgs {
     fallback_endpoint: Option<AgentmemoryContextEndpoint>,
     request_budget_tokens: Option<usize>,
     context: String,
+    retrieval_trace: Option<AgentmemoryRetrievalTraceSummary>,
 }
 
 async fn emit_automatic_memory_event(
@@ -114,6 +116,7 @@ async fn register_automatic_context_injection(
         fallback_endpoint,
         request_budget_tokens,
         context,
+        retrieval_trace,
     } = args;
     let lane_key = reason.lane_key(tool_name.as_deref());
     match sess
@@ -142,6 +145,7 @@ async fn register_automatic_context_injection(
                     fallback_used: fallback_endpoint.is_some(),
                     retrieval_attempted: true,
                     context_injected: true,
+                    retrieval_trace,
                 },
                 true,
             )
@@ -173,6 +177,7 @@ async fn register_automatic_context_injection(
                     fallback_used: fallback_endpoint.is_some(),
                     retrieval_attempted: true,
                     context_injected: false,
+                    retrieval_trace,
                 },
                 false,
             )
@@ -202,6 +207,7 @@ async fn register_automatic_context_injection(
                     fallback_used: fallback_endpoint.is_some(),
                     retrieval_attempted: true,
                     context_injected: false,
+                    retrieval_trace,
                 },
                 false,
             )
@@ -301,6 +307,7 @@ pub(crate) async fn run_pending_session_start_hooks(
                         fallback_used: false,
                         retrieval_attempted: true,
                         context_injected: true,
+                        retrieval_trace: None,
                     },
                     true,
                 )
@@ -369,6 +376,7 @@ pub(crate) async fn run_pending_session_start_hooks(
                     fallback_used: false,
                     retrieval_attempted: true,
                     context_injected: true,
+                    retrieval_trace: None,
                 },
                 true,
             )
@@ -442,6 +450,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
                                     fallback_endpoint: None,
                                     request_budget_tokens: Some(PRETOOL_CONTEXT_BUDGET_TOKENS),
                                     context,
+                                    retrieval_trace: None,
                                 },
                             )
                             .await
@@ -474,6 +483,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
                                     fallback_used: false,
                                     retrieval_attempted: true,
                                     context_injected: false,
+                                    retrieval_trace: None,
                                 },
                                 false,
                             )
@@ -508,6 +518,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
                                     fallback_used: false,
                                     retrieval_attempted: true,
                                     context_injected: false,
+                                    retrieval_trace: None,
                                 },
                                 false,
                             )
@@ -540,6 +551,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
                             fallback_used: false,
                             retrieval_attempted: false,
                             context_injected: false,
+                            retrieval_trace: None,
                         },
                         false,
                     )
@@ -705,6 +717,7 @@ pub(crate) async fn run_user_prompt_submit_hooks(
                         fallback_used: false,
                         retrieval_attempted: false,
                         context_injected: false,
+                        retrieval_trace: None,
                     },
                     false,
                 )
@@ -715,7 +728,7 @@ pub(crate) async fn run_user_prompt_submit_hooks(
                 let mut resolved_context = None;
                 let mut refresh_error = None;
                 let refresh_result = adapter
-                    .refresh_context(
+                    .refresh_context_result(
                         &session_id,
                         turn_context.cwd.as_path(),
                         query.as_str(),
@@ -724,7 +737,8 @@ pub(crate) async fn run_user_prompt_submit_hooks(
                     .await;
 
                 match refresh_result {
-                    Ok((context, skipped)) if !skipped && !context.trim().is_empty() => {
+                    Ok(payload) if !payload.skipped && !payload.context.trim().is_empty() => {
+                        let retrieval_trace = payload.retrieval_trace_summary();
                         resolved_context = register_automatic_context_injection(
                             sess,
                             turn_context,
@@ -736,7 +750,8 @@ pub(crate) async fn run_user_prompt_submit_hooks(
                                 endpoint: AgentmemoryContextEndpoint::ContextRefresh,
                                 fallback_endpoint: None,
                                 request_budget_tokens: None,
-                                context,
+                                context: payload.context,
+                                retrieval_trace,
                             },
                         )
                         .await;
@@ -752,7 +767,7 @@ pub(crate) async fn run_user_prompt_submit_hooks(
 
                 if resolved_context.is_none() {
                     match adapter
-                        .recall_context(
+                        .recall_context_result(
                             &session_id,
                             turn_context.cwd.as_path(),
                             Some(query.as_str()),
@@ -761,7 +776,8 @@ pub(crate) async fn run_user_prompt_submit_hooks(
                         )
                         .await
                     {
-                        Ok(context) if !context.trim().is_empty() => {
+                        Ok(payload) if !payload.context.trim().is_empty() => {
+                            let retrieval_trace = payload.retrieval_trace_summary();
                             resolved_context = register_automatic_context_injection(
                                 sess,
                                 turn_context,
@@ -775,12 +791,13 @@ pub(crate) async fn run_user_prompt_submit_hooks(
                                         AgentmemoryContextEndpoint::ContextRefresh,
                                     ),
                                     request_budget_tokens: Some(QUERY_CONTEXT_BUDGET_TOKENS),
-                                    context,
+                                    context: payload.context,
+                                    retrieval_trace,
                                 },
                             )
                             .await;
                         }
-                        Ok(_) => {
+                        Ok(payload) => {
                             emit_automatic_memory_event(
                                 sess,
                                 turn_context,
@@ -805,6 +822,7 @@ pub(crate) async fn run_user_prompt_submit_hooks(
                                     fallback_used: true,
                                     retrieval_attempted: true,
                                     context_injected: false,
+                                    retrieval_trace: payload.retrieval_trace_summary(),
                                 },
                                 false,
                             )
@@ -843,6 +861,7 @@ pub(crate) async fn run_user_prompt_submit_hooks(
                                     fallback_used: true,
                                     retrieval_attempted: true,
                                     context_injected: false,
+                                    retrieval_trace: None,
                                 },
                                 false,
                             )

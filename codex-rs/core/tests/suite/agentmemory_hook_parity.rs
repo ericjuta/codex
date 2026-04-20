@@ -514,6 +514,27 @@ async fn user_turn_retrieval_falls_back_to_context_and_emits_automatic_ready_eve
         .and(path("/agentmemory/context"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "context": "<agentmemory-context>fallback harbor note</agentmemory-context>",
+            "trace": {
+                "queryTerms": ["fix", "harbor", "regression"],
+                "laneBudgets": { "hot": 100, "warm": 200, "cold": 300 },
+                "laneUsage": { "hot": 90, "warm": 110 },
+                "selected": [
+                    {
+                        "id": "capsule:turn-1",
+                        "lane": "hot",
+                        "decision": "selected_leftover_fill",
+                        "preview": "recent harbor regression turn"
+                    }
+                ],
+                "skipped": [
+                    {
+                        "id": "memory:old-harbor",
+                        "lane": "cold",
+                        "decision": "skipped_total_budget",
+                        "preview": "older harbor note"
+                    }
+                ]
+            }
         })))
         .expect(1)
         .mount(&agentmemory_server)
@@ -571,6 +592,18 @@ async fn user_turn_retrieval_falls_back_to_context_and_emits_automatic_ready_eve
     assert!(
         detail.contains("\"fallback_endpoint\": \"context_refresh\""),
         "detail should record refresh->context fallback: {detail}",
+    );
+    assert!(
+        detail.contains("\"retrieval_trace\""),
+        "detail should preserve retrieval trace summary: {detail}",
+    );
+    assert!(
+        detail.contains("\"selected_count\": 1"),
+        "detail should summarize selected retrieval candidates: {detail}",
+    );
+    assert!(
+        detail.contains("\"query_terms\": ["),
+        "detail should surface retrieval trace query terms: {detail}",
     );
 
     Ok(())

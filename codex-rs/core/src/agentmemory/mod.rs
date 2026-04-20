@@ -5,8 +5,11 @@
 
 pub(crate) mod context_planner;
 mod observe_payload;
+pub(crate) mod retrieval_trace;
 
 use crate::agentmemory::observe_payload::build_observe_payload;
+use crate::agentmemory::retrieval_trace::AgentmemoryRetrievalTrace;
+use crate::agentmemory::retrieval_trace::AgentmemoryRetrievalTraceSummary;
 use crate::config::types::AgentmemoryConfig;
 use crate::config::types::MemoriesConfig;
 use codex_git_utils::get_git_repo_root;
@@ -64,11 +67,21 @@ pub(crate) struct AgentmemorySummarizeResult {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-struct AgentmemoryContextResult {
+pub(crate) struct AgentmemoryContextResult {
     #[serde(default)]
-    context: String,
+    pub(crate) context: String,
     #[serde(default)]
-    skipped: bool,
+    pub(crate) skipped: bool,
+    #[serde(default)]
+    pub(crate) trace: Option<AgentmemoryRetrievalTrace>,
+}
+
+impl AgentmemoryContextResult {
+    pub(crate) fn retrieval_trace_summary(&self) -> Option<AgentmemoryRetrievalTraceSummary> {
+        self.trace
+            .as_ref()
+            .map(AgentmemoryRetrievalTraceSummary::from)
+    }
 }
 
 fn get_client() -> &'static reqwest::Client {
@@ -320,14 +333,14 @@ impl AgentmemoryAdapter {
     ///
     /// Unlike `build_startup_developer_instructions`, this uses the real
     /// session ID and an optional query to scope retrieval.
-    pub async fn recall_context(
+    pub(crate) async fn recall_context_result(
         &self,
         session_id: &str,
         cwd: &Path,
         query: Option<&str>,
         token_budget: usize,
         memories: &MemoriesConfig,
-    ) -> Result<String, String> {
+    ) -> Result<AgentmemoryContextResult, String> {
         let url = format!("{}/agentmemory/context", self.api_base(memories));
         let project = workspace_project(cwd);
 
@@ -346,8 +359,20 @@ impl AgentmemoryAdapter {
             .send()
             .await
             .map_err(|e| e.to_string())?;
-        let json_res = Self::json_or_error(res).await?;
-        Ok(json_res["context"].as_str().unwrap_or_default().to_string())
+        Self::parse_context_result(res).await
+    }
+
+    pub async fn recall_context(
+        &self,
+        session_id: &str,
+        cwd: &Path,
+        query: Option<&str>,
+        token_budget: usize,
+        memories: &MemoriesConfig,
+    ) -> Result<String, String> {
+        self.recall_context_result(session_id, cwd, query, token_budget, memories)
+            .await
+            .map(|payload| payload.context)
     }
 
     pub(crate) async fn recall_for_runtime(
@@ -358,7 +383,7 @@ impl AgentmemoryAdapter {
         memories: &MemoriesConfig,
     ) -> Result<MemoryRecallResult, String> {
         let context = self
-            .recall_context(
+            .recall_context_result(
                 session_id,
                 cwd,
                 query,
@@ -368,8 +393,8 @@ impl AgentmemoryAdapter {
             .await?;
 
         Ok(MemoryRecallResult {
-            recalled: !context.trim().is_empty(),
-            context,
+            recalled: !context.context.trim().is_empty(),
+            context: context.context,
         })
     }
 
@@ -427,13 +452,13 @@ impl AgentmemoryAdapter {
         Ok(payload.context)
     }
 
-    pub(crate) async fn refresh_context(
+    pub(crate) async fn refresh_context_result(
         &self,
         session_id: &str,
         cwd: &Path,
         query: &str,
         memories: &MemoriesConfig,
-    ) -> Result<(String, bool), String> {
+    ) -> Result<AgentmemoryContextResult, String> {
         let url = format!("{}/agentmemory/context/refresh", self.api_base(memories));
         let body = json!({
             "sessionId": session_id,
@@ -446,8 +471,7 @@ impl AgentmemoryAdapter {
             .send()
             .await
             .map_err(|err| err.to_string())?;
-        let payload = Self::parse_context_result(res).await?;
-        Ok((payload.context, payload.skipped))
+        Self::parse_context_result(res).await
     }
 
     /// Marks a session completed so Agentmemory's viewer can stop showing it as active.
@@ -1162,7 +1186,7 @@ mod tests {
             .await;
 
         let result = adapter
-            .refresh_context(
+            .refresh_context_result(
                 "session-1",
                 Path::new("/tmp/project"),
                 "debug agentmemory refresh semantics",
@@ -1172,10 +1196,10 @@ mod tests {
             .expect("refresh context should succeed");
 
         assert_eq!(
-            result,
+            (result.context, result.skipped),
             (
                 "<agentmemory-context>fresh</agentmemory-context>".to_string(),
-                false,
+                false
             )
         );
 
@@ -1189,6 +1213,98 @@ mod tests {
                 "project": "/tmp/project",
                 "query": "debug agentmemory refresh semantics",
             })
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn refresh_context_result_preserves_retrieval_trace_summary() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _url_guard = EnvVarGuard::set("AGENTMEMORY_URL", "");
+        let memories = test_memories(&server);
+
+        Mock::given(method("POST"))
+            .and(path("/agentmemory/context/refresh"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "context": "<agentmemory-context>fresh</agentmemory-context>",
+                "skipped": false,
+                "trace": {
+                    "queryTerms": ["debug", "agentmemory", "refresh"],
+                    "laneBudgets": { "hot": 100, "warm": 200, "cold": 300 },
+                    "laneUsage": { "hot": 80, "warm": 140 },
+                    "selected": [
+                        {
+                            "id": "capsule:turn-1",
+                            "lane": "hot",
+                            "decision": "selected_lane_budget",
+                            "preview": "recent turn capsule"
+                        }
+                    ],
+                    "skipped": [
+                        {
+                            "id": "memory:old",
+                            "lane": "cold",
+                            "decision": "skipped_total_budget",
+                            "preview": "older memory"
+                        }
+                    ]
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let result = adapter
+            .refresh_context_result(
+                "session-1",
+                Path::new("/tmp/project"),
+                "debug agentmemory refresh semantics",
+                &memories,
+            )
+            .await
+            .expect("refresh context should succeed");
+
+        let trace = result
+            .retrieval_trace_summary()
+            .expect("retrieval trace summary should exist");
+        assert_eq!(
+            trace,
+            AgentmemoryRetrievalTraceSummary {
+                query_terms: vec![
+                    "debug".to_string(),
+                    "agentmemory".to_string(),
+                    "refresh".to_string(),
+                ],
+                selected_count: 1,
+                skipped_count: 1,
+                lane_budgets: [
+                    ("cold".to_string(), 300_usize),
+                    ("hot".to_string(), 100_usize),
+                    ("warm".to_string(), 200_usize),
+                ]
+                .into_iter()
+                .collect(),
+                lane_usage: [
+                    ("hot".to_string(), 80_usize),
+                    ("warm".to_string(), 140_usize),
+                ]
+                .into_iter()
+                .collect(),
+                selected: vec![crate::agentmemory::retrieval_trace::AgentmemoryRetrievalTraceCandidateSummary {
+                    id: "capsule:turn-1".to_string(),
+                    lane: "hot".to_string(),
+                    decision: "selected_lane_budget".to_string(),
+                    preview: "recent turn capsule".to_string(),
+                }],
+                skipped: vec![crate::agentmemory::retrieval_trace::AgentmemoryRetrievalTraceCandidateSummary {
+                    id: "memory:old".to_string(),
+                    lane: "cold".to_string(),
+                    decision: "skipped_total_budget".to_string(),
+                    preview: "older memory".to_string(),
+                }],
+            }
         );
     }
 

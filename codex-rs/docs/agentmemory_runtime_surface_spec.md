@@ -23,6 +23,7 @@ Retrieval-quality and context-injection optimization beyond the parity lane is
 tracked separately in:
 
 - [`agentmemory_context_optimization_proposal.md`](./agentmemory_context_optimization_proposal.md)
+- [`agentmemory_retrieval_trace_followup_spec.md`](./agentmemory_retrieval_trace_followup_spec.md)
 
 It does not replace the broader architecture and hook-contract decisions in:
 

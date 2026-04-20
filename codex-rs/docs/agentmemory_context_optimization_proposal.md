@@ -11,6 +11,9 @@ Implementation notes:
   duplicate suppression and visible memory-operation events
 - non-trivial user turns now attempt `context/refresh` first and fall back to
   `context` when refresh is skipped, empty, or errors
+- automatic user-turn memory-operation detail now preserves compact retrieval
+  trace summaries when `agentmemory` returns them from `context` or
+  `context/refresh`
 - eligible pre-tool enrichment is now capability-driven via structured
   `agentmemory_input`, rather than a hook-runtime string whitelist
 - assistant `memory_recall` now accepts `scope: "thread"` for explicit

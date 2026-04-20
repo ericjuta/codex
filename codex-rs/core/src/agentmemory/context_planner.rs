@@ -3,6 +3,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
 
+use crate::agentmemory::retrieval_trace::AgentmemoryRetrievalTraceSummary;
 use codex_protocol::items::MemoryOperationScope;
 use serde::Serialize;
 
@@ -111,6 +112,8 @@ pub(crate) struct AgentmemoryContextEventDetail {
     pub(crate) fallback_used: bool,
     pub(crate) retrieval_attempted: bool,
     pub(crate) context_injected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) retrieval_trace: Option<AgentmemoryRetrievalTraceSummary>,
 }
 
 impl AgentmemoryContextEventDetail {
