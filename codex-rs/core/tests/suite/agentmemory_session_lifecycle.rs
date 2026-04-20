@@ -100,6 +100,7 @@ async fn agentmemory_session_lifecycle_is_registered_end_to_end() -> Result<()> 
         "payload_version": "1",
         "event_id": request_summaries_placeholder_event_id(),
         "capabilities": [
+            "assistant_result",
             "structured_post_tool_payload",
             "query_aware_context",
             "event_identity",
@@ -120,6 +121,7 @@ async fn agentmemory_session_lifecycle_is_registered_end_to_end() -> Result<()> 
         "payload_version": "1",
         "event_id": request_summaries_placeholder_event_id(),
         "capabilities": [
+            "assistant_result",
             "structured_post_tool_payload",
             "query_aware_context",
             "event_identity",
@@ -242,7 +244,7 @@ async fn session_start_context_is_injected_from_session_start_without_memory_too
     });
     let test = builder.build(&model_server).await?;
 
-    test.submit_turn("hello").await?;
+    test.submit_turn("ok").await?;
     test.codex.shutdown_and_wait().await?;
 
     let request = response.single_request();

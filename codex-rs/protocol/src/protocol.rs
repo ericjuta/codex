@@ -28,6 +28,7 @@ use crate::dynamic_tools::DynamicToolCallRequest;
 use crate::dynamic_tools::DynamicToolResponse;
 use crate::dynamic_tools::DynamicToolSpec;
 use crate::items::MemoryOperationKind;
+use crate::items::MemoryOperationScope;
 use crate::items::MemoryOperationStatus;
 use crate::items::TurnItem;
 use crate::mcp::CallToolResult;
@@ -694,11 +695,64 @@ pub enum Op {
         status: Option<String>,
     },
 
+    /// Review mission state for the active project.
+    ReviewMissions {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mission_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+    },
+
+    /// Review branch-scoped overlay notes for the active project.
+    ReviewBranchOverlays {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
+    },
+
+    /// Review durable guardrails, optionally scoped by a search query.
+    ReviewGuardrails {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+
+    /// Review durable decision memory, optionally scoped by a search query.
+    ReviewDecisions {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+
+    /// Review file-level component dossiers or refresh a specific file dossier.
+    ReviewDossiers {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_path: Option<String>,
+    },
+
+    /// Review routine compiler proposals for repeated successful chains.
+    ReviewRoutineCandidates,
+
     /// Create a new explicit action work item.
     CreateAction { title: String },
 
     /// Update an existing action work item.
     UpdateAction { action_id: String, status: String },
+
+    /// Review durable handoff packets for the active project.
+    ReviewHandoffs {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff_packet_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_type: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_id: Option<String>,
+    },
+
+    /// Generate a fresh durable handoff packet.
+    GenerateHandoff {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_type: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_id: Option<String>,
+    },
 
     /// Review current frontier suggestions.
     ReviewFrontier {
@@ -854,8 +908,16 @@ impl Op {
             Self::ReflectMemories { .. } => "reflect_memories",
             Self::ReviewInsights { .. } => "review_insights",
             Self::ListActions { .. } => "list_actions",
+            Self::ReviewMissions { .. } => "review_missions",
+            Self::ReviewBranchOverlays { .. } => "review_branch_overlays",
+            Self::ReviewGuardrails { .. } => "review_guardrails",
+            Self::ReviewDecisions { .. } => "review_decisions",
+            Self::ReviewDossiers { .. } => "review_dossiers",
+            Self::ReviewRoutineCandidates => "review_routine_candidates",
             Self::CreateAction { .. } => "create_action",
             Self::UpdateAction { .. } => "update_action",
+            Self::ReviewHandoffs { .. } => "review_handoffs",
+            Self::GenerateHandoff { .. } => "generate_handoff",
             Self::ReviewFrontier { .. } => "review_frontier",
             Self::ReviewNext => "review_next",
             Self::SetThreadName { .. } => "set_thread_name",
@@ -2118,6 +2180,7 @@ pub struct WarningEvent {
 pub enum MemoryOperationSource {
     Human,
     Assistant,
+    Automatic,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2126,6 +2189,8 @@ pub struct MemoryOperationEvent {
     pub source: MemoryOperationSource,
     pub operation: MemoryOperationKind,
     pub status: MemoryOperationStatus,
+    #[serde(default)]
+    pub scope: MemoryOperationScope,
     pub query: Option<String>,
     pub summary: String,
     pub detail: Option<String>,

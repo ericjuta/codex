@@ -4176,6 +4176,22 @@ impl App {
                             }
                             self.chat_widget.add_plain_history_lines(lines);
                         }
+                        if self.config.memories.backend
+                            == codex_config::types::MemoryBackend::Agentmemory
+                        {
+                            let thread_id = target_session.thread_id.to_string();
+                            self.chat_widget.show_pending_memory_operation(
+                                history_cell::new_memory_handoffs_submission(
+                                    Some(format!("session {thread_id}")),
+                                    Some(thread_id.clone()),
+                                ),
+                            );
+                            let _ = self.chat_widget.submit_op(Op::ReviewHandoffs {
+                                handoff_packet_id: None,
+                                scope_type: Some("session".to_string()),
+                                scope_id: Some(thread_id),
+                            });
+                        }
                     }
                     Err(err) => {
                         self.chat_widget.add_error_message(format!(

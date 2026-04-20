@@ -28,6 +28,17 @@ fn is_valid_action_status(status: &str) -> bool {
     )
 }
 
+fn is_valid_mission_status(status: &str) -> bool {
+    matches!(
+        status,
+        "draft" | "active" | "blocked" | "completed" | "cancelled"
+    )
+}
+
+fn is_valid_handoff_scope_type(scope_type: &str) -> bool {
+    matches!(scope_type, "action" | "mission" | "session")
+}
+
 fn parse_memory_action_update_args(input: &str) -> Option<(String, String)> {
     let mut parts = input.split_whitespace();
     let action_id = parts.next()?.trim();
@@ -36,6 +47,55 @@ fn parse_memory_action_update_args(input: &str) -> Option<(String, String)> {
         return None;
     }
     Some((action_id.to_string(), status))
+}
+
+fn parse_memory_handoff_generate_args(input: &str) -> Option<(Option<String>, Option<String>)> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Some((None, None));
+    }
+
+    let mut parts = trimmed.split_whitespace();
+    let scope_type = parts.next()?.trim().to_ascii_lowercase();
+    if !is_valid_handoff_scope_type(scope_type.as_str()) {
+        return None;
+    }
+    let scope_id = parts.next().map(|scope_id| scope_id.trim().to_string());
+    if parts.next().is_some() {
+        return None;
+    }
+    if scope_type != "session" && scope_id.is_none() {
+        return None;
+    }
+    Some((Some(scope_type), scope_id))
+}
+
+fn parse_memory_handoffs_args(
+    input: &str,
+) -> Option<(Option<String>, Option<String>, Option<String>)> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Some((None, None, None));
+    }
+
+    let mut parts = trimmed.split_whitespace();
+    let first = parts.next()?.trim();
+    let normalized = first.to_ascii_lowercase();
+    if !is_valid_handoff_scope_type(normalized.as_str()) {
+        return parts
+            .next()
+            .is_none()
+            .then_some((Some(trimmed.to_string()), None, None));
+    }
+
+    let scope_id = parts.next().map(|scope_id| scope_id.trim().to_string());
+    if parts.next().is_some() {
+        return None;
+    }
+    if normalized != "session" && scope_id.is_none() {
+        return None;
+    }
+    Some((None, Some(normalized), scope_id))
 }
 
 fn prepared_inline_args(widget: &mut ChatWidget, args: String) -> Option<String> {
@@ -405,6 +465,45 @@ impl ChatWidget {
                 ));
                 self.submit_op(Op::ListActions { status: None });
             }
+            SlashCommand::MemoryMissions => {
+                self.show_pending_memory_operation(history_cell::new_memory_missions_submission(
+                    None,
+                ));
+                self.submit_op(Op::ReviewMissions {
+                    mission_id: None,
+                    status: None,
+                });
+            }
+            SlashCommand::MemoryBranchOverlays => {
+                self.show_pending_memory_operation(
+                    history_cell::new_memory_branch_overlays_submission(None),
+                );
+                self.submit_op(Op::ReviewBranchOverlays { branch: None });
+            }
+            SlashCommand::MemoryGuardrails => {
+                self.show_pending_memory_operation(history_cell::new_memory_guardrails_submission(
+                    None,
+                ));
+                self.submit_op(Op::ReviewGuardrails { query: None });
+            }
+            SlashCommand::MemoryDecisions => {
+                self.show_pending_memory_operation(history_cell::new_memory_decisions_submission(
+                    None,
+                ));
+                self.submit_op(Op::ReviewDecisions { query: None });
+            }
+            SlashCommand::MemoryDossiers => {
+                self.show_pending_memory_operation(history_cell::new_memory_dossiers_submission(
+                    None,
+                ));
+                self.submit_op(Op::ReviewDossiers { file_path: None });
+            }
+            SlashCommand::MemoryRoutineCandidates => {
+                self.show_pending_memory_operation(
+                    history_cell::new_memory_routine_candidates_submission(),
+                );
+                self.submit_op(Op::ReviewRoutineCandidates);
+            }
             SlashCommand::MemoryActionCreate => {
                 self.add_error_message("Usage: /memory-action-create <title>".to_string());
             }
@@ -413,6 +512,25 @@ impl ChatWidget {
                     "Usage: /memory-action-update <action_id> <pending|active|done|blocked|cancelled>"
                         .to_string(),
                 );
+            }
+            SlashCommand::MemoryHandoffs => {
+                self.show_pending_memory_operation(history_cell::new_memory_handoffs_submission(
+                    None, None,
+                ));
+                self.submit_op(Op::ReviewHandoffs {
+                    handoff_packet_id: None,
+                    scope_type: None,
+                    scope_id: None,
+                });
+            }
+            SlashCommand::MemoryHandoffGenerate => {
+                self.show_pending_memory_operation(
+                    history_cell::new_memory_handoff_generate_submission(None, None),
+                );
+                self.submit_op(Op::GenerateHandoff {
+                    scope_type: None,
+                    scope_id: None,
+                });
             }
             SlashCommand::MemoryFrontier => {
                 self.show_pending_memory_operation(history_cell::new_memory_frontier_submission(
@@ -747,6 +865,72 @@ impl ChatWidget {
                 });
                 self.bottom_pane.drain_pending_submission_state();
             }
+            SlashCommand::MemoryMissions if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                let normalized = prepared_args.trim().to_ascii_lowercase();
+                let (mission_id, status) = if is_valid_mission_status(normalized.as_str()) {
+                    (None, Some(normalized))
+                } else {
+                    (Some(prepared_args), None)
+                };
+                self.show_pending_memory_operation(history_cell::new_memory_missions_submission(
+                    mission_id.clone().or(status.clone()),
+                ));
+                self.submit_op(Op::ReviewMissions { mission_id, status });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryBranchOverlays if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                self.show_pending_memory_operation(
+                    history_cell::new_memory_branch_overlays_submission(Some(
+                        prepared_args.clone(),
+                    )),
+                );
+                self.submit_op(Op::ReviewBranchOverlays {
+                    branch: Some(prepared_args),
+                });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryGuardrails if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                self.show_pending_memory_operation(history_cell::new_memory_guardrails_submission(
+                    Some(prepared_args.clone()),
+                ));
+                self.submit_op(Op::ReviewGuardrails {
+                    query: Some(prepared_args),
+                });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryDecisions if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                self.show_pending_memory_operation(history_cell::new_memory_decisions_submission(
+                    Some(prepared_args.clone()),
+                ));
+                self.submit_op(Op::ReviewDecisions {
+                    query: Some(prepared_args),
+                });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryDossiers if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                self.show_pending_memory_operation(history_cell::new_memory_dossiers_submission(
+                    Some(prepared_args.clone()),
+                ));
+                self.submit_op(Op::ReviewDossiers {
+                    file_path: Some(prepared_args),
+                });
+                self.bottom_pane.drain_pending_submission_state();
+            }
             SlashCommand::MemoryActionCreate if !trimmed.is_empty() => {
                 let Some(prepared_args) = prepared_inline_args(self, args) else {
                     return;
@@ -779,6 +963,62 @@ impl ChatWidget {
                     ),
                 );
                 self.submit_op(Op::UpdateAction { action_id, status });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryHandoffs if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                let Some((handoff_packet_id, scope_type, mut scope_id)) =
+                    parse_memory_handoffs_args(prepared_args.as_str())
+                else {
+                    self.add_error_message(
+                        "Usage: /memory-handoffs [<handoff_packet_id> | session [scope_id] | mission <mission_id> | action <action_id>]".to_string(),
+                    );
+                    return;
+                };
+                if scope_type.as_deref() == Some("session") && scope_id.is_none() {
+                    scope_id = self.thread_id().map(|thread_id| thread_id.to_string());
+                }
+                let query = handoff_packet_id.clone().or_else(|| {
+                    scope_type
+                        .clone()
+                        .zip(scope_id.clone())
+                        .map(|(scope_type, scope_id)| format!("{scope_type} {scope_id}"))
+                });
+                self.show_pending_memory_operation(history_cell::new_memory_handoffs_submission(
+                    query.clone(),
+                    scope_id.clone(),
+                ));
+                self.submit_op(Op::ReviewHandoffs {
+                    handoff_packet_id,
+                    scope_type,
+                    scope_id,
+                });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MemoryHandoffGenerate if !trimmed.is_empty() => {
+                let Some(prepared_args) = prepared_inline_args(self, args) else {
+                    return;
+                };
+                let Some((scope_type, scope_id)) =
+                    parse_memory_handoff_generate_args(prepared_args.as_str())
+                else {
+                    self.add_error_message(
+                        "Usage: /memory-handoff-generate [session [scope_id] | mission <mission_id> | action <action_id>]".to_string(),
+                    );
+                    return;
+                };
+                self.show_pending_memory_operation(
+                    history_cell::new_memory_handoff_generate_submission(
+                        scope_type.clone(),
+                        scope_id.clone(),
+                    ),
+                );
+                self.submit_op(Op::GenerateHandoff {
+                    scope_type,
+                    scope_id,
+                });
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::MemoryFrontier if !trimmed.is_empty() => {

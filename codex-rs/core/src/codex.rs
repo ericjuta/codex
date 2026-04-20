@@ -42,6 +42,7 @@ use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
+use crate::stream_events_utils::maybe_capture_agentmemory_assistant_result;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
 use crate::turn_metadata::TurnMetadataState;
@@ -103,6 +104,9 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::items::MemoryOperationKind;
+use codex_protocol::items::MemoryOperationScope;
+use codex_protocol::items::MemoryOperationStatus;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
@@ -119,6 +123,7 @@ use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
+use codex_protocol::protocol::MemoryOperationSource;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
@@ -2269,6 +2274,7 @@ impl Session {
         }
         sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
             .await;
+        let resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
         let session_start_source = match &initial_history {
             InitialHistory::Resumed(_) => codex_hooks::SessionStartSource::Resume,
             InitialHistory::New | InitialHistory::Forked(_) => {
@@ -2282,6 +2288,63 @@ impl Session {
         {
             let mut state = sess.state.lock().await;
             state.set_pending_session_start_source(Some(session_start_source));
+        }
+
+        if resumed_thread
+            && config.memories.backend == crate::config::types::MemoryBackend::Agentmemory
+        {
+            let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+            let project = get_git_repo_root(&session_configuration.cwd)
+                .unwrap_or_else(|| session_configuration.cwd.to_path_buf());
+            let session_id = conversation_id.to_string();
+            match tokio::time::timeout(
+                AGENTMEMORY_SESSION_LIFECYCLE_TIMEOUT,
+                adapter.list_handoffs(
+                    project.as_path(),
+                    Some("session"),
+                    Some(session_id.as_str()),
+                    Some(1),
+                    &config.memories,
+                ),
+            )
+            .await
+            {
+                Ok(Ok(response))
+                    if response
+                        .get("success")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                        && response
+                            .get("handoffPackets")
+                            .and_then(Value::as_array)
+                            .is_some_and(|packets| !packets.is_empty()) =>
+                {
+                    agentmemory_ops::send_memory_operation_event_with_scope(
+                        &sess,
+                        INITIAL_SUBMIT_ID,
+                        agentmemory_ops::MemoryOperationEventArgs {
+                            source: MemoryOperationSource::Automatic,
+                            operation: MemoryOperationKind::Handoffs,
+                            status: MemoryOperationStatus::Ready,
+                            query: Some(format!("session {session_id}")),
+                            summary: format!(
+                                "Reviewed 1 `session` handoff packets for `{session_id}`."
+                            ),
+                            detail: serde_json::to_string_pretty(&response).ok(),
+                            context_injected: false,
+                        },
+                        MemoryOperationScope::None,
+                    )
+                    .await;
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(err)) => {
+                    warn!("failed to auto-review resume handoff packet for {session_id}: {err}");
+                }
+                Err(_) => {
+                    warn!("timed out auto-reviewing resume handoff packet for {session_id}");
+                }
+            }
         }
 
         if config.memories.backend == crate::config::types::MemoryBackend::Native {
@@ -4638,6 +4701,20 @@ impl Session {
         state.take_pending_session_start_additional_contexts()
     }
 
+    pub(crate) async fn begin_agentmemory_turn(&self) -> u64 {
+        let mut state = self.state.lock().await;
+        state.begin_agentmemory_turn()
+    }
+
+    pub(crate) async fn register_agentmemory_auto_injection(
+        &self,
+        lane_key: &str,
+        context: &str,
+    ) -> crate::agentmemory::context_planner::AutoInjectionRegistration {
+        let mut state = self.state.lock().await;
+        state.register_agentmemory_auto_injection(lane_key, context)
+    }
+
     async fn refresh_mcp_servers_inner(
         &self,
         turn_context: &TurnContext,
@@ -4994,6 +5071,31 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::list_actions(&sess, &config, sub.id.clone(), status).await;
                     false
                 }
+                Op::ReviewMissions { mission_id, status } => {
+                    handlers::review_missions(&sess, &config, sub.id.clone(), mission_id, status)
+                        .await;
+                    false
+                }
+                Op::ReviewBranchOverlays { branch } => {
+                    handlers::review_branch_overlays(&sess, &config, sub.id.clone(), branch).await;
+                    false
+                }
+                Op::ReviewGuardrails { query } => {
+                    handlers::review_guardrails(&sess, &config, sub.id.clone(), query).await;
+                    false
+                }
+                Op::ReviewDecisions { query } => {
+                    handlers::review_decisions(&sess, &config, sub.id.clone(), query).await;
+                    false
+                }
+                Op::ReviewDossiers { file_path } => {
+                    handlers::review_dossiers(&sess, &config, sub.id.clone(), file_path).await;
+                    false
+                }
+                Op::ReviewRoutineCandidates => {
+                    handlers::review_routine_candidates(&sess, &config, sub.id.clone()).await;
+                    false
+                }
                 Op::CreateAction { title } => {
                     handlers::create_action(&sess, &config, sub.id.clone(), title).await;
                     false
@@ -5001,6 +5103,36 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 Op::UpdateAction { action_id, status } => {
                     handlers::update_action(&sess, &config, sub.id.clone(), action_id, status)
                         .await;
+                    false
+                }
+                Op::ReviewHandoffs {
+                    handoff_packet_id,
+                    scope_type,
+                    scope_id,
+                } => {
+                    handlers::review_handoffs(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        handoff_packet_id,
+                        scope_type,
+                        scope_id,
+                    )
+                    .await;
+                    false
+                }
+                Op::GenerateHandoff {
+                    scope_type,
+                    scope_id,
+                } => {
+                    handlers::generate_handoff(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        scope_type,
+                        scope_id,
+                    )
+                    .await;
                     false
                 }
                 Op::ReviewFrontier { limit } => {
@@ -5886,6 +6018,60 @@ mod handlers {
         super::agentmemory_ops::list_actions(sess, config, sub_id, status).await;
     }
 
+    pub async fn review_missions(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        mission_id: Option<String>,
+        status: Option<String>,
+    ) {
+        super::agentmemory_ops::review_missions(sess, config, sub_id, mission_id, status).await;
+    }
+
+    pub async fn review_branch_overlays(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        branch: Option<String>,
+    ) {
+        super::agentmemory_ops::review_branch_overlays(sess, config, sub_id, branch).await;
+    }
+
+    pub async fn review_guardrails(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        query: Option<String>,
+    ) {
+        super::agentmemory_ops::review_guardrails(sess, config, sub_id, query).await;
+    }
+
+    pub async fn review_decisions(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        query: Option<String>,
+    ) {
+        super::agentmemory_ops::review_decisions(sess, config, sub_id, query).await;
+    }
+
+    pub async fn review_dossiers(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        file_path: Option<String>,
+    ) {
+        super::agentmemory_ops::review_dossiers(sess, config, sub_id, file_path).await;
+    }
+
+    pub async fn review_routine_candidates(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+    ) {
+        super::agentmemory_ops::review_routine_candidates(sess, config, sub_id).await;
+    }
+
     pub async fn create_action(
         sess: &Arc<Session>,
         config: &Arc<Config>,
@@ -5903,6 +6089,35 @@ mod handlers {
         status: String,
     ) {
         super::agentmemory_ops::update_action(sess, config, sub_id, action_id, status).await;
+    }
+
+    pub async fn review_handoffs(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        handoff_packet_id: Option<String>,
+        scope_type: Option<String>,
+        scope_id: Option<String>,
+    ) {
+        super::agentmemory_ops::review_handoffs(
+            sess,
+            config,
+            sub_id,
+            handoff_packet_id,
+            scope_type,
+            scope_id,
+        )
+        .await;
+    }
+
+    pub async fn generate_handoff(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        scope_type: Option<String>,
+        scope_id: Option<String>,
+    ) {
+        super::agentmemory_ops::generate_handoff(sess, config, sub_id, scope_type, scope_id).await;
     }
 
     pub async fn review_frontier(
@@ -8121,6 +8336,7 @@ async fn handle_assistant_item_done_in_plan_mode(
 
         record_completed_response_item(sess, turn_context, item).await;
         if let Some(agent_message) = last_assistant_message_from_item(item, /*plan_mode*/ true) {
+            maybe_capture_agentmemory_assistant_result(sess, turn_context, &agent_message);
             *last_agent_message = Some(agent_message);
         }
         return true;

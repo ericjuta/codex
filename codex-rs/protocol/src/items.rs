@@ -144,6 +144,14 @@ pub enum MemoryOperationKind {
     Actions,
     ActionCreate,
     ActionUpdate,
+    Missions,
+    Handoffs,
+    HandoffGenerate,
+    BranchOverlays,
+    Guardrails,
+    Decisions,
+    Dossiers,
+    RoutineCandidates,
     Frontier,
     Next,
 }
@@ -155,7 +163,18 @@ pub enum MemoryOperationStatus {
     Pending,
     Ready,
     Empty,
+    Skipped,
     Error,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum MemoryOperationScope {
+    #[default]
+    None,
+    Turn,
+    Thread,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]

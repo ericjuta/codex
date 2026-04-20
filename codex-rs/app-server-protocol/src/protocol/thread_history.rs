@@ -14,6 +14,7 @@ use crate::protocol::v2::McpToolCallError;
 use crate::protocol::v2::McpToolCallResult;
 use crate::protocol::v2::McpToolCallStatus;
 use crate::protocol::v2::MemoryOperationKind;
+use crate::protocol::v2::MemoryOperationScope;
 use crate::protocol::v2::MemoryOperationSource;
 use crate::protocol::v2::MemoryOperationStatus;
 use crate::protocol::v2::ThreadItem;
@@ -866,6 +867,9 @@ impl ThreadHistoryBuilder {
                 codex_protocol::protocol::MemoryOperationSource::Assistant => {
                     MemoryOperationSource::Assistant
                 }
+                codex_protocol::protocol::MemoryOperationSource::Automatic => {
+                    MemoryOperationSource::Automatic
+                }
             },
             operation: match payload.operation {
                 codex_protocol::items::MemoryOperationKind::Recall => MemoryOperationKind::Recall,
@@ -895,6 +899,30 @@ impl ThreadHistoryBuilder {
                 codex_protocol::items::MemoryOperationKind::ActionUpdate => {
                     MemoryOperationKind::ActionUpdate
                 }
+                codex_protocol::items::MemoryOperationKind::Missions => {
+                    MemoryOperationKind::Missions
+                }
+                codex_protocol::items::MemoryOperationKind::Handoffs => {
+                    MemoryOperationKind::Handoffs
+                }
+                codex_protocol::items::MemoryOperationKind::HandoffGenerate => {
+                    MemoryOperationKind::HandoffGenerate
+                }
+                codex_protocol::items::MemoryOperationKind::BranchOverlays => {
+                    MemoryOperationKind::BranchOverlays
+                }
+                codex_protocol::items::MemoryOperationKind::Guardrails => {
+                    MemoryOperationKind::Guardrails
+                }
+                codex_protocol::items::MemoryOperationKind::Decisions => {
+                    MemoryOperationKind::Decisions
+                }
+                codex_protocol::items::MemoryOperationKind::Dossiers => {
+                    MemoryOperationKind::Dossiers
+                }
+                codex_protocol::items::MemoryOperationKind::RoutineCandidates => {
+                    MemoryOperationKind::RoutineCandidates
+                }
                 codex_protocol::items::MemoryOperationKind::Frontier => {
                     MemoryOperationKind::Frontier
                 }
@@ -906,7 +934,15 @@ impl ThreadHistoryBuilder {
                 }
                 codex_protocol::items::MemoryOperationStatus::Ready => MemoryOperationStatus::Ready,
                 codex_protocol::items::MemoryOperationStatus::Empty => MemoryOperationStatus::Empty,
+                codex_protocol::items::MemoryOperationStatus::Skipped => {
+                    MemoryOperationStatus::Skipped
+                }
                 codex_protocol::items::MemoryOperationStatus::Error => MemoryOperationStatus::Error,
+            },
+            scope: match payload.scope {
+                codex_protocol::items::MemoryOperationScope::None => MemoryOperationScope::None,
+                codex_protocol::items::MemoryOperationScope::Turn => MemoryOperationScope::Turn,
+                codex_protocol::items::MemoryOperationScope::Thread => MemoryOperationScope::Thread,
             },
             query: payload.query.clone(),
             summary: payload.summary.clone(),
@@ -3112,6 +3148,7 @@ mod tests {
                 source: codex_protocol::protocol::MemoryOperationSource::Human,
                 operation: codex_protocol::items::MemoryOperationKind::Recall,
                 status: codex_protocol::items::MemoryOperationStatus::Ready,
+                scope: codex_protocol::items::MemoryOperationScope::Turn,
                 query: Some("auth failures".into()),
                 summary: "Recalled memory context and injected it into the current thread.".into(),
                 detail: Some("recent auth failure context".into()),
@@ -3135,6 +3172,7 @@ mod tests {
                 source: MemoryOperationSource::Human,
                 operation: MemoryOperationKind::Recall,
                 status: MemoryOperationStatus::Ready,
+                scope: MemoryOperationScope::Turn,
                 query: Some("auth failures".into()),
                 summary: "Recalled memory context and injected it into the current thread.".into(),
                 detail: Some("recent auth failure context".into()),

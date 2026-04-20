@@ -1,4 +1,5 @@
 use super::*;
+use crate::agentmemory::context_planner::AgentmemoryToolCapability;
 use crate::codex::make_session_and_context;
 use crate::tools::context::FunctionToolOutput;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -75,6 +76,7 @@ async fn default_tool_handler_hook_payloads_are_retained() {
             tool_name: "example_tool".to_string(),
             command: r#"{"alpha":1}"#.to_string(),
             agentmemory_input: None,
+            agentmemory_capability: None,
         })
     );
 
@@ -111,6 +113,7 @@ async fn default_tool_handler_populates_agentmemory_input_for_native_file_tools(
             agentmemory_input: Some(serde_json::json!({
                 "path": "src/main.rs",
             })),
+            agentmemory_capability: Some(AgentmemoryToolCapability::FileRead),
         })
     );
     assert_eq!(

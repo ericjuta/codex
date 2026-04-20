@@ -2,11 +2,19 @@
 
 ## Status
 
-Implementation checklist after the config-first hook parity lane.
+Implemented on April 20, 2026.
 
 This document exists so the branch has one focused place to track what is
 still missing or recently completed in the expanded runtime-surface plan
 without mixing already-implemented parity work with older baseline notes.
+
+Human operator guidance for the current slash-command surface lives in:
+
+- [`agentmemory_slash_command_usage_spec.md`](./agentmemory_slash_command_usage_spec.md)
+
+Remaining post-feature hardening and polish work is tracked in:
+
+- [`agentmemory_remaining_hardening_spec.md`](./agentmemory_remaining_hardening_spec.md)
 
 ## Baseline
 
@@ -28,6 +36,12 @@ That work is tracked by:
 
 This follow-up spec covers what remains after that baseline.
 
+Retrieval-quality and context-injection optimization beyond the current
+runtime-surface expansion is tracked separately in:
+
+- [`agentmemory_context_optimization_proposal.md`](./agentmemory_context_optimization_proposal.md)
+- [`agentmemory_mission_handoff_followup_spec.md`](./agentmemory_mission_handoff_followup_spec.md)
+
 Current branch implementation now includes:
 
 - human slash surfaces for:
@@ -37,6 +51,13 @@ Current branch implementation now includes:
   - insights
   - reflect
   - actions list/create/update
+  - missions
+  - handoffs
+  - branch overlays
+  - guardrails
+  - decisions
+  - dossiers
+  - routine candidates
   - frontier
   - next
 - assistant tools for:
@@ -46,8 +67,21 @@ Current branch implementation now includes:
   - `memory_crystals`
   - `memory_insights`
   - `memory_actions`
+  - `memory_missions`
+  - `memory_handoffs`
+  - `memory_handoff_generate`
+  - `memory_branch_overlays`
+  - `memory_guardrails`
+  - `memory_decisions`
+  - `memory_dossiers`
+  - `memory_routine_candidates`
   - `memory_frontier`
   - `memory_next`
+- richer TUI rendering for:
+  - guardrails
+  - decisions
+  - dossiers
+  - handoffs
 - lifecycle expansion for:
   - prompt-submit `context/refresh`
   - shutdown-side `crystals/auto`
@@ -202,6 +236,11 @@ This follow-up is complete only when all of the following are true:
 - lifecycle expansion calls are wired for the required cases
 - new memory/action UI survives replay and resume as structured memory history
 - the standalone TUI and app-server-backed TUI stay behaviorally aligned
+
+Status:
+
+- complete
+- replay/resume now auto-surface the latest session handoff packet on resume
 
 ## Recommended Order
 

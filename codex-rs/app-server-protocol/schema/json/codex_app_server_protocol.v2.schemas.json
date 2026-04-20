@@ -6330,6 +6330,14 @@
         "actions",
         "action_create",
         "action_update",
+        "missions",
+        "handoffs",
+        "handoff_generate",
+        "branch_overlays",
+        "guardrails",
+        "decisions",
+        "dossiers",
+        "routine_candidates",
         "frontier",
         "next"
       ],
@@ -6356,6 +6364,14 @@
             "null"
           ]
         },
+        "scope": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MemoryOperationScope"
+            }
+          ],
+          "default": "none"
+        },
         "source": {
           "$ref": "#/definitions/MemoryOperationSource"
         },
@@ -6380,10 +6396,19 @@
       "title": "MemoryOperationNotification",
       "type": "object"
     },
+    "MemoryOperationScope": {
+      "enum": [
+        "none",
+        "turn",
+        "thread"
+      ],
+      "type": "string"
+    },
     "MemoryOperationSource": {
       "enum": [
         "human",
-        "assistant"
+        "assistant",
+        "automatic"
       ],
       "type": "string"
     },
@@ -6392,6 +6417,7 @@
         "pending",
         "ready",
         "empty",
+        "skipped",
         "error"
       ],
       "type": "string"
@@ -11099,6 +11125,14 @@
                 "string",
                 "null"
               ]
+            },
+            "scope": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/MemoryOperationScope"
+                }
+              ],
+              "default": "none"
             },
             "source": {
               "$ref": "#/definitions/MemoryOperationSource"

@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use crate::agentmemory::context_planner::AgentmemoryToolCapability;
 use crate::apply_patch;
 use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
@@ -211,6 +212,7 @@ impl ToolHandler for ApplyPatchHandler {
             tool_name: agentmemory_patch_tool_name(&patch_input).to_string(),
             command: patch_input,
             agentmemory_input,
+            agentmemory_capability: Some(AgentmemoryToolCapability::Patch),
         })
     }
 

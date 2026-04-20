@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::agentmemory::context_planner::AgentmemoryToolCapability;
 use crate::function_tool::FunctionCallError;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::run_post_tool_use_hooks;
@@ -63,10 +64,15 @@ pub trait ToolHandler: Send + Sync {
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
         let tool_name = invocation.tool_name.display();
+        let agentmemory_capability = AgentmemoryToolCapability::from_tool_name(&tool_name);
         Some(PreToolUsePayload {
-            tool_name: tool_name.clone(),
+            tool_name,
             command: invocation.payload.log_payload().into_owned(),
-            agentmemory_input: structured_agentmemory_input(&tool_name, &invocation.payload),
+            agentmemory_input: structured_agentmemory_input(
+                agentmemory_capability,
+                &invocation.payload,
+            ),
+            agentmemory_capability,
         })
     }
 
@@ -121,6 +127,7 @@ pub(crate) struct PreToolUsePayload {
     pub(crate) tool_name: String,
     pub(crate) command: String,
     pub(crate) agentmemory_input: Option<Value>,
+    pub(crate) agentmemory_capability: Option<AgentmemoryToolCapability>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -130,10 +137,11 @@ pub(crate) struct PostToolUsePayload {
     pub(crate) tool_response: Value,
 }
 
-fn structured_agentmemory_input(tool_name: &str, payload: &ToolPayload) -> Option<Value> {
-    if !matches!(tool_name, "Edit" | "Write" | "Read" | "Glob" | "Grep") {
-        return None;
-    }
+fn structured_agentmemory_input(
+    capability: Option<AgentmemoryToolCapability>,
+    payload: &ToolPayload,
+) -> Option<Value> {
+    capability?;
 
     match payload {
         ToolPayload::Function { arguments } => serde_json::from_str::<Value>(arguments).ok(),
@@ -145,18 +153,11 @@ fn structured_agentmemory_input(tool_name: &str, payload: &ToolPayload) -> Optio
 }
 
 fn pre_tool_use_hooks_enabled(payload: &PreToolUsePayload) -> bool {
-    matches!(
-        payload.tool_name.as_str(),
-        "shell"
-            | "shell_command"
-            | "local_shell"
-            | "exec_command"
-            | "Edit"
-            | "Write"
-            | "Read"
-            | "Glob"
-            | "Grep"
-    )
+    payload.agentmemory_capability.is_some()
+        || matches!(
+            payload.tool_name.as_str(),
+            "shell" | "shell_command" | "local_shell" | "exec_command"
+        )
 }
 
 fn post_tool_use_hooks_enabled(payload: &PostToolUsePayload) -> bool {
@@ -353,6 +354,7 @@ impl ToolRegistry {
                 invocation.call_id.clone(),
                 payload.command.clone(),
                 payload.agentmemory_input.clone(),
+                payload.agentmemory_capability,
             )
             .await;
             record_additional_contexts(

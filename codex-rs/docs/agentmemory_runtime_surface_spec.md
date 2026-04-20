@@ -19,6 +19,12 @@ separately in:
 
 - [`agentmemory_runtime_expansion_followup_spec.md`](./agentmemory_runtime_expansion_followup_spec.md)
 
+Retrieval-quality and context-injection optimization beyond the parity lane is
+tracked separately in:
+
+- [`agentmemory_context_optimization_proposal.md`](./agentmemory_context_optimization_proposal.md)
+- [`agentmemory_retrieval_trace_followup_spec.md`](./agentmemory_retrieval_trace_followup_spec.md)
+
 It does not replace the broader architecture and hook-contract decisions in:
 
 - `/Users/ericjuta/Projects/codex/docs/fork-intent.md`
@@ -166,7 +172,10 @@ Required calls:
   - POST `/agentmemory/session/start`
 - during prompt submission:
   - POST `/agentmemory/observe`
-  - POST `/agentmemory/context/refresh` when query-aware refresh applies
+  - POST `/agentmemory/context/refresh` on every non-trivial user turn when
+    automatic injection is enabled
+  - POST `/agentmemory/context` when `context/refresh` is skipped, empty, or
+    errors and query-aware retrieval is still warranted
 - on session shutdown:
   - POST `/agentmemory/observe`
   - POST `/agentmemory/summarize`
@@ -555,8 +564,10 @@ to some of those hooks:
 
 - `UserPromptSubmit`
   - must retain prompt capture via `observe`
-  - must use `context/refresh` for query-aware mid-session retrieval when
-    applicable
+  - must use `context/refresh` on every non-trivial user turn when automatic
+    injection is enabled
+  - must fall back to `context` when `context/refresh` returns no usable
+    context
 - `Stop`
   - must retain `observe`
   - must also call `summarize`

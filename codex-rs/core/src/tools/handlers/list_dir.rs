@@ -4,6 +4,7 @@ use std::fs::FileType;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::agentmemory::context_planner::AgentmemoryToolCapability;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 use tokio::fs;
@@ -71,6 +72,7 @@ impl ToolHandler for ListDirHandler {
             agentmemory_input: Some(serde_json::json!({
                 "dir_path": args.dir_path,
             })),
+            agentmemory_capability: Some(AgentmemoryToolCapability::FileSearch),
         })
     }
 

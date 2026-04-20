@@ -130,6 +130,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
+use codex_protocol::items::MemoryOperationScope;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
@@ -2836,6 +2837,9 @@ impl ChatWidget {
             codex_app_server_protocol::MemoryOperationSource::Assistant => {
                 MemoryOperationSource::Assistant
             }
+            codex_app_server_protocol::MemoryOperationSource::Automatic => {
+                MemoryOperationSource::Automatic
+            }
         }
     }
 
@@ -2882,6 +2886,30 @@ impl ChatWidget {
             codex_app_server_protocol::MemoryOperationKind::ActionUpdate => {
                 codex_protocol::items::MemoryOperationKind::ActionUpdate
             }
+            codex_app_server_protocol::MemoryOperationKind::Missions => {
+                codex_protocol::items::MemoryOperationKind::Missions
+            }
+            codex_app_server_protocol::MemoryOperationKind::Handoffs => {
+                codex_protocol::items::MemoryOperationKind::Handoffs
+            }
+            codex_app_server_protocol::MemoryOperationKind::HandoffGenerate => {
+                codex_protocol::items::MemoryOperationKind::HandoffGenerate
+            }
+            codex_app_server_protocol::MemoryOperationKind::BranchOverlays => {
+                codex_protocol::items::MemoryOperationKind::BranchOverlays
+            }
+            codex_app_server_protocol::MemoryOperationKind::Guardrails => {
+                codex_protocol::items::MemoryOperationKind::Guardrails
+            }
+            codex_app_server_protocol::MemoryOperationKind::Decisions => {
+                codex_protocol::items::MemoryOperationKind::Decisions
+            }
+            codex_app_server_protocol::MemoryOperationKind::Dossiers => {
+                codex_protocol::items::MemoryOperationKind::Dossiers
+            }
+            codex_app_server_protocol::MemoryOperationKind::RoutineCandidates => {
+                codex_protocol::items::MemoryOperationKind::RoutineCandidates
+            }
             codex_app_server_protocol::MemoryOperationKind::Frontier => {
                 codex_protocol::items::MemoryOperationKind::Frontier
             }
@@ -2904,9 +2932,22 @@ impl ChatWidget {
             codex_app_server_protocol::MemoryOperationStatus::Empty => {
                 codex_protocol::items::MemoryOperationStatus::Empty
             }
+            codex_app_server_protocol::MemoryOperationStatus::Skipped => {
+                codex_protocol::items::MemoryOperationStatus::Skipped
+            }
             codex_app_server_protocol::MemoryOperationStatus::Error => {
                 codex_protocol::items::MemoryOperationStatus::Error
             }
+        }
+    }
+
+    fn app_server_memory_scope(
+        scope: codex_app_server_protocol::MemoryOperationScope,
+    ) -> MemoryOperationScope {
+        match scope {
+            codex_app_server_protocol::MemoryOperationScope::None => MemoryOperationScope::None,
+            codex_app_server_protocol::MemoryOperationScope::Turn => MemoryOperationScope::Turn,
+            codex_app_server_protocol::MemoryOperationScope::Thread => MemoryOperationScope::Thread,
         }
     }
 
@@ -2919,7 +2960,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn show_pending_memory_operation(&mut self, cell: history_cell::MemoryHistoryCell) {
+    pub(crate) fn show_pending_memory_operation(&mut self, cell: history_cell::MemoryHistoryCell) {
         self.flush_active_cell();
         self.active_cell = Some(Box::new(cell));
         self.bump_active_cell_revision();
@@ -5892,6 +5933,7 @@ impl ChatWidget {
                 source,
                 operation,
                 status,
+                scope,
                 query,
                 summary,
                 detail,
@@ -5902,6 +5944,7 @@ impl ChatWidget {
                     source: Self::app_server_memory_source(source),
                     operation: Self::app_server_memory_kind(operation),
                     status: Self::app_server_memory_status(status),
+                    scope: Self::app_server_memory_scope(scope),
                     query,
                     summary,
                     detail,
@@ -6233,6 +6276,7 @@ impl ChatWidget {
                     source: Self::app_server_memory_source(notification.source),
                     operation: Self::app_server_memory_kind(notification.operation),
                     status: Self::app_server_memory_status(notification.status),
+                    scope: Self::app_server_memory_scope(notification.scope),
                     query: notification.query,
                     summary: notification.summary,
                     detail: notification.detail,

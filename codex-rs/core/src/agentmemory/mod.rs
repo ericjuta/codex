@@ -3,9 +3,13 @@
 //! This module provides the seam for integrating the `agentmemory` service
 //! as a replacement for Codex's native memory engine.
 
+pub(crate) mod context_planner;
 mod observe_payload;
+pub(crate) mod retrieval_trace;
 
 use crate::agentmemory::observe_payload::build_observe_payload;
+use crate::agentmemory::retrieval_trace::AgentmemoryRetrievalTrace;
+use crate::agentmemory::retrieval_trace::AgentmemoryRetrievalTraceSummary;
 use crate::config::types::AgentmemoryConfig;
 use crate::config::types::MemoriesConfig;
 use codex_git_utils::get_git_repo_root;
@@ -28,11 +32,13 @@ pub struct AgentmemoryAdapter {
 /// Reusing the client allows connection pooling (keep-alive) for high throughput.
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
-pub(crate) const DEFAULT_RUNTIME_RECALL_TOKEN_BUDGET: usize = 2_000;
+pub(crate) const DEFAULT_RUNTIME_RECALL_TOKEN_BUDGET: usize =
+    context_planner::DEFAULT_CONTEXT_BUDGET_TOKENS;
 const MEMORY_RUNTIME_DEVELOPER_INSTRUCTIONS: &str = "Use `memory_recall` for prior work, earlier decisions, previous failures, resumed threads, or other historical context that is not already present in the current thread.\n\
      Use `memory_remember` only for durable, high-value knowledge that should survive beyond the current turn.\n\
-     Use `memory_lessons`, `memory_crystals`, `memory_insights`, `memory_actions`, `memory_frontier`, and `memory_next` as read-oriented agentmemory review surfaces when they would materially help with coordination or retrieval.\n\
+     Use `memory_lessons`, `memory_crystals`, `memory_insights`, `memory_actions`, `memory_missions`, `memory_handoffs`, `memory_handoff_generate`, `memory_branch_overlays`, `memory_guardrails`, `memory_decisions`, `memory_dossiers`, `memory_routine_candidates`, `memory_frontier`, and `memory_next` as read-oriented agentmemory review surfaces when they would materially help with coordination or retrieval.\n\
      Agentmemory startup context may be attached below when available.\n\
+     Assistant `memory_recall` stays turn-local unless it explicitly passes `scope: \"thread\"`.\n\
      Prefer targeted queries naming the feature, file, bug, or decision you need.\n\
      If the current runtime exposes tools through a wrapper surface (for example, `exec` with nested `tools`), treat the callable nested tool surface as authoritative when checking whether these memory tools are available.\n\
      Do not call memory tools on every turn; first use the current thread context, then reach for agentmemory when that context appears insufficient.";
@@ -61,11 +67,21 @@ pub(crate) struct AgentmemorySummarizeResult {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-struct AgentmemoryContextResult {
+pub(crate) struct AgentmemoryContextResult {
     #[serde(default)]
-    context: String,
+    pub(crate) context: String,
     #[serde(default)]
-    skipped: bool,
+    pub(crate) skipped: bool,
+    #[serde(default)]
+    pub(crate) trace: Option<AgentmemoryRetrievalTrace>,
+}
+
+impl AgentmemoryContextResult {
+    pub(crate) fn retrieval_trace_summary(&self) -> Option<AgentmemoryRetrievalTraceSummary> {
+        self.trace
+            .as_ref()
+            .map(AgentmemoryRetrievalTraceSummary::from)
+    }
 }
 
 fn get_client() -> &'static reqwest::Client {
@@ -317,14 +333,14 @@ impl AgentmemoryAdapter {
     ///
     /// Unlike `build_startup_developer_instructions`, this uses the real
     /// session ID and an optional query to scope retrieval.
-    pub async fn recall_context(
+    pub(crate) async fn recall_context_result(
         &self,
         session_id: &str,
         cwd: &Path,
         query: Option<&str>,
         token_budget: usize,
         memories: &MemoriesConfig,
-    ) -> Result<String, String> {
+    ) -> Result<AgentmemoryContextResult, String> {
         let url = format!("{}/agentmemory/context", self.api_base(memories));
         let project = workspace_project(cwd);
 
@@ -343,8 +359,20 @@ impl AgentmemoryAdapter {
             .send()
             .await
             .map_err(|e| e.to_string())?;
-        let json_res = Self::json_or_error(res).await?;
-        Ok(json_res["context"].as_str().unwrap_or_default().to_string())
+        Self::parse_context_result(res).await
+    }
+
+    pub async fn recall_context(
+        &self,
+        session_id: &str,
+        cwd: &Path,
+        query: Option<&str>,
+        token_budget: usize,
+        memories: &MemoriesConfig,
+    ) -> Result<String, String> {
+        self.recall_context_result(session_id, cwd, query, token_budget, memories)
+            .await
+            .map(|payload| payload.context)
     }
 
     pub(crate) async fn recall_for_runtime(
@@ -355,7 +383,7 @@ impl AgentmemoryAdapter {
         memories: &MemoriesConfig,
     ) -> Result<MemoryRecallResult, String> {
         let context = self
-            .recall_context(
+            .recall_context_result(
                 session_id,
                 cwd,
                 query,
@@ -365,8 +393,8 @@ impl AgentmemoryAdapter {
             .await?;
 
         Ok(MemoryRecallResult {
-            recalled: !context.trim().is_empty(),
-            context,
+            recalled: !context.context.trim().is_empty(),
+            context: context.context,
         })
     }
 
@@ -424,13 +452,13 @@ impl AgentmemoryAdapter {
         Ok(payload.context)
     }
 
-    pub(crate) async fn refresh_context(
+    pub(crate) async fn refresh_context_result(
         &self,
         session_id: &str,
         cwd: &Path,
         query: &str,
         memories: &MemoriesConfig,
-    ) -> Result<(String, bool), String> {
+    ) -> Result<AgentmemoryContextResult, String> {
         let url = format!("{}/agentmemory/context/refresh", self.api_base(memories));
         let body = json!({
             "sessionId": session_id,
@@ -443,8 +471,7 @@ impl AgentmemoryAdapter {
             .send()
             .await
             .map_err(|err| err.to_string())?;
-        let payload = Self::parse_context_result(res).await?;
-        Ok((payload.context, payload.skipped))
+        Self::parse_context_result(res).await
     }
 
     /// Marks a session completed so Agentmemory's viewer can stop showing it as active.
@@ -686,12 +713,20 @@ impl AgentmemoryAdapter {
         &self,
         project: &Path,
         status: Option<&str>,
+        owner: Option<&str>,
+        limit: Option<u32>,
         memories: &MemoriesConfig,
     ) -> Result<JsonValue, String> {
         let url = format!("{}/agentmemory/actions", self.api_base(memories));
         let mut query = vec![("project".to_string(), project.display().to_string())];
         if let Some(status) = status {
             query.push(("status".to_string(), status.to_string()));
+        }
+        if let Some(owner) = owner {
+            query.push(("owner".to_string(), owner.to_string()));
+        }
+        if let Some(limit) = limit {
+            query.push(("limit".to_string(), limit.to_string()));
         }
         let res = self
             .request_builder(reqwest::Method::GET, &url, memories)
@@ -788,6 +823,298 @@ impl AgentmemoryAdapter {
         Self::json_or_error(res).await
     }
 
+    pub(crate) async fn list_missions(
+        &self,
+        project: &Path,
+        status: Option<&str>,
+        owner: Option<&str>,
+        limit: Option<u32>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/missions", self.api_base(memories));
+        let mut query = vec![("project".to_string(), project.display().to_string())];
+        if let Some(status) = status {
+            query.push(("status".to_string(), status.to_string()));
+        }
+        if let Some(owner) = owner {
+            query.push(("owner".to_string(), owner.to_string()));
+        }
+        if let Some(limit) = limit {
+            query.push(("limit".to_string(), limit.to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn list_branch_overlays(
+        &self,
+        project: &Path,
+        branch: Option<&str>,
+        limit: Option<u32>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/branch-overlays", self.api_base(memories));
+        let mut query = vec![("project".to_string(), project.display().to_string())];
+        if let Some(branch) = branch {
+            query.push(("branch".to_string(), branch.to_string()));
+        }
+        if let Some(limit) = limit {
+            query.push(("limit".to_string(), limit.to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn list_guardrails(
+        &self,
+        project: &Path,
+        branch: Option<&str>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/guardrails", self.api_base(memories));
+        let mut query = vec![("project".to_string(), project.display().to_string())];
+        if let Some(branch) = branch {
+            query.push(("branch".to_string(), branch.to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn search_guardrails(
+        &self,
+        query: &str,
+        project: &Path,
+        branch: Option<&str>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/guardrails/search", self.api_base(memories));
+        let mut body = json!({
+            "query": query,
+            "project": project.display().to_string(),
+        });
+        if let Some(branch) = branch {
+            body["branch"] = JsonValue::String(branch.to_string());
+        }
+        let res = self
+            .request_builder(reqwest::Method::POST, &url, memories)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn list_decisions(
+        &self,
+        project: &Path,
+        branch: Option<&str>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/decisions", self.api_base(memories));
+        let mut query = vec![("project".to_string(), project.display().to_string())];
+        if let Some(branch) = branch {
+            query.push(("branch".to_string(), branch.to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn search_decisions(
+        &self,
+        query: &str,
+        project: &Path,
+        branch: Option<&str>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/decisions/search", self.api_base(memories));
+        let mut body = json!({
+            "query": query,
+            "project": project.display().to_string(),
+        });
+        if let Some(branch) = branch {
+            body["branch"] = JsonValue::String(branch.to_string());
+        }
+        let res = self
+            .request_builder(reqwest::Method::POST, &url, memories)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn list_dossiers(
+        &self,
+        project: &Path,
+        branch: Option<&str>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/dossiers", self.api_base(memories));
+        let mut query = vec![("project".to_string(), project.display().to_string())];
+        if let Some(branch) = branch {
+            query.push(("branch".to_string(), branch.to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn get_dossier(
+        &self,
+        project: &Path,
+        file_path: &str,
+        branch: Option<&str>,
+        refresh: bool,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/dossiers/get", self.api_base(memories));
+        let mut query = vec![
+            ("project".to_string(), project.display().to_string()),
+            ("filePath".to_string(), file_path.to_string()),
+        ];
+        if let Some(branch) = branch {
+            query.push(("branch".to_string(), branch.to_string()));
+        }
+        if refresh {
+            query.push(("refresh".to_string(), "true".to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn list_routine_candidates(
+        &self,
+        project: &Path,
+        branch: Option<&str>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/routine-candidates", self.api_base(memories));
+        let mut query = vec![("project".to_string(), project.display().to_string())];
+        if let Some(branch) = branch {
+            query.push(("branch".to_string(), branch.to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn get_mission(
+        &self,
+        mission_id: &str,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!(
+            "{}/agentmemory/missions/{mission_id}",
+            self.api_base(memories)
+        );
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn list_handoffs(
+        &self,
+        project: &Path,
+        scope_type: Option<&str>,
+        scope_id: Option<&str>,
+        limit: Option<u32>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/handoffs", self.api_base(memories));
+        let mut query = vec![("project".to_string(), project.display().to_string())];
+        if let Some(scope_type) = scope_type {
+            query.push(("scopeType".to_string(), scope_type.to_string()));
+        }
+        if let Some(scope_id) = scope_id {
+            query.push(("scopeId".to_string(), scope_id.to_string()));
+        }
+        if let Some(limit) = limit {
+            query.push(("limit".to_string(), limit.to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn get_handoff(
+        &self,
+        handoff_packet_id: &str,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!(
+            "{}/agentmemory/handoffs/{handoff_packet_id}",
+            self.api_base(memories)
+        );
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn generate_handoff(
+        &self,
+        scope_type: &str,
+        scope_id: &str,
+        project: &Path,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/handoffs/generate", self.api_base(memories));
+        let body = json!({
+            "scopeType": scope_type,
+            "scopeId": scope_id,
+            "project": project.display().to_string(),
+        });
+        let res = self
+            .request_builder(reqwest::Method::POST, &url, memories)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
     pub(crate) async fn consolidate_pipeline(
         &self,
         memories: &MemoriesConfig,
@@ -821,6 +1148,7 @@ mod tests {
     use wiremock::matchers::header;
     use wiremock::matchers::method;
     use wiremock::matchers::path;
+    use wiremock::matchers::query_param;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -1159,7 +1487,7 @@ mod tests {
             .await;
 
         let result = adapter
-            .refresh_context(
+            .refresh_context_result(
                 "session-1",
                 Path::new("/tmp/project"),
                 "debug agentmemory refresh semantics",
@@ -1169,10 +1497,10 @@ mod tests {
             .expect("refresh context should succeed");
 
         assert_eq!(
-            result,
+            (result.context, result.skipped),
             (
                 "<agentmemory-context>fresh</agentmemory-context>".to_string(),
-                false,
+                false
             )
         );
 
@@ -1186,6 +1514,98 @@ mod tests {
                 "project": "/tmp/project",
                 "query": "debug agentmemory refresh semantics",
             })
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn refresh_context_result_preserves_retrieval_trace_summary() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _url_guard = EnvVarGuard::set("AGENTMEMORY_URL", "");
+        let memories = test_memories(&server);
+
+        Mock::given(method("POST"))
+            .and(path("/agentmemory/context/refresh"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "context": "<agentmemory-context>fresh</agentmemory-context>",
+                "skipped": false,
+                "trace": {
+                    "queryTerms": ["debug", "agentmemory", "refresh"],
+                    "laneBudgets": { "hot": 100, "warm": 200, "cold": 300 },
+                    "laneUsage": { "hot": 80, "warm": 140 },
+                    "selected": [
+                        {
+                            "id": "capsule:turn-1",
+                            "lane": "hot",
+                            "decision": "selected_lane_budget",
+                            "preview": "recent turn capsule"
+                        }
+                    ],
+                    "skipped": [
+                        {
+                            "id": "memory:old",
+                            "lane": "cold",
+                            "decision": "skipped_total_budget",
+                            "preview": "older memory"
+                        }
+                    ]
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let result = adapter
+            .refresh_context_result(
+                "session-1",
+                Path::new("/tmp/project"),
+                "debug agentmemory refresh semantics",
+                &memories,
+            )
+            .await
+            .expect("refresh context should succeed");
+
+        let trace = result
+            .retrieval_trace_summary()
+            .expect("retrieval trace summary should exist");
+        assert_eq!(
+            trace,
+            AgentmemoryRetrievalTraceSummary {
+                query_terms: vec![
+                    "debug".to_string(),
+                    "agentmemory".to_string(),
+                    "refresh".to_string(),
+                ],
+                selected_count: 1,
+                skipped_count: 1,
+                lane_budgets: [
+                    ("cold".to_string(), 300_usize),
+                    ("hot".to_string(), 100_usize),
+                    ("warm".to_string(), 200_usize),
+                ]
+                .into_iter()
+                .collect(),
+                lane_usage: [
+                    ("hot".to_string(), 80_usize),
+                    ("warm".to_string(), 140_usize),
+                ]
+                .into_iter()
+                .collect(),
+                selected: vec![crate::agentmemory::retrieval_trace::AgentmemoryRetrievalTraceCandidateSummary {
+                    id: "capsule:turn-1".to_string(),
+                    lane: "hot".to_string(),
+                    decision: "selected_lane_budget".to_string(),
+                    preview: "recent turn capsule".to_string(),
+                }],
+                skipped: vec![crate::agentmemory::retrieval_trace::AgentmemoryRetrievalTraceCandidateSummary {
+                    id: "memory:old".to_string(),
+                    lane: "cold".to_string(),
+                    decision: "skipped_total_budget".to_string(),
+                    preview: "older memory".to_string(),
+                }],
+            }
         );
     }
 
@@ -1269,6 +1689,203 @@ mod tests {
                     "id": "mem-1",
                     "content": "remember this"
                 }
+            })
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn list_missions_sends_project_filters_and_returns_json() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _url_guard = EnvVarGuard::set("AGENTMEMORY_URL", "");
+        let memories = test_memories(&server);
+
+        Mock::given(method("GET"))
+            .and(path("/agentmemory/missions"))
+            .and(query_param("project", "/tmp/project"))
+            .and(query_param("status", "blocked"))
+            .and(query_param("owner", "agent-1"))
+            .and(query_param("limit", "5"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "success": true,
+                "missions": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = adapter
+            .list_missions(
+                Path::new("/tmp/project"),
+                Some("blocked"),
+                Some("agent-1"),
+                Some(5),
+                &memories,
+            )
+            .await
+            .expect("list missions should succeed");
+
+        assert_eq!(
+            response,
+            json!({
+                "success": true,
+                "missions": []
+            })
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn get_mission_fetches_by_id() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _url_guard = EnvVarGuard::set("AGENTMEMORY_URL", "");
+        let memories = test_memories(&server);
+
+        Mock::given(method("GET"))
+            .and(path("/agentmemory/missions/msn_123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "success": true,
+                "mission": { "id": "msn_123" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = adapter
+            .get_mission("msn_123", &memories)
+            .await
+            .expect("get mission should succeed");
+
+        assert_eq!(
+            response,
+            json!({
+                "success": true,
+                "mission": { "id": "msn_123" }
+            })
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn list_handoffs_sends_scope_filters_and_returns_json() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _url_guard = EnvVarGuard::set("AGENTMEMORY_URL", "");
+        let memories = test_memories(&server);
+
+        Mock::given(method("GET"))
+            .and(path("/agentmemory/handoffs"))
+            .and(query_param("project", "/tmp/project"))
+            .and(query_param("scopeType", "mission"))
+            .and(query_param("scopeId", "msn_123"))
+            .and(query_param("limit", "3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "success": true,
+                "handoffPackets": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = adapter
+            .list_handoffs(
+                Path::new("/tmp/project"),
+                Some("mission"),
+                Some("msn_123"),
+                Some(3),
+                &memories,
+            )
+            .await
+            .expect("list handoffs should succeed");
+
+        assert_eq!(
+            response,
+            json!({
+                "success": true,
+                "handoffPackets": []
+            })
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn get_handoff_fetches_by_id() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _url_guard = EnvVarGuard::set("AGENTMEMORY_URL", "");
+        let memories = test_memories(&server);
+
+        Mock::given(method("GET"))
+            .and(path("/agentmemory/handoffs/hdf_123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "success": true,
+                "handoffPacket": { "id": "hdf_123" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = adapter
+            .get_handoff("hdf_123", &memories)
+            .await
+            .expect("get handoff should succeed");
+
+        assert_eq!(
+            response,
+            json!({
+                "success": true,
+                "handoffPacket": { "id": "hdf_123" }
+            })
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn generate_handoff_posts_scope_payload_and_returns_json() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _url_guard = EnvVarGuard::set("AGENTMEMORY_URL", "");
+        let memories = test_memories(&server);
+
+        Mock::given(method("POST"))
+            .and(path("/agentmemory/handoffs/generate"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+                "success": true,
+                "handoffPacket": { "id": "hdf_456" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = adapter
+            .generate_handoff("mission", "msn_123", Path::new("/tmp/project"), &memories)
+            .await
+            .expect("generate handoff should succeed");
+
+        assert_eq!(
+            response,
+            json!({
+                "success": true,
+                "handoffPacket": { "id": "hdf_456" }
+            })
+        );
+
+        let requests = server.received_requests().await.unwrap_or_default();
+        let body = serde_json::from_slice::<serde_json::Value>(&requests[0].body)
+            .expect("generate handoff request body should be json");
+        assert_eq!(
+            body,
+            json!({
+                "scopeType": "mission",
+                "scopeId": "msn_123",
+                "project": "/tmp/project",
             })
         );
     }

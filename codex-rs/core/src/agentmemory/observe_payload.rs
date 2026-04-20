@@ -8,6 +8,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 pub(crate) const NATIVE_OBSERVE_CAPABILITIES: &[&str] = &[
+    "assistant_result",
     "structured_post_tool_payload",
     "query_aware_context",
     "event_identity",
@@ -90,16 +91,7 @@ impl HookFamily {
             | Self::PostToolUse
             | Self::PostToolFailure
             | Self::AssistantResult => PersistenceClass::Persistent,
-            Self::TaskCompleted => {
-                if data.get("turn_id").is_some()
-                    && (data.get("last_assistant_message").is_some()
-                        || data.get("reason").is_some())
-                {
-                    PersistenceClass::Persistent
-                } else {
-                    PersistenceClass::Ephemeral
-                }
-            }
+            Self::TaskCompleted => PersistenceClass::Ephemeral,
             Self::Stop => {
                 if data.get("turn_id").is_some() {
                     PersistenceClass::Ephemeral
@@ -606,6 +598,24 @@ mod tests {
 
         assert_eq!(stop["persistence_class"], "diagnostics_only");
         assert_eq!(session_end["persistence_class"], "diagnostics_only");
+    }
+
+    #[test]
+    fn build_observe_payload_keeps_task_completed_ephemeral() {
+        let task_completed = build_observe_payload(
+            "TaskCompleted",
+            json!({
+                "session_id": "session-1",
+                "turn_id": "turn-1",
+                "cwd": "/tmp/project",
+                "model": "gpt-5",
+                "status": "completed",
+                "last_assistant_message": "done",
+            }),
+        )
+        .expect("task completed payload should build");
+
+        assert_eq!(task_completed["persistence_class"], "ephemeral");
     }
 
     #[test]
