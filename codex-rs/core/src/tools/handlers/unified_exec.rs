@@ -133,16 +133,20 @@ impl ToolHandler for UnifiedExecHandler {
 
         parse_arguments::<ExecCommandArgs>(arguments)
             .ok()
-            .map(|args| PreToolUsePayload { command: args.cmd })
+            .map(|args| PreToolUsePayload {
+                tool_name: invocation.tool_name.display(),
+                command: args.cmd,
+                agentmemory_input: None,
+                agentmemory_capability: None,
+            })
     }
 
     fn post_tool_use_payload(
         &self,
-        call_id: &str,
-        payload: &ToolPayload,
+        invocation: &ToolInvocation,
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
-        let ToolPayload::Function { arguments } = payload else {
+        let ToolPayload::Function { arguments } = &invocation.payload else {
             return None;
         };
 
@@ -151,8 +155,10 @@ impl ToolHandler for UnifiedExecHandler {
             return None;
         }
 
-        let tool_response = result.post_tool_use_response(call_id, payload)?;
+        let tool_response =
+            result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
+            tool_name: invocation.tool_name.display(),
             command: args.cmd,
             tool_response,
         })

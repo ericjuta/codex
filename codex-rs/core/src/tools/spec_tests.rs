@@ -1,4 +1,5 @@
 use crate::config::test_config;
+use crate::config::types::MemoryBackend;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::test_support::construct_model_info_offline;
@@ -35,6 +36,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::assert_regex_match;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::*;
@@ -156,6 +158,17 @@ fn assert_contains_tool_names(tools: &[ConfiguredToolSpec], expected_subset: &[&
     }
 }
 
+fn assert_lacks_tool_name(tools: &[ConfiguredToolSpec], expected_absent: &str) {
+    let names = tools
+        .iter()
+        .map(ConfiguredToolSpec::name)
+        .collect::<Vec<_>>();
+    assert!(
+        !names.contains(&expected_absent),
+        "expected tool {expected_absent} to be absent; had: {names:?}"
+    );
+}
+
 fn shell_tool_name(config: &ToolsConfig) -> Option<&'static str> {
     match config.shell_type {
         ConfigShellToolType::Default => Some("shell"),
@@ -261,7 +274,7 @@ fn model_provided_unified_exec_is_blocked_for_windows_sandboxed_policies() {
 }
 
 #[test]
-fn get_memory_requires_feature_flag() {
+fn memory_recall_requires_feature_flag() {
     let config = test_config();
     let model_info = construct_model_info_offline("gpt-5-codex", &config);
     let mut features = Features::with_defaults();
@@ -284,9 +297,118 @@ fn get_memory_requires_feature_flag() {
         &[],
     )
     .build();
-    assert!(
-        !tools.iter().any(|t| t.spec.name() == "get_memory"),
-        "get_memory should be disabled when memory_tool feature is off"
+    assert_lacks_tool_name(&tools, "memory_recall");
+}
+
+#[test]
+fn memory_recall_is_absent_with_memory_tool_feature_on_and_native_backend() {
+    let config = test_config();
+    let model_info = construct_model_info_offline("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::MemoryTool);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+
+    assert_lacks_tool_name(&tools, "memory_recall");
+}
+
+#[test]
+fn memory_recall_is_exposed_with_memory_tool_feature_on_and_agentmemory_backend() {
+    let config = test_config();
+    let model_info = construct_model_info_offline("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::MemoryTool);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_memory_backend(MemoryBackend::Agentmemory);
+    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+
+    let memory_recall_tool = find_tool(&tools, "memory_recall");
+    assert_eq!(memory_recall_tool.spec, create_memory_recall_tool());
+    assert_eq!(
+        find_tool(&tools, "memory_remember").spec,
+        create_memory_remember_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_lessons").spec,
+        create_memory_lessons_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_crystals").spec,
+        create_memory_crystals_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_insights").spec,
+        create_memory_insights_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_actions").spec,
+        create_memory_actions_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_missions").spec,
+        create_memory_missions_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_branch_overlays").spec,
+        create_memory_branch_overlays_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_guardrails").spec,
+        create_memory_guardrails_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_decisions").spec,
+        create_memory_decisions_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_dossiers").spec,
+        create_memory_dossiers_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_routine_candidates").spec,
+        create_memory_routine_candidates_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_handoffs").spec,
+        create_memory_handoffs_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_handoff_generate").spec,
+        create_memory_handoff_generate_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_frontier").spec,
+        create_memory_frontier_tool()
+    );
+    assert_eq!(
+        find_tool(&tools, "memory_next").spec,
+        create_memory_next_tool()
     );
 }
 

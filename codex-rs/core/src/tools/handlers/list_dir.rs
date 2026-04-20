@@ -4,6 +4,7 @@ use std::fs::FileType;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::agentmemory::context_planner::AgentmemoryToolCapability;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 use tokio::fs;
@@ -11,8 +12,11 @@ use tokio::fs;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
@@ -49,6 +53,51 @@ impl ToolHandler for ListDirHandler {
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
+    }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            return None;
+        };
+        let args: ListDirArgs = parse_arguments(arguments).ok()?;
+        Some(PreToolUsePayload {
+            tool_name: "Glob".to_string(),
+            command: serde_json::to_string(&serde_json::json!({
+                "dir_path": args.dir_path,
+                "offset": args.offset,
+                "limit": args.limit,
+                "depth": args.depth,
+            }))
+            .ok()?,
+            agentmemory_input: Some(serde_json::json!({
+                "dir_path": args.dir_path,
+            })),
+            agentmemory_capability: Some(AgentmemoryToolCapability::FileSearch),
+        })
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        invocation: &ToolInvocation,
+        result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload> {
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            return None;
+        };
+        let args: ListDirArgs = parse_arguments(arguments).ok()?;
+        let tool_response =
+            result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
+        Some(PostToolUsePayload {
+            tool_name: "Glob".to_string(),
+            command: serde_json::to_string(&serde_json::json!({
+                "dir_path": args.dir_path,
+                "offset": args.offset,
+                "limit": args.limit,
+                "depth": args.depth,
+            }))
+            .ok()?,
+            tool_response,
+        })
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
