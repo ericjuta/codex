@@ -27,6 +27,9 @@ use crate::dynamic_tools::DynamicToolCallOutputContentItem;
 use crate::dynamic_tools::DynamicToolCallRequest;
 use crate::dynamic_tools::DynamicToolResponse;
 use crate::dynamic_tools::DynamicToolSpec;
+use crate::items::MemoryOperationKind;
+use crate::items::MemoryOperationScope;
+use crate::items::MemoryOperationStatus;
 use crate::items::TurnItem;
 use crate::mcp::CallToolResult;
 use crate::mcp::RequestId;
@@ -647,6 +650,119 @@ pub enum Op {
     /// Trigger a single pass of the startup memory pipeline.
     UpdateMemories,
 
+    /// Recall memory context for the current thread and inject it as developer instructions.
+    RecallMemories {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+
+    /// Persist a durable memory entry explicitly.
+    RememberMemories { content: String },
+
+    /// Review lessons, optionally scoped by a search query.
+    ReviewLessons {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+
+    /// Review crystallized session digests.
+    ReviewCrystals,
+
+    /// Create a crystal from explicit action ids.
+    CreateCrystals { action_ids: Vec<String> },
+
+    /// Trigger automatic crystallization for eligible action groups.
+    AutoCrystallize {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        older_than_days: Option<u32>,
+    },
+
+    /// Trigger reflective insight generation.
+    ReflectMemories {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_clusters: Option<u32>,
+    },
+
+    /// Review insights, optionally scoped by a search query.
+    ReviewInsights {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+
+    /// Review explicit action work items.
+    ListActions {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+    },
+
+    /// Review mission state for the active project.
+    ReviewMissions {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mission_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+    },
+
+    /// Review branch-scoped overlay notes for the active project.
+    ReviewBranchOverlays {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
+    },
+
+    /// Review durable guardrails, optionally scoped by a search query.
+    ReviewGuardrails {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+
+    /// Review durable decision memory, optionally scoped by a search query.
+    ReviewDecisions {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+
+    /// Review file-level component dossiers or refresh a specific file dossier.
+    ReviewDossiers {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_path: Option<String>,
+    },
+
+    /// Review routine compiler proposals for repeated successful chains.
+    ReviewRoutineCandidates,
+
+    /// Create a new explicit action work item.
+    CreateAction { title: String },
+
+    /// Update an existing action work item.
+    UpdateAction { action_id: String, status: String },
+
+    /// Review durable handoff packets for the active project.
+    ReviewHandoffs {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff_packet_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_type: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_id: Option<String>,
+    },
+
+    /// Generate a fresh durable handoff packet.
+    GenerateHandoff {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_type: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_id: Option<String>,
+    },
+
+    /// Review current frontier suggestions.
+    ReviewFrontier {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<u32>,
+    },
+
+    /// Review the single highest-priority suggested next action.
+    ReviewNext,
+
     /// Set a user-facing thread name in the persisted rollout metadata.
     /// This is a local-only operation handled by codex-core; it does not
     /// involve the model.
@@ -783,6 +899,27 @@ impl Op {
             Self::Compact => "compact",
             Self::DropMemories => "drop_memories",
             Self::UpdateMemories => "update_memories",
+            Self::RecallMemories { .. } => "recall_memories",
+            Self::RememberMemories { .. } => "remember_memories",
+            Self::ReviewLessons { .. } => "review_lessons",
+            Self::ReviewCrystals => "review_crystals",
+            Self::CreateCrystals { .. } => "create_crystals",
+            Self::AutoCrystallize { .. } => "auto_crystallize",
+            Self::ReflectMemories { .. } => "reflect_memories",
+            Self::ReviewInsights { .. } => "review_insights",
+            Self::ListActions { .. } => "list_actions",
+            Self::ReviewMissions { .. } => "review_missions",
+            Self::ReviewBranchOverlays { .. } => "review_branch_overlays",
+            Self::ReviewGuardrails { .. } => "review_guardrails",
+            Self::ReviewDecisions { .. } => "review_decisions",
+            Self::ReviewDossiers { .. } => "review_dossiers",
+            Self::ReviewRoutineCandidates => "review_routine_candidates",
+            Self::CreateAction { .. } => "create_action",
+            Self::UpdateAction { .. } => "update_action",
+            Self::ReviewHandoffs { .. } => "review_handoffs",
+            Self::GenerateHandoff { .. } => "generate_handoff",
+            Self::ReviewFrontier { .. } => "review_frontier",
+            Self::ReviewNext => "review_next",
             Self::SetThreadName { .. } => "set_thread_name",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
             Self::Undo => "undo",
@@ -1401,6 +1538,9 @@ pub enum EventMsg {
     /// indicates the turn continued but the user should still be notified.
     Warning(WarningEvent),
 
+    /// Structured memory operation outcome for human-visible recall/update/drop actions.
+    MemoryOperation(MemoryOperationEvent),
+
     /// Realtime conversation lifecycle start event.
     RealtimeConversationStarted(RealtimeConversationStartedEvent),
 
@@ -1604,9 +1744,16 @@ pub enum EventMsg {
 pub enum HookEventName {
     PreToolUse,
     PostToolUse,
+    PostToolUseFailure,
+    PreCompact,
     SessionStart,
+    SubagentStart,
+    SubagentStop,
+    Notification,
+    TaskCompleted,
     UserPromptSubmit,
     Stop,
+    SessionEnd,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -2025,6 +2172,29 @@ impl ErrorEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct WarningEvent {
     pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum MemoryOperationSource {
+    Human,
+    Assistant,
+    Automatic,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct MemoryOperationEvent {
+    pub source: MemoryOperationSource,
+    pub operation: MemoryOperationKind,
+    pub status: MemoryOperationStatus,
+    #[serde(default)]
+    pub scope: MemoryOperationScope,
+    pub query: Option<String>,
+    pub summary: String,
+    pub detail: Option<String>,
+    pub context_injected: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

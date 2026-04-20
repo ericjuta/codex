@@ -71,8 +71,22 @@ pub(crate) enum HookEventNameWire {
     PreToolUse,
     #[serde(rename = "PostToolUse")]
     PostToolUse,
+    #[serde(rename = "PostToolUseFailure")]
+    PostToolUseFailure,
+    #[serde(rename = "PreCompact")]
+    PreCompact,
     #[serde(rename = "SessionStart")]
     SessionStart,
+    #[serde(rename = "SessionEnd")]
+    SessionEnd,
+    #[serde(rename = "SubagentStart")]
+    SubagentStart,
+    #[serde(rename = "SubagentStop")]
+    SubagentStop,
+    #[serde(rename = "Notification")]
+    Notification,
+    #[serde(rename = "TaskCompleted")]
+    TaskCompleted,
     #[serde(rename = "UserPromptSubmit")]
     UserPromptSubmit,
     #[serde(rename = "Stop")]
@@ -462,7 +476,10 @@ fn pre_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
 }
 
 fn pre_tool_use_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
-    string_const_schema("Bash")
+    Schema::Object(SchemaObject {
+        instance_type: Some(InstanceType::String.into()),
+        ..Default::default()
+    })
 }
 
 fn user_prompt_submit_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {

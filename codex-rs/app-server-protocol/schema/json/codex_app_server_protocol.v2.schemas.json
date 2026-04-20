@@ -5213,9 +5213,16 @@
       "enum": [
         "preToolUse",
         "postToolUse",
+        "postToolUseFailure",
+        "preCompact",
         "sessionStart",
+        "subagentStart",
+        "subagentStop",
+        "notification",
+        "taskCompleted",
         "userPromptSubmit",
-        "stop"
+        "stop",
+        "sessionEnd"
       ],
       "type": "string"
     },
@@ -6307,6 +6314,113 @@
         "path"
       ],
       "type": "object"
+    },
+    "MemoryOperationKind": {
+      "enum": [
+        "recall",
+        "remember",
+        "update",
+        "drop",
+        "lessons",
+        "crystals",
+        "crystallize",
+        "auto_crystallize",
+        "insights",
+        "reflect",
+        "actions",
+        "action_create",
+        "action_update",
+        "missions",
+        "handoffs",
+        "handoff_generate",
+        "branch_overlays",
+        "guardrails",
+        "decisions",
+        "dossiers",
+        "routine_candidates",
+        "frontier",
+        "next"
+      ],
+      "type": "string"
+    },
+    "MemoryOperationNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "contextInjected": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "$ref": "#/definitions/MemoryOperationKind"
+        },
+        "query": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MemoryOperationScope"
+            }
+          ],
+          "default": "none"
+        },
+        "source": {
+          "$ref": "#/definitions/MemoryOperationSource"
+        },
+        "status": {
+          "$ref": "#/definitions/MemoryOperationStatus"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "contextInjected",
+        "operation",
+        "source",
+        "status",
+        "summary",
+        "threadId"
+      ],
+      "title": "MemoryOperationNotification",
+      "type": "object"
+    },
+    "MemoryOperationScope": {
+      "enum": [
+        "none",
+        "turn",
+        "thread"
+      ],
+      "type": "string"
+    },
+    "MemoryOperationSource": {
+      "enum": [
+        "human",
+        "assistant",
+        "automatic"
+      ],
+      "type": "string"
+    },
+    "MemoryOperationStatus": {
+      "enum": [
+        "pending",
+        "ready",
+        "empty",
+        "skipped",
+        "error"
+      ],
+      "type": "string"
     },
     "MergeStrategy": {
       "enum": [
@@ -9224,6 +9338,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/memory/operation"
+              ],
+              "title": "Thread/memory/operationNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/MemoryOperationNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/memory/operationNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "item/agentMessage/delta"
               ],
               "title": "Item/agentMessage/deltaNotificationMethod",
@@ -10967,6 +11101,66 @@
             "type"
           ],
           "title": "HookPromptThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "contextInjected": {
+              "type": "boolean"
+            },
+            "detail": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "operation": {
+              "$ref": "#/definitions/MemoryOperationKind"
+            },
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "scope": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/MemoryOperationScope"
+                }
+              ],
+              "default": "none"
+            },
+            "source": {
+              "$ref": "#/definitions/MemoryOperationSource"
+            },
+            "status": {
+              "$ref": "#/definitions/MemoryOperationStatus"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "memoryOperation"
+              ],
+              "title": "MemoryOperationThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contextInjected",
+            "id",
+            "operation",
+            "source",
+            "status",
+            "summary",
+            "type"
+          ],
+          "title": "MemoryOperationThreadItem",
           "type": "object"
         },
         {
