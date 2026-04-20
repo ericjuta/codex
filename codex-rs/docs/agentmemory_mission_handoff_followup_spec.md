@@ -22,6 +22,9 @@ Codex now consumes the read/generate slice directly through:
   - `/memory-handoff-generate`
 - structured runtime history via memory operation events
 - packet-backed resume retrieval through the backend `mem::context` path
+- richer TUI rendering for handoff, guardrail, decision, and dossier review
+  payloads
+- automatic session-scoped handoff review after Codex thread resume
 
 ## Goal
 
@@ -161,3 +164,5 @@ This follow-up is complete when:
 Status:
 
 - complete for the narrow read and resume lane above
+- resume now auto-surfaces the latest session-scoped handoff packet after
+  thread attach

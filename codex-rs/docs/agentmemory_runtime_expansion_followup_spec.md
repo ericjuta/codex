@@ -69,6 +69,11 @@ Current branch implementation now includes:
   - `memory_routine_candidates`
   - `memory_frontier`
   - `memory_next`
+- richer TUI rendering for:
+  - guardrails
+  - decisions
+  - dossiers
+  - handoffs
 - lifecycle expansion for:
   - prompt-submit `context/refresh`
   - shutdown-side `crystals/auto`
@@ -227,6 +232,7 @@ This follow-up is complete only when all of the following are true:
 Status:
 
 - complete
+- replay/resume now auto-surface the latest session handoff packet on resume
 
 ## Recommended Order
 

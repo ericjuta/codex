@@ -5043,9 +5043,20 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         .await;
                     false
                 }
-                Op::ReviewHandoffs { handoff_packet_id } => {
-                    handlers::review_handoffs(&sess, &config, sub.id.clone(), handoff_packet_id)
-                        .await;
+                Op::ReviewHandoffs {
+                    handoff_packet_id,
+                    scope_type,
+                    scope_id,
+                } => {
+                    handlers::review_handoffs(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        handoff_packet_id,
+                        scope_type,
+                        scope_id,
+                    )
+                    .await;
                     false
                 }
                 Op::GenerateHandoff {
@@ -6023,8 +6034,18 @@ mod handlers {
         config: &Arc<Config>,
         sub_id: String,
         handoff_packet_id: Option<String>,
+        scope_type: Option<String>,
+        scope_id: Option<String>,
     ) {
-        super::agentmemory_ops::review_handoffs(sess, config, sub_id, handoff_packet_id).await;
+        super::agentmemory_ops::review_handoffs(
+            sess,
+            config,
+            sub_id,
+            handoff_packet_id,
+            scope_type,
+            scope_id,
+        )
+        .await;
     }
 
     pub async fn generate_handoff(

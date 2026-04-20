@@ -2960,7 +2960,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn show_pending_memory_operation(&mut self, cell: history_cell::MemoryHistoryCell) {
+    pub(crate) fn show_pending_memory_operation(&mut self, cell: history_cell::MemoryHistoryCell) {
         self.flush_active_cell();
         self.active_cell = Some(Box::new(cell));
         self.bump_active_cell_revision();

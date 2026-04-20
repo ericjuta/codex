@@ -750,7 +750,35 @@ async fn slash_memory_handoffs_shows_pending_cell_and_submits_op() {
         op_rx.try_recv(),
         Ok(Op::ReviewHandoffs {
             handoff_packet_id: None,
+            scope_type: None,
+            scope_id: None,
         })
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_handoffs_with_session_scope_targets_current_thread() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.dispatch_command_with_args(
+        SlashCommand::MemoryHandoffs,
+        "session".to_string(),
+        Vec::new(),
+    );
+
+    assert!(active_blob(&chat).contains("Memory Handoffs Pending"));
+    assert!(active_blob(&chat).contains("session"));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ReviewHandoffs {
+            handoff_packet_id,
+            scope_type,
+            scope_id,
+        }) if handoff_packet_id.is_none()
+            && scope_type == Some("session".to_string())
+            && scope_id == Some(thread_id.to_string())
     );
 }
 

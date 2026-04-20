@@ -1769,13 +1769,20 @@ pub(crate) async fn review_handoffs(
     config: &Arc<Config>,
     sub_id: String,
     handoff_packet_id: Option<String>,
+    scope_type: Option<String>,
+    scope_id: Option<String>,
 ) {
     if config.memories.backend != crate::config::types::MemoryBackend::Agentmemory {
         send_requires_agentmemory_backend(
             sess,
             &sub_id,
             MemoryOperationKind::Handoffs,
-            handoff_packet_id.clone(),
+            handoff_packet_id.clone().or_else(|| {
+                scope_type
+                    .clone()
+                    .zip(scope_id.clone())
+                    .map(|(scope_type, scope_id)| format!("{scope_type} {scope_id}"))
+            }),
         )
         .await;
         return;
@@ -1783,6 +1790,43 @@ pub(crate) async fn review_handoffs(
 
     let adapter = AgentmemoryAdapter::new();
     let project = project_path(config);
+    let resolved_scope_type = scope_type.and_then(|scope_type| {
+        let normalized = scope_type.trim().to_ascii_lowercase();
+        is_valid_handoff_scope_type(normalized.as_str()).then_some(normalized)
+    });
+    let resolved_scope_id = match (resolved_scope_type.as_deref(), scope_id) {
+        (Some("session"), Some(scope_id)) => Some(scope_id),
+        (Some("session"), None) => Some(sess.conversation_id.to_string()),
+        (Some("mission" | "action"), Some(scope_id)) => Some(scope_id),
+        (Some("mission" | "action"), None) => {
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Handoffs,
+                    status: MemoryOperationStatus::Error,
+                    query: resolved_scope_type.clone(),
+                    summary: "Handoff review failed.".to_string(),
+                    detail: Some(
+                        "mission and action handoff review require an explicit scope id"
+                            .to_string(),
+                    ),
+                    context_injected: false,
+                },
+            )
+            .await;
+            return;
+        }
+        _ => None,
+    };
+    let query = handoff_packet_id.clone().or_else(|| {
+        resolved_scope_type
+            .clone()
+            .zip(resolved_scope_id.clone())
+            .map(|(scope_type, scope_id)| format!("{scope_type} {scope_id}"))
+    });
+
     let response = match handoff_packet_id.as_deref() {
         Some(handoff_packet_id) => {
             adapter
@@ -1791,7 +1835,13 @@ pub(crate) async fn review_handoffs(
         }
         None => {
             adapter
-                .list_handoffs(project.as_path(), None, None, None, &config.memories)
+                .list_handoffs(
+                    project.as_path(),
+                    resolved_scope_type.as_deref(),
+                    resolved_scope_id.as_deref(),
+                    None,
+                    &config.memories,
+                )
                 .await
         }
     };
@@ -1806,6 +1856,14 @@ pub(crate) async fn review_handoffs(
             };
             let summary = if let Some(handoff_packet_id) = handoff_packet_id.as_deref() {
                 format!("Reviewed handoff packet `{handoff_packet_id}`.")
+            } else if let (Some(scope_type), Some(scope_id)) =
+                (resolved_scope_type.as_deref(), resolved_scope_id.as_deref())
+            {
+                if count > 0 {
+                    format!("Reviewed {count} `{scope_type}` handoff packets for `{scope_id}`.")
+                } else {
+                    format!("No `{scope_type}` handoff packets were found for `{scope_id}`.")
+                }
             } else if count > 0 {
                 format!("Reviewed {count} handoff packets.")
             } else {
@@ -1818,7 +1876,7 @@ pub(crate) async fn review_handoffs(
                     source: MemoryOperationSource::Human,
                     operation: MemoryOperationKind::Handoffs,
                     status,
-                    query: handoff_packet_id,
+                    query: query.clone(),
                     summary,
                     detail: response_pretty_json(&response),
                     context_injected: false,
@@ -1834,7 +1892,7 @@ pub(crate) async fn review_handoffs(
                     source: MemoryOperationSource::Human,
                     operation: MemoryOperationKind::Handoffs,
                     status: MemoryOperationStatus::Error,
-                    query: handoff_packet_id,
+                    query: query.clone(),
                     summary: "Handoff review failed.".to_string(),
                     detail: response_detail(&response),
                     context_injected: false,
@@ -1850,7 +1908,7 @@ pub(crate) async fn review_handoffs(
                     source: MemoryOperationSource::Human,
                     operation: MemoryOperationKind::Handoffs,
                     status: MemoryOperationStatus::Error,
-                    query: handoff_packet_id,
+                    query,
                     summary: "Handoff review failed.".to_string(),
                     detail: Some(err),
                     context_injected: false,

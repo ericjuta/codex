@@ -70,6 +70,34 @@ fn parse_memory_handoff_generate_args(input: &str) -> Option<(Option<String>, Op
     Some((Some(scope_type), scope_id))
 }
 
+fn parse_memory_handoffs_args(
+    input: &str,
+) -> Option<(Option<String>, Option<String>, Option<String>)> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Some((None, None, None));
+    }
+
+    let mut parts = trimmed.split_whitespace();
+    let first = parts.next()?.trim();
+    let normalized = first.to_ascii_lowercase();
+    if !is_valid_handoff_scope_type(normalized.as_str()) {
+        return parts
+            .next()
+            .is_none()
+            .then_some((Some(trimmed.to_string()), None, None));
+    }
+
+    let scope_id = parts.next().map(|scope_id| scope_id.trim().to_string());
+    if parts.next().is_some() {
+        return None;
+    }
+    if normalized != "session" && scope_id.is_none() {
+        return None;
+    }
+    Some((None, Some(normalized), scope_id))
+}
+
 fn prepared_inline_args(widget: &mut ChatWidget, args: String) -> Option<String> {
     if widget.bottom_pane.composer_text().is_empty() {
         Some(args)
@@ -487,10 +515,12 @@ impl ChatWidget {
             }
             SlashCommand::MemoryHandoffs => {
                 self.show_pending_memory_operation(history_cell::new_memory_handoffs_submission(
-                    None,
+                    None, None,
                 ));
                 self.submit_op(Op::ReviewHandoffs {
                     handoff_packet_id: None,
+                    scope_type: None,
+                    scope_id: None,
                 });
             }
             SlashCommand::MemoryHandoffGenerate => {
@@ -939,11 +969,31 @@ impl ChatWidget {
                 let Some(prepared_args) = prepared_inline_args(self, args) else {
                     return;
                 };
+                let Some((handoff_packet_id, scope_type, mut scope_id)) =
+                    parse_memory_handoffs_args(prepared_args.as_str())
+                else {
+                    self.add_error_message(
+                        "Usage: /memory-handoffs [<handoff_packet_id> | session [scope_id] | mission <mission_id> | action <action_id>]".to_string(),
+                    );
+                    return;
+                };
+                if scope_type.as_deref() == Some("session") && scope_id.is_none() {
+                    scope_id = self.thread_id().map(|thread_id| thread_id.to_string());
+                }
+                let query = handoff_packet_id.clone().or_else(|| {
+                    scope_type
+                        .clone()
+                        .zip(scope_id.clone())
+                        .map(|(scope_type, scope_id)| format!("{scope_type} {scope_id}"))
+                });
                 self.show_pending_memory_operation(history_cell::new_memory_handoffs_submission(
-                    Some(prepared_args.clone()),
+                    query.clone(),
+                    scope_id.clone(),
                 ));
                 self.submit_op(Op::ReviewHandoffs {
-                    handoff_packet_id: Some(prepared_args),
+                    handoff_packet_id,
+                    scope_type,
+                    scope_id,
                 });
                 self.bottom_pane.drain_pending_submission_state();
             }

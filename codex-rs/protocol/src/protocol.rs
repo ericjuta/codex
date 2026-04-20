@@ -740,6 +740,10 @@ pub enum Op {
     ReviewHandoffs {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         handoff_packet_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_type: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_id: Option<String>,
     },
 
     /// Generate a fresh durable handoff packet.
