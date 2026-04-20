@@ -104,6 +104,9 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::items::MemoryOperationKind;
+use codex_protocol::items::MemoryOperationScope;
+use codex_protocol::items::MemoryOperationStatus;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
@@ -120,6 +123,7 @@ use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
+use codex_protocol::protocol::MemoryOperationSource;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
@@ -2270,6 +2274,7 @@ impl Session {
         }
         sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
             .await;
+        let resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
         let session_start_source = match &initial_history {
             InitialHistory::Resumed(_) => codex_hooks::SessionStartSource::Resume,
             InitialHistory::New | InitialHistory::Forked(_) => {
@@ -2283,6 +2288,63 @@ impl Session {
         {
             let mut state = sess.state.lock().await;
             state.set_pending_session_start_source(Some(session_start_source));
+        }
+
+        if resumed_thread
+            && config.memories.backend == crate::config::types::MemoryBackend::Agentmemory
+        {
+            let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+            let project = get_git_repo_root(&session_configuration.cwd)
+                .unwrap_or_else(|| session_configuration.cwd.to_path_buf());
+            let session_id = conversation_id.to_string();
+            match tokio::time::timeout(
+                AGENTMEMORY_SESSION_LIFECYCLE_TIMEOUT,
+                adapter.list_handoffs(
+                    project.as_path(),
+                    Some("session"),
+                    Some(session_id.as_str()),
+                    Some(1),
+                    &config.memories,
+                ),
+            )
+            .await
+            {
+                Ok(Ok(response))
+                    if response
+                        .get("success")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                        && response
+                            .get("handoffPackets")
+                            .and_then(Value::as_array)
+                            .is_some_and(|packets| !packets.is_empty()) =>
+                {
+                    agentmemory_ops::send_memory_operation_event_with_scope(
+                        &sess,
+                        INITIAL_SUBMIT_ID,
+                        agentmemory_ops::MemoryOperationEventArgs {
+                            source: MemoryOperationSource::Automatic,
+                            operation: MemoryOperationKind::Handoffs,
+                            status: MemoryOperationStatus::Ready,
+                            query: Some(format!("session {session_id}")),
+                            summary: format!(
+                                "Reviewed 1 `session` handoff packets for `{session_id}`."
+                            ),
+                            detail: serde_json::to_string_pretty(&response).ok(),
+                            context_injected: false,
+                        },
+                        MemoryOperationScope::None,
+                    )
+                    .await;
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(err)) => {
+                    warn!("failed to auto-review resume handoff packet for {session_id}: {err}");
+                }
+                Err(_) => {
+                    warn!("timed out auto-reviewing resume handoff packet for {session_id}");
+                }
+            }
         }
 
         if config.memories.backend == crate::config::types::MemoryBackend::Native {

@@ -164,6 +164,16 @@ Expected outputs:
 - a clearly defined “packet-first resume” UX contract
 - tests for the resume path where packet review should appear automatically
 
+Current contract on this branch:
+
+- on `InitialHistory::Resumed`, Codex performs a best-effort
+  `GET /agentmemory/handoffs` review for `scopeType=session`,
+  `scopeId=<thread_id>`, `limit=1`
+- if a packet exists, Codex emits an automatic structured `Memory Handoffs`
+  history item immediately after thread attach
+- the packet is surfaced as a human review artifact, not injected into the
+  model prompt
+
 Notes:
 
 - do not auto-inject arbitrary handoff content into every prompt
