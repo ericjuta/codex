@@ -760,21 +760,13 @@ async fn unavailable_slash_command_is_available_from_local_recall() {
 }
 
 #[tokio::test]
-async fn no_op_stub_slash_command_is_available_from_local_recall() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+async fn memory_drop_slash_command_is_available_from_local_recall() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     submit_composer_text(&mut chat, "/debug-m-drop");
 
-    let cells = drain_insert_history(&mut rx);
-    let rendered = cells
-        .iter()
-        .map(|cell| lines_to_single_string(cell))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        rendered.contains("Memory maintenance"),
-        "expected stub message, got: {rendered:?}"
-    );
+    assert!(active_blob(&chat).contains("Memory Drop Pending"));
+    assert_matches!(op_rx.try_recv(), Ok(Op::DropMemories));
     assert_eq!(recall_latest_after_clearing(&mut chat), "/debug-m-drop");
 }
 
@@ -1171,23 +1163,14 @@ async fn slash_clear_is_disabled_while_task_running() {
 }
 
 #[tokio::test]
-async fn slash_memory_drop_reports_stubbed_feature() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+async fn slash_memory_drop_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.dispatch_command(SlashCommand::MemoryDrop);
 
-    let event = rx.try_recv().expect("expected unsupported-feature error");
-    match event {
-        AppEvent::InsertHistoryCell(cell) => {
-            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
-            assert!(rendered.contains("Memory maintenance: Not available in TUI yet."));
-        }
-        other => panic!("expected InsertHistoryCell error, got {other:?}"),
-    }
-    assert!(
-        op_rx.try_recv().is_err(),
-        "expected no memory op to be sent"
-    );
+    assert!(active_blob(&chat).contains("Memory Drop Pending"));
+    assert!(active_blob(&chat).contains("Dropping stored memories for this workspace."));
+    assert_matches!(op_rx.try_recv(), Ok(Op::DropMemories));
 }
 
 #[tokio::test]
@@ -1255,23 +1238,317 @@ async fn slash_memories_opens_memory_menu() {
 }
 
 #[tokio::test]
-async fn slash_memory_update_reports_stubbed_feature() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+async fn slash_memory_update_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.dispatch_command(SlashCommand::MemoryUpdate);
 
-    let event = rx.try_recv().expect("expected unsupported-feature error");
-    match event {
-        AppEvent::InsertHistoryCell(cell) => {
-            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
-            assert!(rendered.contains("Memory maintenance: Not available in TUI yet."));
-        }
-        other => panic!("expected InsertHistoryCell error, got {other:?}"),
-    }
+    assert!(active_blob(&chat).contains("Memory Update Pending"));
+    assert!(active_blob(&chat).contains("Requesting a memory refresh."));
+    assert_matches!(op_rx.try_recv(), Ok(Op::UpdateMemories));
+}
+
+#[tokio::test]
+async fn slash_memory_recall_requires_thread() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryRecall);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected thread requirement message");
+    let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        op_rx.try_recv().is_err(),
-        "expected no memory op to be sent"
+        rendered
+            .contains("Start a new chat or resume an existing thread before using /memory-recall."),
+        "expected thread requirement message, got {rendered:?}"
     );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn slash_memory_recall_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.dispatch_command(SlashCommand::MemoryRecall);
+
+    assert!(active_blob(&chat).contains("Memory Recall Pending"));
+    assert!(active_blob(&chat).contains("Recalling memory context for the current thread."));
+    assert_matches!(op_rx.try_recv(), Ok(Op::RecallMemories { query: None }));
+}
+
+#[tokio::test]
+async fn slash_memory_remember_requires_content() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryRemember);
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Usage: /memory-remember <content>"));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn slash_memory_remember_with_args_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(
+        SlashCommand::MemoryRemember,
+        "retain this durable note".to_string(),
+        Vec::new(),
+    );
+
+    assert!(active_blob(&chat).contains("Memory Remember Pending"));
+    assert!(active_blob(&chat).contains("Saving durable memory."));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::RememberMemories { content }) if content == "retain this durable note"
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_lessons_with_query_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(
+        SlashCommand::MemoryLessons,
+        "hook payloads".to_string(),
+        Vec::new(),
+    );
+
+    assert!(active_blob(&chat).contains("Memory Lessons Pending"));
+    assert!(active_blob(&chat).contains("hook payloads"));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ReviewLessons { query }) if query == Some("hook payloads".to_string())
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_actions_with_status_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(
+        SlashCommand::MemoryActions,
+        "blocked".to_string(),
+        Vec::new(),
+    );
+
+    assert!(active_blob(&chat).contains("Memory Actions Pending"));
+    assert!(active_blob(&chat).contains("blocked"));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ListActions { status }) if status == Some("blocked".to_string())
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_missions_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryMissions);
+
+    assert!(active_blob(&chat).contains("Memory Missions Pending"));
+    assert!(active_blob(&chat).contains("Reviewing missions for this workspace."));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ReviewMissions {
+            mission_id: None,
+            status: None,
+        })
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_missions_with_status_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(
+        SlashCommand::MemoryMissions,
+        "blocked".to_string(),
+        Vec::new(),
+    );
+
+    assert!(active_blob(&chat).contains("Memory Missions Pending"));
+    assert!(active_blob(&chat).contains("blocked"));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ReviewMissions { mission_id, status })
+            if mission_id.is_none() && status == Some("blocked".to_string())
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_branch_overlays_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryBranchOverlays);
+
+    assert!(active_blob(&chat).contains("Memory Branch Overlays Pending"));
+    assert!(active_blob(&chat).contains("Reviewing branch overlays for this workspace."));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ReviewBranchOverlays { branch }) if branch.is_none()
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_guardrails_with_query_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(
+        SlashCommand::MemoryGuardrails,
+        "localhost binding".to_string(),
+        Vec::new(),
+    );
+
+    assert!(active_blob(&chat).contains("Memory Guardrails Pending"));
+    assert!(active_blob(&chat).contains("localhost binding"));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ReviewGuardrails { query }) if query == Some("localhost binding".to_string())
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_decisions_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryDecisions);
+
+    assert!(active_blob(&chat).contains("Memory Decisions Pending"));
+    assert!(active_blob(&chat).contains("Reviewing decision memory for this workspace."));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ReviewDecisions { query }) if query.is_none()
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_dossiers_with_file_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(
+        SlashCommand::MemoryDossiers,
+        "src/functions/context.ts".to_string(),
+        Vec::new(),
+    );
+
+    assert!(active_blob(&chat).contains("Memory Dossiers Pending"));
+    assert!(active_blob(&chat).contains("src/functions/context.ts"));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ReviewDossiers { file_path })
+            if file_path == Some("src/functions/context.ts".to_string())
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_routine_candidates_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryRoutineCandidates);
+
+    assert!(active_blob(&chat).contains("Memory Routine Candidates Pending"));
+    assert!(active_blob(&chat).contains("Reviewing routine compiler proposals"));
+    assert_matches!(op_rx.try_recv(), Ok(Op::ReviewRoutineCandidates));
+}
+
+#[tokio::test]
+async fn slash_memory_handoffs_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryHandoffs);
+
+    assert!(active_blob(&chat).contains("Memory Handoffs Pending"));
+    assert!(active_blob(&chat).contains("Reviewing handoff packets for this workspace."));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ReviewHandoffs {
+            handoff_packet_id: None,
+            scope_type: None,
+            scope_id: None,
+        })
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_handoffs_with_session_scope_targets_current_thread() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.dispatch_command_with_args(
+        SlashCommand::MemoryHandoffs,
+        "session".to_string(),
+        Vec::new(),
+    );
+
+    assert!(active_blob(&chat).contains("Memory Handoffs Pending"));
+    assert!(active_blob(&chat).contains("session"));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ReviewHandoffs {
+            handoff_packet_id,
+            scope_type,
+            scope_id,
+        }) if handoff_packet_id.is_none()
+            && scope_type == Some("session".to_string())
+            && scope_id == Some(thread_id.to_string())
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_handoff_generate_shows_pending_cell_and_submits_default_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryHandoffGenerate);
+
+    assert!(active_blob(&chat).contains("Memory Handoff Generate Pending"));
+    assert!(active_blob(&chat).contains("Generating a fresh handoff packet."));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::GenerateHandoff {
+            scope_type: None,
+            scope_id: None,
+        })
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_handoff_generate_with_scope_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(
+        SlashCommand::MemoryHandoffGenerate,
+        "mission msn_123".to_string(),
+        Vec::new(),
+    );
+
+    assert!(active_blob(&chat).contains("Memory Handoff Generate Pending"));
+    assert!(active_blob(&chat).contains("mission"));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::GenerateHandoff { scope_type, scope_id })
+            if scope_type == Some("mission".to_string())
+                && scope_id == Some("msn_123".to_string())
+    );
+}
+
+#[tokio::test]
+async fn slash_memory_next_shows_pending_cell_and_submits_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryNext);
+
+    assert!(active_blob(&chat).contains("Memory Next Pending"));
+    assert!(active_blob(&chat).contains("Reviewing the next suggested action"));
+    assert_matches!(op_rx.try_recv(), Ok(Op::ReviewNext));
 }
 
 #[tokio::test]

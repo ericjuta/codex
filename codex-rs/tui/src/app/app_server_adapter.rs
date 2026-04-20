@@ -80,6 +80,8 @@ use codex_protocol::protocol::ItemCompletedEvent;
 #[cfg(test)]
 use codex_protocol::protocol::ItemStartedEvent;
 #[cfg(test)]
+use codex_protocol::protocol::MemoryOperationEvent;
+#[cfg(test)]
 use codex_protocol::protocol::PlanDeltaEvent;
 #[cfg(test)]
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
@@ -107,6 +109,140 @@ use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 #[cfg(test)]
 use std::time::Duration;
+
+#[cfg(test)]
+fn app_server_memory_source(
+    source: codex_app_server_protocol::MemoryOperationSource,
+) -> codex_protocol::protocol::MemoryOperationSource {
+    match source {
+        codex_app_server_protocol::MemoryOperationSource::Human => {
+            codex_protocol::protocol::MemoryOperationSource::Human
+        }
+        codex_app_server_protocol::MemoryOperationSource::Assistant => {
+            codex_protocol::protocol::MemoryOperationSource::Assistant
+        }
+        codex_app_server_protocol::MemoryOperationSource::Automatic => {
+            codex_protocol::protocol::MemoryOperationSource::Automatic
+        }
+    }
+}
+
+#[cfg(test)]
+fn app_server_memory_kind(
+    operation: codex_app_server_protocol::MemoryOperationKind,
+) -> codex_protocol::items::MemoryOperationKind {
+    match operation {
+        codex_app_server_protocol::MemoryOperationKind::Recall => {
+            codex_protocol::items::MemoryOperationKind::Recall
+        }
+        codex_app_server_protocol::MemoryOperationKind::Remember => {
+            codex_protocol::items::MemoryOperationKind::Remember
+        }
+        codex_app_server_protocol::MemoryOperationKind::Update => {
+            codex_protocol::items::MemoryOperationKind::Update
+        }
+        codex_app_server_protocol::MemoryOperationKind::Drop => {
+            codex_protocol::items::MemoryOperationKind::Drop
+        }
+        codex_app_server_protocol::MemoryOperationKind::Lessons => {
+            codex_protocol::items::MemoryOperationKind::Lessons
+        }
+        codex_app_server_protocol::MemoryOperationKind::Crystals => {
+            codex_protocol::items::MemoryOperationKind::Crystals
+        }
+        codex_app_server_protocol::MemoryOperationKind::Crystallize => {
+            codex_protocol::items::MemoryOperationKind::Crystallize
+        }
+        codex_app_server_protocol::MemoryOperationKind::AutoCrystallize => {
+            codex_protocol::items::MemoryOperationKind::AutoCrystallize
+        }
+        codex_app_server_protocol::MemoryOperationKind::Insights => {
+            codex_protocol::items::MemoryOperationKind::Insights
+        }
+        codex_app_server_protocol::MemoryOperationKind::Reflect => {
+            codex_protocol::items::MemoryOperationKind::Reflect
+        }
+        codex_app_server_protocol::MemoryOperationKind::Actions => {
+            codex_protocol::items::MemoryOperationKind::Actions
+        }
+        codex_app_server_protocol::MemoryOperationKind::ActionCreate => {
+            codex_protocol::items::MemoryOperationKind::ActionCreate
+        }
+        codex_app_server_protocol::MemoryOperationKind::ActionUpdate => {
+            codex_protocol::items::MemoryOperationKind::ActionUpdate
+        }
+        codex_app_server_protocol::MemoryOperationKind::Missions => {
+            codex_protocol::items::MemoryOperationKind::Missions
+        }
+        codex_app_server_protocol::MemoryOperationKind::Handoffs => {
+            codex_protocol::items::MemoryOperationKind::Handoffs
+        }
+        codex_app_server_protocol::MemoryOperationKind::HandoffGenerate => {
+            codex_protocol::items::MemoryOperationKind::HandoffGenerate
+        }
+        codex_app_server_protocol::MemoryOperationKind::BranchOverlays => {
+            codex_protocol::items::MemoryOperationKind::BranchOverlays
+        }
+        codex_app_server_protocol::MemoryOperationKind::Guardrails => {
+            codex_protocol::items::MemoryOperationKind::Guardrails
+        }
+        codex_app_server_protocol::MemoryOperationKind::Decisions => {
+            codex_protocol::items::MemoryOperationKind::Decisions
+        }
+        codex_app_server_protocol::MemoryOperationKind::Dossiers => {
+            codex_protocol::items::MemoryOperationKind::Dossiers
+        }
+        codex_app_server_protocol::MemoryOperationKind::RoutineCandidates => {
+            codex_protocol::items::MemoryOperationKind::RoutineCandidates
+        }
+        codex_app_server_protocol::MemoryOperationKind::Frontier => {
+            codex_protocol::items::MemoryOperationKind::Frontier
+        }
+        codex_app_server_protocol::MemoryOperationKind::Next => {
+            codex_protocol::items::MemoryOperationKind::Next
+        }
+    }
+}
+
+#[cfg(test)]
+fn app_server_memory_status(
+    status: codex_app_server_protocol::MemoryOperationStatus,
+) -> codex_protocol::items::MemoryOperationStatus {
+    match status {
+        codex_app_server_protocol::MemoryOperationStatus::Pending => {
+            codex_protocol::items::MemoryOperationStatus::Pending
+        }
+        codex_app_server_protocol::MemoryOperationStatus::Ready => {
+            codex_protocol::items::MemoryOperationStatus::Ready
+        }
+        codex_app_server_protocol::MemoryOperationStatus::Empty => {
+            codex_protocol::items::MemoryOperationStatus::Empty
+        }
+        codex_app_server_protocol::MemoryOperationStatus::Skipped => {
+            codex_protocol::items::MemoryOperationStatus::Skipped
+        }
+        codex_app_server_protocol::MemoryOperationStatus::Error => {
+            codex_protocol::items::MemoryOperationStatus::Error
+        }
+    }
+}
+
+#[cfg(test)]
+fn app_server_memory_scope(
+    scope: codex_app_server_protocol::MemoryOperationScope,
+) -> codex_protocol::items::MemoryOperationScope {
+    match scope {
+        codex_app_server_protocol::MemoryOperationScope::None => {
+            codex_protocol::items::MemoryOperationScope::None
+        }
+        codex_app_server_protocol::MemoryOperationScope::Turn => {
+            codex_protocol::items::MemoryOperationScope::Turn
+        }
+        codex_app_server_protocol::MemoryOperationScope::Thread => {
+            codex_protocol::items::MemoryOperationScope::Thread
+        }
+    }
+}
 
 impl App {
     fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
@@ -364,6 +500,7 @@ fn server_notification_thread_target(
             Some(notification.thread_id.as_str())
         }
         ServerNotification::ItemCompleted(notification) => Some(notification.thread_id.as_str()),
+        ServerNotification::MemoryOperation(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::RawResponseItemCompleted(notification) => {
             Some(notification.thread_id.as_str())
         }
@@ -593,6 +730,22 @@ fn server_notification_thread_events(
                 id: String::new(),
                 msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
                     delta: notification.delta,
+                }),
+            }],
+        )),
+        ServerNotification::MemoryOperation(notification) => Some((
+            ThreadId::from_string(&notification.thread_id).ok()?,
+            vec![Event {
+                id: String::new(),
+                msg: EventMsg::MemoryOperation(MemoryOperationEvent {
+                    source: app_server_memory_source(notification.source),
+                    operation: app_server_memory_kind(notification.operation),
+                    status: app_server_memory_status(notification.status),
+                    scope: app_server_memory_scope(notification.scope),
+                    query: notification.query,
+                    summary: notification.summary,
+                    detail: notification.detail,
+                    context_injected: notification.context_injected,
                 }),
             }],
         )),
@@ -899,7 +1052,8 @@ fn thread_item_to_core(item: &ThreadItem) -> Option<TurnItem> {
                 id: id.clone(),
             }))
         }
-        ThreadItem::CommandExecution { .. }
+        ThreadItem::MemoryOperation { .. }
+        | ThreadItem::CommandExecution { .. }
         | ThreadItem::FileChange { .. }
         | ThreadItem::McpToolCall { .. }
         | ThreadItem::DynamicToolCall { .. }

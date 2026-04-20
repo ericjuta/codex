@@ -715,3 +715,48 @@ async fn live_app_server_thread_closed_requests_immediate_exit() {
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::Immediate)));
 }
+
+#[tokio::test]
+async fn live_app_server_automatic_handoff_notification_renders_resume_packet() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::MemoryOperation(
+            codex_app_server_protocol::MemoryOperationNotification {
+                thread_id: "thread-1".to_string(),
+                source: codex_app_server_protocol::MemoryOperationSource::Automatic,
+                operation: codex_app_server_protocol::MemoryOperationKind::Handoffs,
+                status: codex_app_server_protocol::MemoryOperationStatus::Ready,
+                scope: codex_app_server_protocol::MemoryOperationScope::None,
+                query: Some("session thr_123".to_string()),
+                summary: "Reviewed 1 `session` handoff packets for `thr_123`.".to_string(),
+                detail: Some(
+                    serde_json::to_string_pretty(&json!({
+                        "success": true,
+                        "handoffPackets": [
+                            {
+                                "summary": "Resume the deferred memory polish work",
+                                "scopeType": "session",
+                                "scopeId": "thr_123",
+                                "recommendedNextStep": "Verify replay and app-server rendering",
+                                "blockers": ["finish TUI snapshots"]
+                            }
+                        ]
+                    }))
+                    .expect("handoff detail should serialize"),
+                ),
+                context_injected: false,
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("Memory Handoffs Ready"));
+    assert!(rendered.contains("Source: automatic"));
+    assert!(rendered.contains("Reviewed 1 `session` handoff packets for `thr_123`."));
+    assert!(rendered.contains("Resume the deferred memory polish work"));
+    assert!(rendered.contains("Verify replay and app-server rendering"));
+}

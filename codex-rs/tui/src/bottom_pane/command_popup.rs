@@ -295,7 +295,38 @@ mod tests {
                 CommandItem::Builtin(cmd) => cmd.command(),
             })
             .collect();
-        assert_eq!(cmds, vec!["model", "memories", "mention", "mcp"]);
+        assert_eq!(
+            cmds,
+            vec![
+                "model",
+                "memories",
+                "mention",
+                "mcp",
+                "memory-recall",
+                "memory-remember",
+                "memory-lessons",
+                "memory-crystals",
+                "memory-crystals-create",
+                "memory-crystals-auto",
+                "memory-insights",
+                "memory-reflect",
+                "memory-actions",
+                "memory-missions",
+                "memory-branch-overlays",
+                "memory-guardrails",
+                "memory-decisions",
+                "memory-dossiers",
+                "memory-routine-candidates",
+                "memory-action-create",
+                "memory-action-update",
+                "memory-handoffs",
+                "memory-handoff-generate",
+                "memory-frontier",
+                "memory-next",
+                "memory-drop",
+                "memory-update"
+            ]
+        );
     }
 
     #[test]
