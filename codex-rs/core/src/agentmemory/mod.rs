@@ -968,6 +968,7 @@ mod tests {
     use wiremock::matchers::header;
     use wiremock::matchers::method;
     use wiremock::matchers::path;
+    use wiremock::matchers::query_param;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -1508,6 +1509,203 @@ mod tests {
                     "id": "mem-1",
                     "content": "remember this"
                 }
+            })
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn list_missions_sends_project_filters_and_returns_json() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _url_guard = EnvVarGuard::set("AGENTMEMORY_URL", "");
+        let memories = test_memories(&server);
+
+        Mock::given(method("GET"))
+            .and(path("/agentmemory/missions"))
+            .and(query_param("project", "/tmp/project"))
+            .and(query_param("status", "blocked"))
+            .and(query_param("owner", "agent-1"))
+            .and(query_param("limit", "5"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "success": true,
+                "missions": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = adapter
+            .list_missions(
+                Path::new("/tmp/project"),
+                Some("blocked"),
+                Some("agent-1"),
+                Some(5),
+                &memories,
+            )
+            .await
+            .expect("list missions should succeed");
+
+        assert_eq!(
+            response,
+            json!({
+                "success": true,
+                "missions": []
+            })
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn get_mission_fetches_by_id() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _url_guard = EnvVarGuard::set("AGENTMEMORY_URL", "");
+        let memories = test_memories(&server);
+
+        Mock::given(method("GET"))
+            .and(path("/agentmemory/missions/msn_123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "success": true,
+                "mission": { "id": "msn_123" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = adapter
+            .get_mission("msn_123", &memories)
+            .await
+            .expect("get mission should succeed");
+
+        assert_eq!(
+            response,
+            json!({
+                "success": true,
+                "mission": { "id": "msn_123" }
+            })
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn list_handoffs_sends_scope_filters_and_returns_json() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _url_guard = EnvVarGuard::set("AGENTMEMORY_URL", "");
+        let memories = test_memories(&server);
+
+        Mock::given(method("GET"))
+            .and(path("/agentmemory/handoffs"))
+            .and(query_param("project", "/tmp/project"))
+            .and(query_param("scopeType", "mission"))
+            .and(query_param("scopeId", "msn_123"))
+            .and(query_param("limit", "3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "success": true,
+                "handoffPackets": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = adapter
+            .list_handoffs(
+                Path::new("/tmp/project"),
+                Some("mission"),
+                Some("msn_123"),
+                Some(3),
+                &memories,
+            )
+            .await
+            .expect("list handoffs should succeed");
+
+        assert_eq!(
+            response,
+            json!({
+                "success": true,
+                "handoffPackets": []
+            })
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn get_handoff_fetches_by_id() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _url_guard = EnvVarGuard::set("AGENTMEMORY_URL", "");
+        let memories = test_memories(&server);
+
+        Mock::given(method("GET"))
+            .and(path("/agentmemory/handoffs/hdf_123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "success": true,
+                "handoffPacket": { "id": "hdf_123" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = adapter
+            .get_handoff("hdf_123", &memories)
+            .await
+            .expect("get handoff should succeed");
+
+        assert_eq!(
+            response,
+            json!({
+                "success": true,
+                "handoffPacket": { "id": "hdf_123" }
+            })
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn generate_handoff_posts_scope_payload_and_returns_json() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _url_guard = EnvVarGuard::set("AGENTMEMORY_URL", "");
+        let memories = test_memories(&server);
+
+        Mock::given(method("POST"))
+            .and(path("/agentmemory/handoffs/generate"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+                "success": true,
+                "handoffPacket": { "id": "hdf_456" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = adapter
+            .generate_handoff("mission", "msn_123", Path::new("/tmp/project"), &memories)
+            .await
+            .expect("generate handoff should succeed");
+
+        assert_eq!(
+            response,
+            json!({
+                "success": true,
+                "handoffPacket": { "id": "hdf_456" }
+            })
+        );
+
+        let requests = server.received_requests().await.unwrap_or_default();
+        let body = serde_json::from_slice::<serde_json::Value>(&requests[0].body)
+            .expect("generate handoff request body should be json");
+        assert_eq!(
+            body,
+            json!({
+                "scopeType": "mission",
+                "scopeId": "msn_123",
+                "project": "/tmp/project",
             })
         );
     }
