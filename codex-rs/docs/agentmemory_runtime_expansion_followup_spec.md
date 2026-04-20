@@ -12,6 +12,10 @@ Human operator guidance for the current slash-command surface lives in:
 
 - [`agentmemory_slash_command_usage_spec.md`](./agentmemory_slash_command_usage_spec.md)
 
+Remaining post-feature hardening and polish work is tracked in:
+
+- [`agentmemory_remaining_hardening_spec.md`](./agentmemory_remaining_hardening_spec.md)
+
 ## Baseline
 
 The branch already implements the following baseline:

@@ -26,6 +26,10 @@ Codex now consumes the read/generate slice directly through:
   payloads
 - automatic session-scoped handoff review after Codex thread resume
 
+Remaining hardening/polish after this completed lane is tracked in:
+
+- [`agentmemory_remaining_hardening_spec.md`](./agentmemory_remaining_hardening_spec.md)
+
 ## Goal
 
 Make Codex a strong runtime caller of the new mission and handoff state so the
