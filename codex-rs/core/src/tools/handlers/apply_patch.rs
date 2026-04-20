@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::agentmemory::context_planner::AgentmemoryToolCapability;
 use crate::apply_patch;
 use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
@@ -16,6 +17,7 @@ use crate::tools::context::ApplyPatchToolOutput;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -23,6 +25,8 @@ use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolArgumentDiffConsumer;
+use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
@@ -45,6 +49,9 @@ use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 use codex_tools::ApplyPatchToolArgs;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::BTreeSet;
+use std::collections::HashSet;
+use std::sync::Arc;
 
 const APPLY_PATCH_ARGUMENT_DIFF_BUFFER_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -271,6 +278,62 @@ async fn effective_patch_permissions(
     )
 }
 
+fn patch_input_from_payload(payload: &ToolPayload) -> Option<String> {
+    match payload {
+        ToolPayload::Function { arguments } => parse_arguments::<ApplyPatchToolArgs>(arguments)
+            .ok()
+            .map(|args| args.input),
+        ToolPayload::Custom { input } => Some(input.clone()),
+        ToolPayload::LocalShell { .. }
+        | ToolPayload::ToolSearch { .. }
+        | ToolPayload::Mcp { .. } => None,
+    }
+}
+
+fn patch_paths_from_input(patch_input: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut seen = HashSet::new();
+
+    for prefix in [
+        "*** Update File: ",
+        "*** Add File: ",
+        "*** Delete File: ",
+        "*** Move to: ",
+    ] {
+        for line in patch_input.lines() {
+            if let Some(path) = line.strip_prefix(prefix)
+                && seen.insert(path.to_string())
+            {
+                paths.push(path.to_string());
+            }
+        }
+    }
+
+    paths
+}
+
+fn agentmemory_patch_tool_name(patch_input: &str) -> &'static str {
+    let mut saw_add = false;
+    let mut saw_edit = false;
+
+    for line in patch_input.lines() {
+        if line.starts_with("*** Add File: ") {
+            saw_add = true;
+        } else if line.starts_with("*** Update File: ")
+            || line.starts_with("*** Delete File: ")
+            || line.starts_with("*** Move to: ")
+        {
+            saw_edit = true;
+        }
+    }
+
+    if saw_add && !saw_edit {
+        "Write"
+    } else {
+        "Edit"
+    }
+}
+
 impl ToolHandler for ApplyPatchHandler {
     type Output = ApplyPatchToolOutput;
 
@@ -293,6 +356,34 @@ impl ToolHandler for ApplyPatchHandler {
         Some(Box::<ApplyPatchArgumentDiffConsumer>::default())
     }
 
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        let patch_input = patch_input_from_payload(&invocation.payload)?;
+        let paths = patch_paths_from_input(&patch_input);
+        let agentmemory_input = (!paths.is_empty()).then(|| serde_json::json!({ "paths": paths }));
+
+        Some(PreToolUsePayload {
+            tool_name: agentmemory_patch_tool_name(&patch_input).to_string(),
+            command: patch_input,
+            agentmemory_input,
+            agentmemory_capability: Some(AgentmemoryToolCapability::Patch),
+        })
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        invocation: &ToolInvocation,
+        result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload> {
+        let patch_input = patch_input_from_payload(&invocation.payload)?;
+        let tool_response =
+            result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
+        Some(PostToolUsePayload {
+            tool_name: agentmemory_patch_tool_name(&patch_input).to_string(),
+            command: patch_input,
+            tool_response,
+        })
+    }
+
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
@@ -305,11 +396,13 @@ impl ToolHandler for ApplyPatchHandler {
         } = invocation;
 
         let patch_input = match payload {
-            ToolPayload::Function { arguments } => {
-                let args: ApplyPatchToolArgs = parse_arguments(&arguments)?;
-                args.input
+            ToolPayload::Function { .. } | ToolPayload::Custom { .. } => {
+                patch_input_from_payload(&payload).ok_or_else(|| {
+                    FunctionCallError::RespondToModel(
+                        "apply_patch handler received invalid patch input".to_string(),
+                    )
+                })?
             }
-            ToolPayload::Custom { input } => input,
             _ => {
                 return Err(FunctionCallError::RespondToModel(
                     "apply_patch handler received unsupported payload".to_string(),

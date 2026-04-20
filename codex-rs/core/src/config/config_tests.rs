@@ -27,6 +27,8 @@ use codex_config::permissions_toml::NetworkToml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
 use codex_config::profile_toml::ConfigProfile;
+use codex_config::types::AgentmemoryConfig;
+use codex_config::types::AgentmemoryConfigToml;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::BundledSkillsConfig;
@@ -233,12 +235,18 @@ max_rollouts_per_startup = 9
 min_rollout_idle_hours = 24
 extract_model = "gpt-5-mini"
 consolidation_model = "gpt-5.2"
+
+[memories.agentmemory]
+base_url = "http://127.0.0.1:4010"
+inject_context = true
+secret_env_var = "CODEX_AGENTMEMORY_SECRET"
 "#;
     let memories_cfg =
         toml::from_str::<ConfigToml>(memories).expect("TOML deserialization should succeed");
     assert_eq!(
         Some(MemoriesToml {
             disable_on_external_context: Some(true),
+            backend: None,
             generate_memories: Some(false),
             use_memories: Some(false),
             max_raw_memories_for_consolidation: Some(512),
@@ -248,6 +256,11 @@ consolidation_model = "gpt-5.2"
             min_rollout_idle_hours: Some(24),
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5.2".to_string()),
+            agentmemory: Some(AgentmemoryConfigToml {
+                base_url: Some("http://127.0.0.1:4010".to_string()),
+                inject_context: Some(true),
+                secret_env_var: Some("CODEX_AGENTMEMORY_SECRET".to_string()),
+            }),
         }),
         memories_cfg.memories
     );
@@ -263,6 +276,7 @@ consolidation_model = "gpt-5.2"
         config.memories,
         MemoriesConfig {
             disable_on_external_context: true,
+            backend: crate::config::types::MemoryBackend::default(),
             generate_memories: false,
             use_memories: false,
             max_raw_memories_for_consolidation: 512,
@@ -272,6 +286,11 @@ consolidation_model = "gpt-5.2"
             min_rollout_idle_hours: 24,
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5.2".to_string()),
+            agentmemory: AgentmemoryConfig {
+                base_url: "http://127.0.0.1:4010".to_string(),
+                inject_context: true,
+                secret_env_var: "CODEX_AGENTMEMORY_SECRET".to_string(),
+            },
         }
     );
 

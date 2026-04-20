@@ -4569,6 +4569,118 @@ fn fake_id_token(account_id: &str, user_id: Option<&str>) -> String {
     format!("{header}.{payload}.signature")
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(agentmemory_env)]
+async fn update_memories_emits_empty_event_for_insufficient_observations() {
+    let agentmemory_server = MockServer::start().await;
+    let _agentmemory_url_guard = EnvVarGuard::set("AGENTMEMORY_URL", &agentmemory_server.uri());
+
+    Mock::given(method("POST"))
+        .and(path("/agentmemory/consolidate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "consolidated": 0,
+            "reason": "insufficient_observations",
+            "scannedSessions": 4,
+            "totalObservations": 0
+        })))
+        .expect(1)
+        .mount(&agentmemory_server)
+        .await;
+
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let mut config = build_test_config(codex_home.path()).await;
+    config.memories.backend = crate::config::types::MemoryBackend::Agentmemory;
+    let config = Arc::new(config);
+    let (sess, _tc, rx) = make_session_and_context_with_rx().await;
+
+    crate::session::agentmemory_ops::update_memories(&sess, &config, "sub-id".to_string()).await;
+
+    let event = tokio::time::timeout(StdDuration::from_secs(1), async {
+        loop {
+            let event = rx.recv().await.expect("event");
+            if let EventMsg::MemoryOperation(event) = event.msg {
+                break event;
+            }
+        }
+    })
+    .await
+    .expect("timeout waiting for memory operation event");
+
+    assert_eq!(
+        event.operation,
+        codex_protocol::items::MemoryOperationKind::Update
+    );
+    assert_eq!(
+        event.status,
+        codex_protocol::items::MemoryOperationStatus::Empty
+    );
+    assert_eq!(
+        event.summary,
+        "Not enough observations yet to consolidate agentmemory."
+    );
+    assert_eq!(
+        event.detail,
+        Some(
+            "Agentmemory returned reason 'insufficient_observations' after scanning 4 sessions and considering 0 candidate observations.".to_string()
+        )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(agentmemory_env)]
+async fn remember_memories_emits_ready_event() {
+    let agentmemory_server = MockServer::start().await;
+    let _agentmemory_url_guard = EnvVarGuard::set("AGENTMEMORY_URL", &agentmemory_server.uri());
+
+    Mock::given(method("POST"))
+        .and(path("/agentmemory/remember"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "success": true,
+            "memory": {
+                "id": "mem-123",
+                "content": "retain this note",
+            }
+        })))
+        .expect(1)
+        .mount(&agentmemory_server)
+        .await;
+
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let mut config = build_test_config(codex_home.path()).await;
+    config.memories.backend = crate::config::types::MemoryBackend::Agentmemory;
+    let config = Arc::new(config);
+    let (sess, _tc, rx) = make_session_and_context_with_rx().await;
+
+    crate::session::agentmemory_ops::remember_memories(
+        &sess,
+        &config,
+        "sub-id".to_string(),
+        "retain this note".to_string(),
+    )
+    .await;
+
+    let event = tokio::time::timeout(StdDuration::from_secs(1), async {
+        loop {
+            let event = rx.recv().await.expect("event");
+            if let EventMsg::MemoryOperation(event) = event.msg {
+                break event;
+            }
+        }
+    })
+    .await
+    .expect("timeout waiting for memory operation event");
+
+    assert_eq!(
+        event.operation,
+        codex_protocol::items::MemoryOperationKind::Remember
+    );
+    assert_eq!(
+        event.status,
+        codex_protocol::items::MemoryOperationStatus::Ready
+    );
+    assert_eq!(event.summary, "Saved durable memory `mem-123`.");
+}
+
 #[tokio::test]
 async fn refresh_mcp_servers_is_deferred_until_next_turn() {
     let (session, turn_context) = make_session_and_context().await;

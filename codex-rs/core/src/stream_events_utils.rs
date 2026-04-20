@@ -102,6 +102,35 @@ pub(crate) fn raw_assistant_output_text_from_item(item: &ResponseItem) -> Option
     None
 }
 
+pub(crate) fn maybe_capture_agentmemory_assistant_result(
+    sess: &Session,
+    turn_context: &TurnContext,
+    assistant_text: &str,
+) {
+    if turn_context.config.memories.backend != crate::config::types::MemoryBackend::Agentmemory
+        || assistant_text.trim().is_empty()
+    {
+        return;
+    }
+
+    let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+    let memories = turn_context.config.memories.clone();
+    let payload = serde_json::json!({
+        "session_id": sess.conversation_id.to_string(),
+        "turn_id": turn_context.sub_id.clone(),
+        "cwd": turn_context.cwd.display().to_string(),
+        "model": turn_context.model_info.slug.clone(),
+        "assistant_text": assistant_text,
+        "is_final": true,
+    });
+
+    tokio::spawn(async move {
+        adapter
+            .capture_event("AssistantResult", payload, &memories)
+            .await;
+    });
+}
+
 async fn save_image_generation_result(
     codex_home: &AbsolutePathBuf,
     session_id: &str,
@@ -160,6 +189,7 @@ pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
     item: &ResponseItem,
 ) {
     if !turn_context.config.memories.disable_on_external_context
+        || turn_context.config.memories.backend == crate::config::types::MemoryBackend::Agentmemory
         || !response_item_may_include_external_context(item)
     {
         return;
@@ -282,6 +312,13 @@ pub(crate) async fn handle_output_item_done(
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
                 .await;
             let last_agent_message = last_assistant_message_from_item(&item, plan_mode);
+            if let Some(assistant_text) = last_agent_message.as_deref() {
+                maybe_capture_agentmemory_assistant_result(
+                    ctx.sess.as_ref(),
+                    ctx.turn_context.as_ref(),
+                    assistant_text,
+                );
+            }
 
             output.last_agent_message = last_agent_message;
         }
@@ -434,6 +471,11 @@ pub(crate) fn last_assistant_message_from_item(
     item: &ResponseItem,
     plan_mode: bool,
 ) -> Option<String> {
+    if let ResponseItem::Message { role, phase, .. } = item
+        && (role != "assistant" || matches!(phase, Some(MessagePhase::Commentary)))
+    {
+        return None;
+    }
     if let Some(combined) = raw_assistant_output_text_from_item(item) {
         if combined.is_empty() {
             return None;

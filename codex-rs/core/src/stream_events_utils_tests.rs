@@ -178,6 +178,16 @@ fn last_assistant_message_from_item_returns_none_for_plan_only_hidden_message() 
 }
 
 #[test]
+fn last_assistant_message_from_item_returns_none_for_commentary_messages() {
+    let item = assistant_output_text_with_phase("still working", Some(MessagePhase::Commentary));
+
+    assert_eq!(
+        last_assistant_message_from_item(&item, /*plan_mode*/ false),
+        None
+    );
+}
+
+#[test]
 fn completed_item_defers_mailbox_delivery_for_unknown_phase_messages() {
     let item = assistant_output_text("final answer");
 

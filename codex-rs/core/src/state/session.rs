@@ -6,6 +6,8 @@ use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use crate::agentmemory::context_planner::AgentmemoryPlannerState;
+use crate::agentmemory::context_planner::AutoInjectionRegistration;
 use crate::context_manager::ContextManager;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::SessionConfiguration;
@@ -34,6 +36,8 @@ pub(crate) struct SessionState {
     pub(crate) agent_task: Option<SessionAgentTask>,
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
+    pending_session_start_additional_contexts: Vec<String>,
+    agentmemory_planner_state: AgentmemoryPlannerState,
     granted_permissions: Option<PermissionProfile>,
     next_turn_is_first: bool,
 }
@@ -54,6 +58,8 @@ impl SessionState {
             agent_task: None,
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
+            pending_session_start_additional_contexts: Vec::new(),
+            agentmemory_planner_state: AgentmemoryPlannerState::default(),
             granted_permissions: None,
             next_turn_is_first: true,
         }
@@ -231,6 +237,31 @@ impl SessionState {
         &mut self,
     ) -> Option<codex_hooks::SessionStartSource> {
         self.pending_session_start_source.take()
+    }
+
+    pub(crate) fn push_pending_session_start_additional_context(
+        &mut self,
+        additional_context: String,
+    ) {
+        self.pending_session_start_additional_contexts
+            .push(additional_context);
+    }
+
+    pub(crate) fn take_pending_session_start_additional_contexts(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_session_start_additional_contexts)
+    }
+
+    pub(crate) fn begin_agentmemory_turn(&mut self) -> u64 {
+        self.agentmemory_planner_state.begin_user_turn()
+    }
+
+    pub(crate) fn register_agentmemory_auto_injection(
+        &mut self,
+        lane_key: &str,
+        context: &str,
+    ) -> AutoInjectionRegistration {
+        self.agentmemory_planner_state
+            .register_auto_injection(lane_key, context)
     }
 
     pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {

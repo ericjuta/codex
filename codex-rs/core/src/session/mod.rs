@@ -164,6 +164,7 @@ use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::exec_output::StreamOutput;
 
+pub(crate) mod agentmemory_ops;
 mod agent_task_lifecycle;
 mod handlers;
 mod mcp;

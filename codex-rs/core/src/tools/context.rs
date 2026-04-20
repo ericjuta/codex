@@ -113,6 +113,10 @@ impl ToolOutput for CallToolResult {
         }
     }
 
+    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
+        serde_json::to_value(self).ok()
+    }
+
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
         serde_json::to_value(self).unwrap_or_else(|err| {
             JsonValue::String(format!("failed to serialize mcp result: {err}"))
@@ -221,6 +225,10 @@ impl ToolOutput for ToolSearchOutput {
                 .collect(),
         }
     }
+
+    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
+        serde_json::to_value(&self.tools).ok()
+    }
 }
 
 pub struct FunctionToolOutput {
@@ -270,7 +278,14 @@ impl ToolOutput for FunctionToolOutput {
     }
 
     fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
-        self.post_tool_use_response.clone()
+        self.post_tool_use_response
+            .clone()
+            .or_else(|| {
+                function_call_output_content_items_to_text(&self.body)
+                    .filter(|text: &String| !text.is_empty())
+                    .map(JsonValue::String)
+            })
+            .or_else(|| serde_json::to_value(&self.body).ok())
     }
 }
 
@@ -302,6 +317,10 @@ impl ToolOutput for ApplyPatchToolOutput {
             }],
             Some(true),
         )
+    }
+
+    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
+        Some(JsonValue::String(self.text.clone()))
     }
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
@@ -343,6 +362,10 @@ impl ToolOutput for AbortedToolOutput {
                 /*success*/ None,
             ),
         }
+    }
+
+    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
+        Some(JsonValue::String(self.message.clone()))
     }
 }
 

@@ -1,4 +1,7 @@
 use super::*;
+use crate::session::tests::make_session_and_context;
+use crate::tools::context::ApplyPatchToolOutput;
+use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -9,7 +12,9 @@ use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tempfile::TempDir;
+use tokio::sync::Mutex;
 
 #[test]
 fn diff_consumer_does_not_stream_json_tool_call_arguments() {
@@ -191,4 +196,64 @@ fn write_permissions_for_paths_keep_dirs_outside_workspace_root() {
             .and_then(|(_read, write)| write),
         Some(vec![expected_outside])
     );
+}
+
+#[test]
+fn agentmemory_patch_tool_name_uses_write_for_add_only_patches() {
+    let patch = r#"*** Begin Patch
+*** Add File: src/new.rs
++fn main() {}
+*** End Patch"#;
+
+    assert_eq!(agentmemory_patch_tool_name(patch), "Write");
+    assert_eq!(
+        patch_paths_from_input(patch),
+        vec!["src/new.rs".to_string()]
+    );
+}
+
+#[test]
+fn agentmemory_patch_tool_name_uses_edit_for_existing_file_patches() {
+    let patch = r#"*** Begin Patch
+*** Update File: src/lib.rs
+@@
+-old
++new
+*** End Patch"#;
+
+    assert_eq!(agentmemory_patch_tool_name(patch), "Edit");
+    assert_eq!(
+        patch_paths_from_input(patch),
+        vec!["src/lib.rs".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn post_tool_use_payload_maps_apply_patch_into_write_lane() {
+    let patch = r#"*** Begin Patch
+*** Add File: src/new.rs
++fn main() {}
+*** End Patch"#;
+    let (session, turn) = make_session_and_context().await;
+    let invocation = crate::tools::context::ToolInvocation {
+        session: session.into(),
+        turn: turn.into(),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+        call_id: "call-1".to_string(),
+        tool_name: codex_tools::ToolName::plain("apply_patch"),
+        payload: crate::tools::context::ToolPayload::Custom {
+            input: patch.to_string(),
+        },
+    };
+
+    let payload = ApplyPatchHandler
+        .post_tool_use_payload(
+            &invocation,
+            &ApplyPatchToolOutput::from_text("patched".to_string()),
+        )
+        .expect("post-tool payload");
+
+    assert_eq!(payload.tool_name, "Write");
+    assert_eq!(payload.command, patch);
+    assert_eq!(payload.tool_response, serde_json::json!("patched"));
 }
