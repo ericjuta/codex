@@ -32,6 +32,7 @@ Retrieval-quality and context-injection optimization beyond the current
 runtime-surface expansion is tracked separately in:
 
 - [`agentmemory_context_optimization_proposal.md`](./agentmemory_context_optimization_proposal.md)
+- [`agentmemory_mission_handoff_followup_spec.md`](./agentmemory_mission_handoff_followup_spec.md)
 
 Current branch implementation now includes:
 
