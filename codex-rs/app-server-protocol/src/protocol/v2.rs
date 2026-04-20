@@ -28,6 +28,9 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
+use codex_protocol::items::MemoryOperationKind as CoreMemoryOperationKind;
+use codex_protocol::items::MemoryOperationScope as CoreMemoryOperationScope;
+use codex_protocol::items::MemoryOperationStatus as CoreMemoryOperationStatus;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::CallToolResult as CoreMcpCallToolResult;
 use codex_protocol::mcp::Resource as McpResource;
@@ -70,6 +73,7 @@ use codex_protocol::protocol::HookRunStatus as CoreHookRunStatus;
 use codex_protocol::protocol::HookRunSummary as CoreHookRunSummary;
 use codex_protocol::protocol::HookScope as CoreHookScope;
 use codex_protocol::protocol::HookSource as CoreHookSource;
+use codex_protocol::protocol::MemoryOperationSource as CoreMemoryOperationSource;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::protocol::NonSteerableTurnKind as CoreNonSteerableTurnKind;
@@ -386,7 +390,7 @@ v2_enum_from_core!(
 
 v2_enum_from_core!(
     pub enum HookEventName from CoreHookEventName {
-        PreToolUse, PermissionRequest, PostToolUse, SessionStart, UserPromptSubmit, Stop
+        PreToolUse, PermissionRequest, PostToolUse, PostToolUseFailure, PreCompact, SessionStart, SubagentStart, SubagentStop, Notification, TaskCompleted, UserPromptSubmit, Stop, SessionEnd
     }
 );
 
@@ -3338,6 +3342,127 @@ pub struct ThreadCompactStartParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadCompactStartResponse {}
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum MemoryOperationKind {
+    Recall,
+    Remember,
+    Update,
+    Drop,
+    Lessons,
+    Crystals,
+    Crystallize,
+    AutoCrystallize,
+    Insights,
+    Reflect,
+    Actions,
+    ActionCreate,
+    ActionUpdate,
+    Missions,
+    Handoffs,
+    HandoffGenerate,
+    BranchOverlays,
+    Guardrails,
+    Decisions,
+    Dossiers,
+    RoutineCandidates,
+    Frontier,
+    Next,
+}
+
+impl From<CoreMemoryOperationKind> for MemoryOperationKind {
+    fn from(value: CoreMemoryOperationKind) -> Self {
+        match value {
+            CoreMemoryOperationKind::Recall => Self::Recall,
+            CoreMemoryOperationKind::Remember => Self::Remember,
+            CoreMemoryOperationKind::Update => Self::Update,
+            CoreMemoryOperationKind::Drop => Self::Drop,
+            CoreMemoryOperationKind::Lessons => Self::Lessons,
+            CoreMemoryOperationKind::Crystals => Self::Crystals,
+            CoreMemoryOperationKind::Crystallize => Self::Crystallize,
+            CoreMemoryOperationKind::AutoCrystallize => Self::AutoCrystallize,
+            CoreMemoryOperationKind::Insights => Self::Insights,
+            CoreMemoryOperationKind::Reflect => Self::Reflect,
+            CoreMemoryOperationKind::Actions => Self::Actions,
+            CoreMemoryOperationKind::ActionCreate => Self::ActionCreate,
+            CoreMemoryOperationKind::ActionUpdate => Self::ActionUpdate,
+            CoreMemoryOperationKind::Missions => Self::Missions,
+            CoreMemoryOperationKind::Handoffs => Self::Handoffs,
+            CoreMemoryOperationKind::HandoffGenerate => Self::HandoffGenerate,
+            CoreMemoryOperationKind::BranchOverlays => Self::BranchOverlays,
+            CoreMemoryOperationKind::Guardrails => Self::Guardrails,
+            CoreMemoryOperationKind::Decisions => Self::Decisions,
+            CoreMemoryOperationKind::Dossiers => Self::Dossiers,
+            CoreMemoryOperationKind::RoutineCandidates => Self::RoutineCandidates,
+            CoreMemoryOperationKind::Frontier => Self::Frontier,
+            CoreMemoryOperationKind::Next => Self::Next,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum MemoryOperationStatus {
+    Pending,
+    Ready,
+    Empty,
+    Skipped,
+    Error,
+}
+
+impl From<CoreMemoryOperationStatus> for MemoryOperationStatus {
+    fn from(value: CoreMemoryOperationStatus) -> Self {
+        match value {
+            CoreMemoryOperationStatus::Pending => Self::Pending,
+            CoreMemoryOperationStatus::Ready => Self::Ready,
+            CoreMemoryOperationStatus::Empty => Self::Empty,
+            CoreMemoryOperationStatus::Skipped => Self::Skipped,
+            CoreMemoryOperationStatus::Error => Self::Error,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum MemoryOperationSource {
+    Human,
+    Assistant,
+    Automatic,
+}
+
+impl From<CoreMemoryOperationSource> for MemoryOperationSource {
+    fn from(value: CoreMemoryOperationSource) -> Self {
+        match value {
+            CoreMemoryOperationSource::Human => Self::Human,
+            CoreMemoryOperationSource::Assistant => Self::Assistant,
+            CoreMemoryOperationSource::Automatic => Self::Automatic,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum MemoryOperationScope {
+    #[default]
+    None,
+    Turn,
+    Thread,
+}
+
+impl From<CoreMemoryOperationScope> for MemoryOperationScope {
+    fn from(value: CoreMemoryOperationScope) -> Self {
+        match value {
+            CoreMemoryOperationScope::None => Self::None,
+            CoreMemoryOperationScope::Turn => Self::Turn,
+            CoreMemoryOperationScope::Thread => Self::Thread,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -4802,6 +4927,20 @@ pub enum ThreadItem {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
+    MemoryOperation {
+        id: String,
+        source: MemoryOperationSource,
+        operation: MemoryOperationKind,
+        status: MemoryOperationStatus,
+        #[serde(default)]
+        scope: MemoryOperationScope,
+        query: Option<String>,
+        summary: String,
+        detail: Option<String>,
+        context_injected: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     AgentMessage {
         id: String,
         text: String,
@@ -4954,6 +5093,7 @@ impl ThreadItem {
         match self {
             ThreadItem::UserMessage { id, .. }
             | ThreadItem::HookPrompt { id, .. }
+            | ThreadItem::MemoryOperation { id, .. }
             | ThreadItem::AgentMessage { id, .. }
             | ThreadItem::Plan { id, .. }
             | ThreadItem::Reasoning { id, .. }
@@ -5814,6 +5954,22 @@ pub struct ItemCompletedNotification {
     pub item: ThreadItem,
     pub thread_id: String,
     pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MemoryOperationNotification {
+    pub thread_id: String,
+    pub source: MemoryOperationSource,
+    pub operation: MemoryOperationKind,
+    pub status: MemoryOperationStatus,
+    #[serde(default)]
+    pub scope: MemoryOperationScope,
+    pub query: Option<String>,
+    pub summary: String,
+    pub detail: Option<String>,
+    pub context_injected: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
