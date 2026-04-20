@@ -1,200 +1,347 @@
-# Upstream Replay Plan
+# Upstream Rebase Plan Spec
 
-Date: 2026-03-31
+Date: 2026-04-20
 
-Current scratch base: `25fbd7e40e` (`openai/codex` `main`)
-
-Fork point from the prior fork branch: `b00a05c785`
+Current fork `main`: `4164ceeaad` (`origin/main`, `main`)
+Target upstream base: `e53e6bc48f` (`openai/codex` `upstream/main`)
+Current fork point: `544b4e39e3`
 
 ## Goal
 
-Rebase the fork-specific work onto current upstream while cleaning up the fork
-history. The replay should preserve the intentional fork lanes:
+Move the fork onto current upstream while preserving the intentional fork value:
 
 - agentmemory as the primary memory backend
-- expanded hook and memory event surface
-- memory UX parity in the TUI
-- fork-intent and public-release documentation
-- private-fork CI posture
-- local perf/build improvements that still make sense on top of upstream
+- expanded runtime memory surfaces
+- mission, handoff, review, and retrieval-trace memory UX
+- fork-specific docs and private-fork operating guidance
+- local-only build and workflow adjustments that still make sense on top of
+  upstream
 
-## Replay Strategy
+## Strategy Decision
 
-Do not run a blind linear rebase of all fork commits.
+Do not run a blind `git rebase upstream/main` on the current fork `main`.
 
-Instead:
+Use a scratch rebase plus semantic replay:
 
-1. Start from current upstream `main` on this scratch branch.
-2. Replay the fork work by lane.
-3. Squash the fork stack down to a smaller set of meaningful commits.
-4. Drop tracked patch/orig artifacts and formatting-only noise.
-5. Re-author the private-fork workflow trim on top of the current upstream
-   workflow set instead of cherry-picking the old deletion commit.
+1. Create a scratch branch from `upstream/main`.
+2. Replay fork work by lane instead of by raw commit order.
+3. Use `cherry-pick -x` only for clean self-contained commits.
+4. Use patch transport or semantic backports when file layout or APIs diverged.
+5. Squash fallout and fixup commits into the lane that owns the behavior.
+6. Validate lane-by-lane before merging the scratch result back into the fork.
+
+This is operationally a rebase plan, but the safe implementation mode is
+rebase-plus-replay rather than literal history preservation.
+
+## Current Graph Facts
+
+As of 2026-04-20:
+
+- fork `main` is `62` commits ahead of `upstream/main`
+- fork `main` is `187` commits behind `upstream/main`
+- fork delta since the fork point touches `161` files
+- upstream delta since the fork point touches `825` files
+- the overlapping change surface is `91` files
+
+Highest-overlap areas:
+
+- `codex-rs/app-server-protocol/schema/json`
+- `codex-rs/core/src/tools`
+- `codex-rs/hooks/src/events`
+- `codex-rs/hooks/src/engine`
+- `codex-rs/tui/src/chatwidget*`
+- `codex-rs/tui/src/bottom_pane/*`
+- `codex-rs/core/src/hook_runtime.rs`
+- `codex-rs/core/src/codex.rs`
+
+Implication: the fork is too far from upstream for a low-risk mechanical rebase,
+but still close enough for a structured replay.
+
+## Non-Goals
+
+- preserve every existing fork commit SHA
+- carry forward formatting-only or import-order-only churn
+- replay opaque fixup commits without first mapping them to a concrete lane
+- reintroduce stale replay artifacts or ad hoc patch files
+- force fork-only workflow deletions onto upstream if the current workflow graph
+  has materially changed
+
+## Proposed Execution Model
+
+### 1. Create the scratch branch
+
+Start from current upstream:
+
+`git switch -c scratch/rebase-20260420-upstream-main upstream/main`
+
+### 2. Establish baseline validation
+
+Before replaying fork code:
+
+- confirm the upstream branch builds in the touched crates
+- record any pre-existing upstream failures that are unrelated to the fork
+
+### 3. Replay the fork by lane
+
+Do not replay commit-by-commit in chronological order.
+
+Instead, rebuild the fork in behavior-owned slices:
+
+1. base agentmemory backend and lifecycle lane
+2. config-first hook parity and runtime surface lane
+3. mission, handoff, review, and retrieval-trace lane
+4. TUI and app-server parity lane
+5. docs and fork-operations lane
+6. optional perf/build lane
+
+### 4. Validate after each lane
+
+After each lane:
+
+- run the smallest relevant crate tests
+- inspect generated schema changes
+- review the TUI/app-server diffs before proceeding
+
+### 5. Merge the scratch branch back into the fork
+
+Once the scratch branch is stable:
+
+- open a PR from the scratch branch into the fork `main`
+- keep the old branch history for archaeology, not for further replay
 
 ## Lane Order
 
-### 1. Core agentmemory and hook contract lane
+### Lane 1. Base agentmemory backend and lifecycle
 
 Replay first:
 
-- `1a8eebeef2` feat: introduce memory backend selector and agentmemory adapter seam
-- `620fe2a782` feat: replace startup memory prompt generation with agentmemory-backed retrieval
-- `00b2411de3` feat: expand Codex public hooks to support the full agentmemory event model
-- `3eab67919e` feat: emit tool usage events from high-signal tools for agentmemory
-- `556c08d35d` feat: capture and store lifecycle events in agentmemory
-- `0e0a5545b7` feat: bypass native memory generation when agentmemory is enabled
-- `4fe579325c` feat: ensure memory commands pass through to agentmemory natively without bridging
-- `6eb14dc021` feat: integrate agentmemory into CLI components and workflows
-- `78281454bd` test: add agentmemory adapter unit tests
-- `43bb23a7a4` fix: rename memory slash commands and make them visible builtins
-- `0d47d05e56` fix: correctly show memory slash commands when agentmemory is enabled
-- `ee99969de6` Improve Agentmemory session payloads
-- `01e9eefbc8` Implement agentmemory payload quality spec
-- `0c220fb634` feat: add mid-session memory recall and streaming assistant capture
-- `c5ef3dae76` Fix agentmemory session lifecycle
+- `792bc7d7ba` `feat: replay agentmemory backend surface`
+- `0e18270cd9` `feat: replay structured memory operation events`
+- `e5350aa8b0` `fix: wire agentmemory session lifecycle`
+- `c911e321a1` `fix(agentmemory): persist memory replay and capture lifecycle hooks`
+- `badb1e5b7e` `fix(agentmemory): summarize sessions and report empty updates`
 
-Expected shape after cleanup: 3 to 5 commits instead of the original stack.
+Expected result:
 
-### 2. Runtime memory surface lane
+- agentmemory is the active backend end-to-end
+- session lifecycle and replay semantics are coherent
+- structured memory operation events exist at protocol/runtime boundaries
 
-Replay after the backend contract is stable:
+Target cleanup shape: `2` to `4` commits.
 
-- `063e8ea819` Add agentmemory runtime recall surface
-- `09311f040f` Refine proactive agentmemory recall guidance
-- `713dbb3804` Add structured memory operation events
+### Lane 2. Config-first hook parity and runtime surface
 
-Target shape after replay:
+Replay after the backend is stable:
 
-- explicit human/assistant recall
-- explicit remember surface
-- read-oriented lessons/crystals/insights surface
-- action list/frontier/next surface, with mutation support if the lane carries it
+- `730e7294c9` `feat: implement config-first agentmemory hook parity`
+- `f57840085b` `feat(agentmemory): expand runtime memory surfaces`
+- `6fa2a25cd2` `feat(agentmemory): tighten native observe payload contract`
+- `306f14fcab` `Optimize agentmemory context planning`
+- `4ccdb49880` `fix(codex-rs/core/src/hook_runtime.rs): timing`
 
-Expected shape after cleanup: 1 to 2 commits.
+Expected result:
 
-### 3. TUI and app-server parity lane
+- hook behavior is config-driven rather than stitched in ad hoc
+- runtime memory surfaces are explicit and internally consistent
+- observe payload capture and context planning match the intended contract
 
-Port onto the upstream layout rather than trusting raw cherry-picks:
+Target cleanup shape: `2` to `4` commits.
 
-- `dc8a2a82a6` tui app server parity
-- `953d2b70c4` Clean app-server memory parity follow-up
-- `41ab03969b` Surface app-server TUI thread op failures
-- `7a9e3b1a23` Add visual memory history cells
-- `c23f19e387` Use structured memory events in the TUIs
-- `f0c1b3ccec` Finish memory UI follow-up lane
+### Lane 3. Mission, handoff, review, and retrieval trace
 
-Expected shape after cleanup: 2 to 4 commits.
+Replay next:
 
-### 4. Lint/build cleanup lane
+- `6fdfedb6cf` `feat: emit assistant_result agentmemory events`
+- `7ea442afd0` `feat: preserve agentmemory retrieval trace summaries`
+- `89589583bb` `feat: add agentmemory mission and handoff surfaces`
+- `ee5d223b40` `test: cover agentmemory mission and handoff adapter calls`
+- `1a831a30b7` `feat: expose expanded agentmemory review surfaces`
+- `09b8584612` `feat: tighten handoff resume and memory rendering`
+- `0045a57417` `core: auto-review resume handoff packets`
+- `f97a2cd05a` `Add TUI coverage for automatic handoff replay`
 
-Replay only if still needed after the code lands:
+Expected result:
 
-- `412c559144` Fix argument comment lint in codex core
-- `b93aba4fab` Fix argument-comment-lint invocation from codex-rs
+- handoff packets survive resume paths
+- mission/review surfaces are queryable and renderable
+- retrieval traces and assistant-result events survive replay
 
-The current upstream already changed lint tooling and CI substantially, so
-these may become obsolete during replay.
+Target cleanup shape: `2` to `4` commits.
 
-### 5. Fork-intent and private-fork operations lane
+### Lane 4. TUI and app-server parity
 
-Keep the policy/docs lane, but re-author the workflow trim:
+Port onto current upstream layout instead of trusting raw replay fixes:
 
-- `3952eb4e77` Add private fork GitHub Actions spec
-- re-author the intent of `4b42fc0216` on top of current upstream workflows
-- `7637de88e9` docs: clarify public source licensing and fork intent
-- `8573eaea33` docs: split fork intent from release notes
+- `5312255dac` `feat: replay source-aware memory ui`
+- `57fa4281c6` `Restore TUI memory slash commands`
+- `f872688482` `Fix TUI memory footer wiring`
+- `9ec683dc46` `fix: resolve post-rebase tool and slash dispatch fallout`
+- `fd2f43a943` `chore: refresh app-server schema fixtures after rebase`
 
-Expected shape after cleanup: 2 to 3 commits.
+Expected result:
 
-### 6. Fork-local perf/build lane
+- TUI slash commands, footer, history, and replay views work on the current
+  upstream TUI layout
+- app-server and protocol shapes stay aligned with rendered UI behavior
 
-Replay last:
+Target cleanup shape: `2` to `3` commits.
 
-- `9a6bcdaf00` perf(cli): add optional mimalloc allocator
-- `90ee68291f` build(just): add perf-build-local recipe
+### Lane 5. Docs and fork operations
 
-## Commits To Squash Or Drop
+Replay after code shape is stable:
 
-### Squash into docs or omit until the end
+- `dc2ee2b1d6` `docs: propose agentmemory context optimization`
+- `dd0b51d211` `docs: align agentmemory proposal with backend retrieval`
+- `f4ea95093f` `docs: make agentmemory proposal aggressively opt-in`
+- `a47235d20e` `docs: tighten agentmemory proposal to match intent`
+- `03ed54d885` `docs: clarify aggressive context injection semantics`
+- `6f023a242c` `docs: add agentmemory payload follow-up spec`
+- `099d8b0e91` `docs: add mission and handoff follow-up spec`
+- `2ae086845f` `docs: add slash command usage spec`
+- `cb42e63c4a` `docs: add remaining agentmemory hardening spec`
+- `5e51e376b0` `docs: replay fork policy and public source guidance`
+- `4c795fe0d7` `docs: record replay tail assessment`
+- `c49859241a` `docs: add replay workflow note`
+- `517b893059` `docs: record narrow replay leftover check`
 
-These are useful for provenance but too granular for the replayed branch:
+Special rule:
 
-- `988b868cfe`
-- `3539af3930`
-- `40774ed67d`
-- `6c5094f86e`
-- `fb371104a0`
-- `0d6d705340`
-- `3792d2fb8b`
-- `2cc63f9130`
-- `5b5af2bb60`
-- `2cf9895352`
-- `fbad88c53f`
+- `a984c97ce7` `Remove GitHub Actions workflows` is not a direct replay target
+  and must be re-authored only if still justified after inspecting the current
+  upstream workflow set
+
+Target cleanup shape: `2` to `5` commits.
+
+### Lane 6. Optional perf/build follow-up
+
+Replay only if still useful after upstream sync:
+
+- `d9392c3395` `build(just): prune perf build targets`
+- `400634b13c` `build(just): add local perf build recipes`
+- `677176431c` `fix(just): avoid empty array expansion in perf recipes`
+- `c0f1b1b45b` `Fix perf PGO llvm-profdata lookup`
+
+This lane is optional and should not block the core upstream sync.
+
+## Upstream Behavior That Must Be Preserved
+
+Starting from `upstream/main` already includes these changes, but the replay
+must not accidentally regress them:
+
+- `2c59806fe0` memory-usage metrics
+- `e5b52a3caa` persisted and prewarmed agent tasks per thread
+- `370bed4bf4` trust-gated project hooks and exec policies
+- `fc758af9eb` sub-agent exec policy loading fix
+- `be4fe9f9b2` `--ignore-user-config` and `--ignore-rules`
+- `7995c66032` streamed `apply_patch` changes
+- `8494e5bd7b` permission-request hooks support
+- `d9c71d41a9` OTEL hook-run metrics
+- `917a85b0d6` queued slash and shell prompts in the TUI
+- `241136b0e9` plan prompt context usage in the TUI
+- `ce0e28ea6f` reduced redundant memory notice behavior
+
+## Keep, Squash, Or Drop Guidance
+
+### Keep as replay sources
+
+Use these as primary sources of behavior:
+
+- the lane commits listed above with descriptive messages
+- docs commits that encode actual product intent, not just narration
+
+### Squash into owning lanes
+
+These look like fallout from prior replay attempts and should not survive as
+standalone commits on the new branch:
+
+- `69fd31b72e` compile regression repair
+- `4ccdb49880` hook runtime timing fix
+- `9ec683dc46` post-rebase slash/tool fallout
+- `fd2f43a943` schema fixture refresh
+- `c14d6d462e` config import fix
+
+### Review manually before carrying forward
+
+These are too opaque to replay blindly:
+
+- `f7bba8d79d` `fix`
+- `527e956008` `fix buidl`
+- `6c1e72d853` `fix: unblock codex-cli release build`
+- `98e723f6f1` `127.0.0.1 rather than localhost due to ipv4/v6`
+
+Each one needs a concrete behavioral reason before it is reapplied.
 
 ### Drop
 
-- `cecb9ae79c` style: apply rustfmt formatting
+Do not replay these as standalone work:
 
-Also drop the tracked patch/orig artifacts instead of carrying them forward:
+- `2da8ade8c8` formatting cleanup
+- `3fdcecdd36` import normalization
 
-- `patch3.diff`
-- `patch_tests.diff`
-- `patch_agentmemory.diff`
-- `codex-rs/core/src/agentmemory/mod.rs.orig`
-- `codex-rs/core/src/agentmemory/mod.rs.patch`
-- `codex-rs/core/src/hook_runtime.rs.patch`
+## Top Manual Conflict Magnets
 
-## Upstream Conflict Magnets
+Expect hand merges here:
 
-The highest-risk upstream changes to absorb during replay are:
+1. `codex-rs/core/src/hook_runtime.rs`
+2. `codex-rs/core/src/codex.rs`
+3. `codex-rs/core/src/tools/handlers/memory_runtime.rs`
+4. `codex-rs/core/src/agentmemory/mod.rs`
+5. `codex-rs/core/src/tools/spec.rs`
+6. `codex-rs/core/src/tools/registry.rs`
+7. `codex-rs/app-server-protocol/src/protocol/v2.rs`
+8. `codex-rs/tui/src/app.rs`
+9. `codex-rs/tui/src/chatwidget.rs`
+10. `codex-rs/tui/src/history_cell.rs`
+11. `codex-rs/tui/src/chatwidget/slash_dispatch.rs`
+12. `codex-rs/tui/src/slash_command.rs`
+13. `codex-rs/tui/src/bottom_pane/chat_composer.rs`
+14. `codex-rs/tui/src/bottom_pane/command_popup.rs`
 
-- `d65deec617` Remove the legacy TUI split
-- `61429a6c10` Rename `tui_app_server` to `tui`
-- the `codex-tools` extraction series
-- `21a03f1671` app-server-protocol introduce generic ClientResponse
-- `213756c9ab` feat: add mailbox concept for wait
-- the argument-comment-lint and workflow changes around `fce0f76d57`,
-  `5037a2d199`, `19f0d196d1`, `9313c49e4c`, `b94366441e`, and `f4f6eca871`
+## Replay Mechanics
 
-## TUI Port Map
+Preferred transport by situation:
 
-The old fork branch changed both `codex-rs/tui` and
-`codex-rs/tui_app_server`. Current upstream no longer has
-`codex-rs/tui_app_server`; its files were moved into `codex-rs/tui`.
+- clean self-contained change: `git cherry-pick -x <sha>`
+- similar file shape but patch drift: `git format-patch -1 <sha> --stdout | git apply -3`
+- same intent, different architecture: semantic backport with a new commit
 
-Likely direct mappings:
+Rule: do not treat successful patch application as proof that the replay is
+correct. Always validate behavior against the owning lane.
 
-- `codex-rs/tui_app_server/src/app.rs` -> `codex-rs/tui/src/app.rs`
-- `codex-rs/tui_app_server/src/app_command.rs` -> `codex-rs/tui/src/app_command.rs`
-- `codex-rs/tui_app_server/src/app_server_session.rs` -> `codex-rs/tui/src/app_server_session.rs`
-- `codex-rs/tui_app_server/src/app/app_server_adapter.rs` -> `codex-rs/tui/src/app/app_server_adapter.rs`
-- `codex-rs/tui_app_server/src/chatwidget.rs` -> `codex-rs/tui/src/chatwidget.rs`
-- `codex-rs/tui_app_server/src/history_cell.rs` -> `codex-rs/tui/src/history_cell.rs`
-- `codex-rs/tui_app_server/src/slash_command.rs` -> `codex-rs/tui/src/slash_command.rs`
-- `codex-rs/tui_app_server/src/bottom_pane/chat_composer.rs` -> `codex-rs/tui/src/bottom_pane/chat_composer.rs`
-- `codex-rs/tui_app_server/src/bottom_pane/command_popup.rs` -> `codex-rs/tui/src/bottom_pane/command_popup.rs`
-- `codex-rs/tui_app_server/src/bottom_pane/mod.rs` -> `codex-rs/tui/src/bottom_pane/mod.rs`
-- `codex-rs/tui_app_server/src/bottom_pane/slash_commands.rs` -> `codex-rs/tui/src/bottom_pane/slash_commands.rs`
+## Validation Plan
 
-## Top Manual Conflict Spots
+Minimum validation per lane:
 
-1. `codex-rs/tui/src/app.rs`
-2. `codex-rs/tui/src/chatwidget.rs`
-3. `codex-rs/tui/src/history_cell.rs`
-4. `codex-rs/tui/src/slash_command.rs`
-5. `codex-rs/tui/src/bottom_pane/chat_composer.rs`
-6. `codex-rs/tui/src/bottom_pane/command_popup.rs`
-7. `codex-rs/tui/src/bottom_pane/mod.rs`
-8. `codex-rs/tui/src/bottom_pane/slash_commands.rs`
-9. `codex-rs/app-server-protocol/src/protocol/v2.rs`
-10. `codex-rs/core/src/codex.rs`
+- run the smallest relevant Rust crate tests for touched code
+- refresh and inspect generated schema outputs when protocol shapes move
+- run TUI snapshot tests when rendered output changes
+- verify slash-command and history/replay behavior when memory UI changes
 
-## Validation Goal
+Suggested checkpoints:
 
-Definition of done for the scratch replay branch:
+1. after Lane 1: `cargo test -p codex-core`
+2. after Lane 2: `cargo test -p codex-core`
+3. after Lane 3: `cargo test -p codex-core`
+4. after Lane 4: `cargo test -p codex-tui`
+5. after protocol/app-server changes:
+   `cargo test -p codex-app-server-protocol`
 
-- the intended fork lanes are replayed on top of current upstream
-- the branch history is materially cleaner than the old 44-commit fork stack
-- tracked patch/orig artifacts are gone
-- targeted validation passes for the touched Rust crates
-- remaining conflict debt, if any, is documented explicitly
+If common, core, or protocol change broadly enough to justify a full-suite run,
+ask before running workspace-wide tests.
+
+## Definition Of Done
+
+The rebase effort is complete when:
+
+- the fork behavior is replayed on top of `upstream/main`
+- the new branch history is materially cleaner than the current `62`-commit
+  fork stack
+- the core agentmemory, hook, protocol, and TUI behaviors are preserved
+- the critical upstream improvements listed above are still present
+- any remaining drift is documented explicitly rather than hidden in fixup
+  commits
+
+## Recommended Next Step
+
+Create a throwaway execution branch from `upstream/main` and replay Lane 1
+first. Do not start with the full fork stack.
