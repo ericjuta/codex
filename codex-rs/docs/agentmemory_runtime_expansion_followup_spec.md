@@ -8,6 +8,10 @@ This document exists so the branch has one focused place to track what is
 still missing or recently completed in the expanded runtime-surface plan
 without mixing already-implemented parity work with older baseline notes.
 
+Human operator guidance for the current slash-command surface lives in:
+
+- [`agentmemory_slash_command_usage_spec.md`](./agentmemory_slash_command_usage_spec.md)
+
 ## Baseline
 
 The branch already implements the following baseline:
