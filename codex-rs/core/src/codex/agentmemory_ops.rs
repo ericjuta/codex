@@ -104,9 +104,16 @@ fn operation_label(operation: MemoryOperationKind) -> &'static str {
         MemoryOperationKind::Actions => "Memory actions review",
         MemoryOperationKind::ActionCreate => "Memory action creation",
         MemoryOperationKind::ActionUpdate => "Memory action update",
+        MemoryOperationKind::Missions => "Memory missions review",
+        MemoryOperationKind::Handoffs => "Memory handoffs review",
+        MemoryOperationKind::HandoffGenerate => "Memory handoff generation",
         MemoryOperationKind::Frontier => "Memory frontier review",
         MemoryOperationKind::Next => "Memory next review",
     }
+}
+
+fn is_valid_handoff_scope_type(scope_type: &str) -> bool {
+    matches!(scope_type, "action" | "mission" | "session")
 }
 
 fn response_success(response: &JsonValue) -> bool {
@@ -1003,7 +1010,13 @@ pub(crate) async fn list_actions(
     let adapter = AgentmemoryAdapter::new();
     let project = project_path(config);
     match adapter
-        .list_actions(project.as_path(), status.as_deref(), &config.memories)
+        .list_actions(
+            project.as_path(),
+            status.as_deref(),
+            None,
+            None,
+            &config.memories,
+        )
         .await
     {
         Ok(response) => {
@@ -1040,6 +1053,109 @@ pub(crate) async fn list_actions(
                     status: MemoryOperationStatus::Error,
                     query: status,
                     summary: "Action review failed.".to_string(),
+                    detail: Some(err),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+    }
+}
+
+pub(crate) async fn review_missions(
+    sess: &Arc<Session>,
+    config: &Arc<Config>,
+    sub_id: String,
+    mission_id: Option<String>,
+    status_filter: Option<String>,
+) {
+    if config.memories.backend != crate::config::types::MemoryBackend::Agentmemory {
+        send_requires_agentmemory_backend(
+            sess,
+            &sub_id,
+            MemoryOperationKind::Missions,
+            mission_id.clone().or(status_filter.clone()),
+        )
+        .await;
+        return;
+    }
+
+    let adapter = AgentmemoryAdapter::new();
+    let project = project_path(config);
+    let query = mission_id.clone().or(status_filter.clone());
+    let response = match mission_id.as_deref() {
+        Some(mission_id) => adapter.get_mission(mission_id, &config.memories).await,
+        None => {
+            adapter
+                .list_missions(
+                    project.as_path(),
+                    status_filter.as_deref(),
+                    None,
+                    None,
+                    &config.memories,
+                )
+                .await
+        }
+    };
+
+    match response {
+        Ok(response) if response_success(&response) => {
+            let count = response_count(&response, "missions");
+            let status = if mission_id.is_some() || count > 0 {
+                MemoryOperationStatus::Ready
+            } else {
+                MemoryOperationStatus::Empty
+            };
+            let summary = if let Some(mission_id) = mission_id.as_deref() {
+                format!("Reviewed mission `{mission_id}`.")
+            } else if count > 0 {
+                format!("Reviewed {count} missions.")
+            } else if let Some(status_filter) = status_filter.as_deref() {
+                format!("No `{status_filter}` missions were found.")
+            } else {
+                "No missions are available yet.".to_string()
+            };
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Missions,
+                    status,
+                    query,
+                    summary,
+                    detail: response_pretty_json(&response),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+        Ok(response) => {
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Missions,
+                    status: MemoryOperationStatus::Error,
+                    query,
+                    summary: "Mission review failed.".to_string(),
+                    detail: response_detail(&response),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+        Err(err) => {
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Missions,
+                    status: MemoryOperationStatus::Error,
+                    query,
+                    summary: "Mission review failed.".to_string(),
                     detail: Some(err),
                     context_injected: false,
                 },
@@ -1182,6 +1298,231 @@ pub(crate) async fn update_action(
                     status: MemoryOperationStatus::Error,
                     query: None,
                     summary: "Action update failed.".to_string(),
+                    detail: Some(err),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+    }
+}
+
+pub(crate) async fn review_handoffs(
+    sess: &Arc<Session>,
+    config: &Arc<Config>,
+    sub_id: String,
+    handoff_packet_id: Option<String>,
+) {
+    if config.memories.backend != crate::config::types::MemoryBackend::Agentmemory {
+        send_requires_agentmemory_backend(
+            sess,
+            &sub_id,
+            MemoryOperationKind::Handoffs,
+            handoff_packet_id.clone(),
+        )
+        .await;
+        return;
+    }
+
+    let adapter = AgentmemoryAdapter::new();
+    let project = project_path(config);
+    let response = match handoff_packet_id.as_deref() {
+        Some(handoff_packet_id) => {
+            adapter
+                .get_handoff(handoff_packet_id, &config.memories)
+                .await
+        }
+        None => {
+            adapter
+                .list_handoffs(project.as_path(), None, None, None, &config.memories)
+                .await
+        }
+    };
+
+    match response {
+        Ok(response) if response_success(&response) => {
+            let count = response_count(&response, "handoffPackets");
+            let status = if handoff_packet_id.is_some() || count > 0 {
+                MemoryOperationStatus::Ready
+            } else {
+                MemoryOperationStatus::Empty
+            };
+            let summary = if let Some(handoff_packet_id) = handoff_packet_id.as_deref() {
+                format!("Reviewed handoff packet `{handoff_packet_id}`.")
+            } else if count > 0 {
+                format!("Reviewed {count} handoff packets.")
+            } else {
+                "No handoff packets are available yet.".to_string()
+            };
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Handoffs,
+                    status,
+                    query: handoff_packet_id,
+                    summary,
+                    detail: response_pretty_json(&response),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+        Ok(response) => {
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Handoffs,
+                    status: MemoryOperationStatus::Error,
+                    query: handoff_packet_id,
+                    summary: "Handoff review failed.".to_string(),
+                    detail: response_detail(&response),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+        Err(err) => {
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::Handoffs,
+                    status: MemoryOperationStatus::Error,
+                    query: handoff_packet_id,
+                    summary: "Handoff review failed.".to_string(),
+                    detail: Some(err),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+    }
+}
+
+pub(crate) async fn generate_handoff(
+    sess: &Arc<Session>,
+    config: &Arc<Config>,
+    sub_id: String,
+    scope_type: Option<String>,
+    scope_id: Option<String>,
+) {
+    if config.memories.backend != crate::config::types::MemoryBackend::Agentmemory {
+        send_requires_agentmemory_backend(
+            sess,
+            &sub_id,
+            MemoryOperationKind::HandoffGenerate,
+            scope_type.clone().or(scope_id.clone()),
+        )
+        .await;
+        return;
+    }
+
+    let resolved_scope_type = scope_type.unwrap_or_else(|| "session".to_string());
+    if !is_valid_handoff_scope_type(resolved_scope_type.as_str()) {
+        send_memory_operation_event(
+            sess,
+            &sub_id,
+            MemoryOperationEventArgs {
+                source: MemoryOperationSource::Human,
+                operation: MemoryOperationKind::HandoffGenerate,
+                status: MemoryOperationStatus::Error,
+                query: Some(resolved_scope_type.clone()),
+                summary: "Handoff generation failed.".to_string(),
+                detail: Some("scope type must be one of: action, mission, session".to_string()),
+                context_injected: false,
+            },
+        )
+        .await;
+        return;
+    }
+
+    let resolved_scope_id = match (resolved_scope_type.as_str(), scope_id) {
+        ("session", Some(scope_id)) => scope_id,
+        ("session", None) => sess.conversation_id.to_string(),
+        ("mission" | "action", Some(scope_id)) => scope_id,
+        ("mission" | "action", None) => {
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::HandoffGenerate,
+                    status: MemoryOperationStatus::Error,
+                    query: Some(resolved_scope_type.clone()),
+                    summary: "Handoff generation failed.".to_string(),
+                    detail: Some(
+                        "mission and action handoffs require an explicit scope id".to_string(),
+                    ),
+                    context_injected: false,
+                },
+            )
+            .await;
+            return;
+        }
+        _ => unreachable!(),
+    };
+
+    let adapter = AgentmemoryAdapter::new();
+    let project = project_path(config);
+    match adapter
+        .generate_handoff(
+            resolved_scope_type.as_str(),
+            resolved_scope_id.as_str(),
+            project.as_path(),
+            &config.memories,
+        )
+        .await
+    {
+        Ok(response) if response_success(&response) => {
+            let handoff_id = response_string(&response, "/handoffPacket/id")
+                .map(|handoff_id| format!("Generated handoff packet `{handoff_id}`."))
+                .unwrap_or_else(|| "Generated handoff packet.".to_string());
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::HandoffGenerate,
+                    status: MemoryOperationStatus::Ready,
+                    query: Some(format!("{resolved_scope_type}:{resolved_scope_id}")),
+                    summary: handoff_id,
+                    detail: response_pretty_json(&response),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+        Ok(response) => {
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::HandoffGenerate,
+                    status: MemoryOperationStatus::Error,
+                    query: Some(format!("{resolved_scope_type}:{resolved_scope_id}")),
+                    summary: "Handoff generation failed.".to_string(),
+                    detail: response_detail(&response),
+                    context_injected: false,
+                },
+            )
+            .await;
+        }
+        Err(err) => {
+            send_memory_operation_event(
+                sess,
+                &sub_id,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Human,
+                    operation: MemoryOperationKind::HandoffGenerate,
+                    status: MemoryOperationStatus::Error,
+                    query: Some(format!("{resolved_scope_type}:{resolved_scope_id}")),
+                    summary: "Handoff generation failed.".to_string(),
                     detail: Some(err),
                     context_injected: false,
                 },

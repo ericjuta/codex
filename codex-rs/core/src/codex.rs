@@ -5009,6 +5009,11 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::list_actions(&sess, &config, sub.id.clone(), status).await;
                     false
                 }
+                Op::ReviewMissions { mission_id, status } => {
+                    handlers::review_missions(&sess, &config, sub.id.clone(), mission_id, status)
+                        .await;
+                    false
+                }
                 Op::CreateAction { title } => {
                     handlers::create_action(&sess, &config, sub.id.clone(), title).await;
                     false
@@ -5016,6 +5021,25 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 Op::UpdateAction { action_id, status } => {
                     handlers::update_action(&sess, &config, sub.id.clone(), action_id, status)
                         .await;
+                    false
+                }
+                Op::ReviewHandoffs { handoff_packet_id } => {
+                    handlers::review_handoffs(&sess, &config, sub.id.clone(), handoff_packet_id)
+                        .await;
+                    false
+                }
+                Op::GenerateHandoff {
+                    scope_type,
+                    scope_id,
+                } => {
+                    handlers::generate_handoff(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        scope_type,
+                        scope_id,
+                    )
+                    .await;
                     false
                 }
                 Op::ReviewFrontier { limit } => {
@@ -5901,6 +5925,16 @@ mod handlers {
         super::agentmemory_ops::list_actions(sess, config, sub_id, status).await;
     }
 
+    pub async fn review_missions(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        mission_id: Option<String>,
+        status: Option<String>,
+    ) {
+        super::agentmemory_ops::review_missions(sess, config, sub_id, mission_id, status).await;
+    }
+
     pub async fn create_action(
         sess: &Arc<Session>,
         config: &Arc<Config>,
@@ -5918,6 +5952,25 @@ mod handlers {
         status: String,
     ) {
         super::agentmemory_ops::update_action(sess, config, sub_id, action_id, status).await;
+    }
+
+    pub async fn review_handoffs(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        handoff_packet_id: Option<String>,
+    ) {
+        super::agentmemory_ops::review_handoffs(sess, config, sub_id, handoff_packet_id).await;
+    }
+
+    pub async fn generate_handoff(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        scope_type: Option<String>,
+        scope_id: Option<String>,
+    ) {
+        super::agentmemory_ops::generate_handoff(sess, config, sub_id, scope_type, scope_id).await;
     }
 
     pub async fn review_frontier(

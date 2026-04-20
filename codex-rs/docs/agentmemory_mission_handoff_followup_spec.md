@@ -2,8 +2,7 @@
 
 ## Status
 
-Planning and execution follow-up after backend support landed in the
-`agentmemory` repository on April 20, 2026.
+Implemented on April 20, 2026.
 
 The backend now exposes durable:
 
@@ -11,7 +10,18 @@ The backend now exposes durable:
 - mission runs
 - handoff packets
 
-Codex does not yet consume those surfaces directly.
+Codex now consumes the read/generate slice directly through:
+
+- assistant tools:
+  - `memory_missions`
+  - `memory_handoffs`
+  - `memory_handoff_generate`
+- human slash commands:
+  - `/memory-missions`
+  - `/memory-handoffs`
+  - `/memory-handoff-generate`
+- structured runtime history via memory operation events
+- packet-backed resume retrieval through the backend `mem::context` path
 
 ## Goal
 
@@ -41,23 +51,21 @@ The live `agentmemory` backend now provides:
 It also now upgrades the existing MCP `session_handoff` prompt to packet-backed
 output instead of the older thin session/summary dump.
 
-## Current Codex Gap
+## Implemented Slice
 
-Codex already knows how to:
+Codex already knew how to:
 
 - call `agentmemory` for session lifecycle
 - auto-inject retrieval context
 - expose runtime memory tools for recall/remember/lessons/crystals/insights
 - expose action/frontier/next read surfaces
 
-But Codex still lacks first-class runtime handling for:
+This follow-up added the missing direct consumption of:
 
 - mission containers as durable objectives
 - handoff packets as resume artifacts
-- packet-aware resume UI or tool output
-
-That means the fork can store the state in backend memory today, but Codex does
-not yet surface it in a way that changes day-to-day execution.
+- explicit packet generation for fresh handoffs
+- structured runtime history for those interactions
 
 ## Decision
 
@@ -141,7 +149,7 @@ Expected primary files:
 
 ## Acceptance Criteria
 
-This follow-up is complete only when:
+This follow-up is complete when:
 
 - Codex can read backend mission state for the active project
 - Codex can read and generate backend handoff packets
@@ -149,3 +157,7 @@ This follow-up is complete only when:
 - the assistant can inspect the same state through first-class tools
 - replay and resume keep those interactions visible as structured runtime
   history
+
+Status:
+
+- complete for the narrow read and resume lane above

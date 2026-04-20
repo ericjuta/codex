@@ -3159,6 +3159,9 @@ pub enum MemoryOperationKind {
     Actions,
     ActionCreate,
     ActionUpdate,
+    Missions,
+    Handoffs,
+    HandoffGenerate,
     Frontier,
     Next,
 }
@@ -3179,6 +3182,9 @@ impl From<CoreMemoryOperationKind> for MemoryOperationKind {
             CoreMemoryOperationKind::Actions => Self::Actions,
             CoreMemoryOperationKind::ActionCreate => Self::ActionCreate,
             CoreMemoryOperationKind::ActionUpdate => Self::ActionUpdate,
+            CoreMemoryOperationKind::Missions => Self::Missions,
+            CoreMemoryOperationKind::Handoffs => Self::Handoffs,
+            CoreMemoryOperationKind::HandoffGenerate => Self::HandoffGenerate,
             CoreMemoryOperationKind::Frontier => Self::Frontier,
             CoreMemoryOperationKind::Next => Self::Next,
         }

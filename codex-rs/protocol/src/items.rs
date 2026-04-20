@@ -144,6 +144,9 @@ pub enum MemoryOperationKind {
     Actions,
     ActionCreate,
     ActionUpdate,
+    Missions,
+    Handoffs,
+    HandoffGenerate,
     Frontier,
     Next,
 }

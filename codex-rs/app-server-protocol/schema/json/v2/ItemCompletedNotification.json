@@ -381,6 +381,9 @@
         "actions",
         "action_create",
         "action_update",
+        "missions",
+        "handoffs",
+        "handoff_generate",
         "frontier",
         "next"
       ],

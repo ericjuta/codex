@@ -899,6 +899,15 @@ impl ThreadHistoryBuilder {
                 codex_protocol::items::MemoryOperationKind::ActionUpdate => {
                     MemoryOperationKind::ActionUpdate
                 }
+                codex_protocol::items::MemoryOperationKind::Missions => {
+                    MemoryOperationKind::Missions
+                }
+                codex_protocol::items::MemoryOperationKind::Handoffs => {
+                    MemoryOperationKind::Handoffs
+                }
+                codex_protocol::items::MemoryOperationKind::HandoffGenerate => {
+                    MemoryOperationKind::HandoffGenerate
+                }
                 codex_protocol::items::MemoryOperationKind::Frontier => {
                     MemoryOperationKind::Frontier
                 }

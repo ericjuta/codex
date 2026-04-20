@@ -59,6 +59,38 @@ struct MemoryActionsArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct MemoryMissionsArgs {
+    #[serde(default)]
+    mission_id: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    owner: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryHandoffsArgs {
+    #[serde(default)]
+    handoff_packet_id: Option<String>,
+    #[serde(default)]
+    scope_type: Option<String>,
+    #[serde(default)]
+    scope_id: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryHandoffGenerateArgs {
+    #[serde(default)]
+    scope_type: Option<String>,
+    #[serde(default)]
+    scope_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct MemoryFrontierArgs {
     #[serde(default)]
     limit: Option<u32>,
@@ -70,6 +102,9 @@ pub struct MemoryLessonsHandler;
 pub struct MemoryCrystalsHandler;
 pub struct MemoryInsightsHandler;
 pub struct MemoryActionsHandler;
+pub struct MemoryMissionsHandler;
+pub struct MemoryHandoffsHandler;
+pub struct MemoryHandoffGenerateHandler;
 pub struct MemoryFrontierHandler;
 pub struct MemoryNextHandler;
 
@@ -149,6 +184,10 @@ fn json_count(response: &JsonValue, key: &str) -> usize {
         .get(key)
         .and_then(JsonValue::as_array)
         .map_or(0, Vec::len)
+}
+
+fn is_valid_handoff_scope_type(scope_type: &str) -> bool {
+    matches!(scope_type, "action" | "mission" | "session")
 }
 
 async fn handle_recall(
@@ -516,6 +555,8 @@ async fn handle_actions(
         .list_actions(
             project.as_path(),
             args.status.as_deref(),
+            None,
+            None,
             &turn.config.memories,
         )
         .await;
@@ -530,6 +571,335 @@ async fn handle_actions(
         "actions",
     )
     .await
+}
+
+async fn handle_missions(
+    invocation: ToolInvocation,
+) -> Result<FunctionToolOutput, FunctionCallError> {
+    let ToolInvocation {
+        session,
+        turn,
+        payload,
+        ..
+    } = invocation;
+
+    let arguments = match payload {
+        ToolPayload::Function { arguments } => arguments,
+        _ => {
+            return Err(FunctionCallError::RespondToModel(
+                "memory_missions handler received unsupported payload".to_string(),
+            ));
+        }
+    };
+    require_agentmemory_backend(turn.as_ref(), "memory_missions")?;
+
+    let args: MemoryMissionsArgs = parse_arguments(&arguments)?;
+    let adapter = AgentmemoryAdapter::new();
+    let project = crate::agentmemory::workspace_project(turn.cwd.as_path());
+    let query = args
+        .mission_id
+        .clone()
+        .or(args.status.clone())
+        .or(args.owner.clone());
+    let response = match args
+        .mission_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|mission_id| !mission_id.is_empty())
+    {
+        Some(mission_id) => adapter.get_mission(mission_id, &turn.config.memories).await,
+        None => {
+            adapter
+                .list_missions(
+                    project.as_path(),
+                    args.status.as_deref(),
+                    args.owner.as_deref(),
+                    args.limit,
+                    &turn.config.memories,
+                )
+                .await
+        }
+    };
+
+    match response {
+        Ok(response) if json_success(&response) => {
+            let count = json_count(&response, "missions");
+            let status = if args.mission_id.is_some() || count > 0 {
+                MemoryOperationStatus::Ready
+            } else {
+                MemoryOperationStatus::Empty
+            };
+            let summary = if let Some(mission_id) = args.mission_id.as_deref() {
+                format!("Assistant reviewed mission `{mission_id}`.")
+            } else if count > 0 {
+                format!("Assistant reviewed {count} missions.")
+            } else if let Some(status_filter) = args.status.as_deref() {
+                format!("Assistant found no `{status_filter}` missions.")
+            } else {
+                "Assistant found no missions.".to_string()
+            };
+            emit_event(
+                &session,
+                turn.as_ref(),
+                MemoryOperationKind::Missions,
+                status,
+                query,
+                summary,
+                serde_json::to_string_pretty(&response).ok(),
+            )
+            .await;
+            json_text_output(response)
+        }
+        Ok(response) => {
+            let detail = json_error_detail(&response);
+            emit_event(
+                &session,
+                turn.as_ref(),
+                MemoryOperationKind::Missions,
+                MemoryOperationStatus::Error,
+                query,
+                "Assistant mission review failed.".to_string(),
+                detail.clone(),
+            )
+            .await;
+            Err(FunctionCallError::RespondToModel(
+                detail.unwrap_or_else(|| "memory_missions failed".to_string()),
+            ))
+        }
+        Err(err) => {
+            emit_event(
+                &session,
+                turn.as_ref(),
+                MemoryOperationKind::Missions,
+                MemoryOperationStatus::Error,
+                query,
+                "Assistant mission review failed.".to_string(),
+                Some(err.clone()),
+            )
+            .await;
+            Err(FunctionCallError::RespondToModel(format!(
+                "memory_missions failed: {err}"
+            )))
+        }
+    }
+}
+
+async fn handle_handoffs(
+    invocation: ToolInvocation,
+) -> Result<FunctionToolOutput, FunctionCallError> {
+    let ToolInvocation {
+        session,
+        turn,
+        payload,
+        ..
+    } = invocation;
+
+    let arguments = match payload {
+        ToolPayload::Function { arguments } => arguments,
+        _ => {
+            return Err(FunctionCallError::RespondToModel(
+                "memory_handoffs handler received unsupported payload".to_string(),
+            ));
+        }
+    };
+    require_agentmemory_backend(turn.as_ref(), "memory_handoffs")?;
+
+    let args: MemoryHandoffsArgs = parse_arguments(&arguments)?;
+    let adapter = AgentmemoryAdapter::new();
+    let project = crate::agentmemory::workspace_project(turn.cwd.as_path());
+    let query = args
+        .handoff_packet_id
+        .clone()
+        .or(args.scope_id.clone())
+        .or(args.scope_type.clone());
+    let response = match args
+        .handoff_packet_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|handoff_packet_id| !handoff_packet_id.is_empty())
+    {
+        Some(handoff_packet_id) => {
+            adapter
+                .get_handoff(handoff_packet_id, &turn.config.memories)
+                .await
+        }
+        None => {
+            adapter
+                .list_handoffs(
+                    project.as_path(),
+                    args.scope_type.as_deref(),
+                    args.scope_id.as_deref(),
+                    args.limit,
+                    &turn.config.memories,
+                )
+                .await
+        }
+    };
+
+    match response {
+        Ok(response) if json_success(&response) => {
+            let count = json_count(&response, "handoffPackets");
+            let status = if args.handoff_packet_id.is_some() || count > 0 {
+                MemoryOperationStatus::Ready
+            } else {
+                MemoryOperationStatus::Empty
+            };
+            let summary = if let Some(handoff_packet_id) = args.handoff_packet_id.as_deref() {
+                format!("Assistant reviewed handoff packet `{handoff_packet_id}`.")
+            } else if count > 0 {
+                format!("Assistant reviewed {count} handoff packets.")
+            } else {
+                "Assistant found no handoff packets.".to_string()
+            };
+            emit_event(
+                &session,
+                turn.as_ref(),
+                MemoryOperationKind::Handoffs,
+                status,
+                query,
+                summary,
+                serde_json::to_string_pretty(&response).ok(),
+            )
+            .await;
+            json_text_output(response)
+        }
+        Ok(response) => {
+            let detail = json_error_detail(&response);
+            emit_event(
+                &session,
+                turn.as_ref(),
+                MemoryOperationKind::Handoffs,
+                MemoryOperationStatus::Error,
+                query,
+                "Assistant handoff review failed.".to_string(),
+                detail.clone(),
+            )
+            .await;
+            Err(FunctionCallError::RespondToModel(
+                detail.unwrap_or_else(|| "memory_handoffs failed".to_string()),
+            ))
+        }
+        Err(err) => {
+            emit_event(
+                &session,
+                turn.as_ref(),
+                MemoryOperationKind::Handoffs,
+                MemoryOperationStatus::Error,
+                query,
+                "Assistant handoff review failed.".to_string(),
+                Some(err.clone()),
+            )
+            .await;
+            Err(FunctionCallError::RespondToModel(format!(
+                "memory_handoffs failed: {err}"
+            )))
+        }
+    }
+}
+
+async fn handle_handoff_generate(
+    invocation: ToolInvocation,
+) -> Result<FunctionToolOutput, FunctionCallError> {
+    let ToolInvocation {
+        session,
+        turn,
+        payload,
+        ..
+    } = invocation;
+
+    let arguments = match payload {
+        ToolPayload::Function { arguments } => arguments,
+        _ => {
+            return Err(FunctionCallError::RespondToModel(
+                "memory_handoff_generate handler received unsupported payload".to_string(),
+            ));
+        }
+    };
+    require_agentmemory_backend(turn.as_ref(), "memory_handoff_generate")?;
+
+    let args: MemoryHandoffGenerateArgs = parse_arguments(&arguments)?;
+    let resolved_scope_type = args.scope_type.unwrap_or_else(|| "session".to_string());
+    if !is_valid_handoff_scope_type(resolved_scope_type.as_str()) {
+        return Err(FunctionCallError::RespondToModel(
+            "memory_handoff_generate scope_type must be one of: action, mission, session"
+                .to_string(),
+        ));
+    }
+
+    let resolved_scope_id = match (resolved_scope_type.as_str(), args.scope_id) {
+        ("session", Some(scope_id)) => scope_id,
+        ("session", None) => session.conversation_id.to_string(),
+        ("mission" | "action", Some(scope_id)) => scope_id,
+        ("mission" | "action", None) => {
+            return Err(FunctionCallError::RespondToModel(
+                "memory_handoff_generate requires scope_id for mission and action scopes"
+                    .to_string(),
+            ));
+        }
+        _ => unreachable!(),
+    };
+
+    let adapter = AgentmemoryAdapter::new();
+    let project = crate::agentmemory::workspace_project(turn.cwd.as_path());
+    match adapter
+        .generate_handoff(
+            resolved_scope_type.as_str(),
+            resolved_scope_id.as_str(),
+            project.as_path(),
+            &turn.config.memories,
+        )
+        .await
+    {
+        Ok(response) if json_success(&response) => {
+            let summary = response
+                .pointer("/handoffPacket/id")
+                .and_then(JsonValue::as_str)
+                .map(|handoff_id| format!("Assistant generated handoff packet `{handoff_id}`."))
+                .unwrap_or_else(|| "Assistant generated a handoff packet.".to_string());
+            emit_event(
+                &session,
+                turn.as_ref(),
+                MemoryOperationKind::HandoffGenerate,
+                MemoryOperationStatus::Ready,
+                Some(format!("{resolved_scope_type}:{resolved_scope_id}")),
+                summary,
+                serde_json::to_string_pretty(&response).ok(),
+            )
+            .await;
+            json_text_output(response)
+        }
+        Ok(response) => {
+            let detail = json_error_detail(&response);
+            emit_event(
+                &session,
+                turn.as_ref(),
+                MemoryOperationKind::HandoffGenerate,
+                MemoryOperationStatus::Error,
+                Some(format!("{resolved_scope_type}:{resolved_scope_id}")),
+                "Assistant handoff generation failed.".to_string(),
+                detail.clone(),
+            )
+            .await;
+            Err(FunctionCallError::RespondToModel(detail.unwrap_or_else(
+                || "memory_handoff_generate failed".to_string(),
+            )))
+        }
+        Err(err) => {
+            emit_event(
+                &session,
+                turn.as_ref(),
+                MemoryOperationKind::HandoffGenerate,
+                MemoryOperationStatus::Error,
+                Some(format!("{resolved_scope_type}:{resolved_scope_id}")),
+                "Assistant handoff generation failed.".to_string(),
+                Some(err.clone()),
+            )
+            .await;
+            Err(FunctionCallError::RespondToModel(format!(
+                "memory_handoff_generate failed: {err}"
+            )))
+        }
+    }
 }
 
 async fn handle_frontier(
@@ -862,6 +1232,42 @@ impl ToolHandler for MemoryActionsHandler {
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         handle_actions(invocation).await
+    }
+}
+
+impl ToolHandler for MemoryMissionsHandler {
+    type Output = FunctionToolOutput;
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        handle_missions(invocation).await
+    }
+}
+
+impl ToolHandler for MemoryHandoffsHandler {
+    type Output = FunctionToolOutput;
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        handle_handoffs(invocation).await
+    }
+}
+
+impl ToolHandler for MemoryHandoffGenerateHandler {
+    type Output = FunctionToolOutput;
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        handle_handoff_generate(invocation).await
     }
 }
 

@@ -2886,6 +2886,15 @@ impl ChatWidget {
             codex_app_server_protocol::MemoryOperationKind::ActionUpdate => {
                 codex_protocol::items::MemoryOperationKind::ActionUpdate
             }
+            codex_app_server_protocol::MemoryOperationKind::Missions => {
+                codex_protocol::items::MemoryOperationKind::Missions
+            }
+            codex_app_server_protocol::MemoryOperationKind::Handoffs => {
+                codex_protocol::items::MemoryOperationKind::Handoffs
+            }
+            codex_app_server_protocol::MemoryOperationKind::HandoffGenerate => {
+                codex_protocol::items::MemoryOperationKind::HandoffGenerate
+            }
             codex_app_server_protocol::MemoryOperationKind::Frontier => {
                 codex_protocol::items::MemoryOperationKind::Frontier
             }

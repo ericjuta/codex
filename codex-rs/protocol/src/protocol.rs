@@ -695,11 +695,33 @@ pub enum Op {
         status: Option<String>,
     },
 
+    /// Review mission state for the active project.
+    ReviewMissions {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mission_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+    },
+
     /// Create a new explicit action work item.
     CreateAction { title: String },
 
     /// Update an existing action work item.
     UpdateAction { action_id: String, status: String },
+
+    /// Review durable handoff packets for the active project.
+    ReviewHandoffs {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff_packet_id: Option<String>,
+    },
+
+    /// Generate a fresh durable handoff packet.
+    GenerateHandoff {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_type: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_id: Option<String>,
+    },
 
     /// Review current frontier suggestions.
     ReviewFrontier {
@@ -855,8 +877,11 @@ impl Op {
             Self::ReflectMemories { .. } => "reflect_memories",
             Self::ReviewInsights { .. } => "review_insights",
             Self::ListActions { .. } => "list_actions",
+            Self::ReviewMissions { .. } => "review_missions",
             Self::CreateAction { .. } => "create_action",
             Self::UpdateAction { .. } => "update_action",
+            Self::ReviewHandoffs { .. } => "review_handoffs",
+            Self::GenerateHandoff { .. } => "generate_handoff",
             Self::ReviewFrontier { .. } => "review_frontier",
             Self::ReviewNext => "review_next",
             Self::SetThreadName { .. } => "set_thread_name",

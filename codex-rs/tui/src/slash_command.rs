@@ -70,8 +70,11 @@ pub enum SlashCommand {
     MemoryInsights,
     MemoryReflect,
     MemoryActions,
+    MemoryMissions,
     MemoryActionCreate,
     MemoryActionUpdate,
+    MemoryHandoffs,
+    MemoryHandoffGenerate,
     MemoryFrontier,
     MemoryNext,
     #[strum(to_string = "memory-drop", serialize = "debug-m-drop")]
@@ -115,8 +118,11 @@ impl SlashCommand {
             SlashCommand::MemoryInsights => "review reflected insights",
             SlashCommand::MemoryReflect => "generate reflected insights",
             SlashCommand::MemoryActions => "review tracked action work items",
+            SlashCommand::MemoryMissions => "review tracked mission containers",
             SlashCommand::MemoryActionCreate => "create a tracked action work item",
             SlashCommand::MemoryActionUpdate => "update a tracked action work item",
+            SlashCommand::MemoryHandoffs => "review durable handoff packets",
+            SlashCommand::MemoryHandoffGenerate => "generate a fresh handoff packet",
             SlashCommand::MemoryFrontier => "review unblocked frontier suggestions",
             SlashCommand::MemoryNext => "review the next suggested action",
             SlashCommand::MemoryDrop => "clear stored memories for this workspace",
@@ -169,8 +175,11 @@ impl SlashCommand {
                 | SlashCommand::MemoryInsights
                 | SlashCommand::MemoryReflect
                 | SlashCommand::MemoryActions
+                | SlashCommand::MemoryMissions
                 | SlashCommand::MemoryActionCreate
                 | SlashCommand::MemoryActionUpdate
+                | SlashCommand::MemoryHandoffs
+                | SlashCommand::MemoryHandoffGenerate
                 | SlashCommand::MemoryFrontier
         )
     }
@@ -205,8 +214,11 @@ impl SlashCommand {
             | SlashCommand::MemoryInsights
             | SlashCommand::MemoryReflect
             | SlashCommand::MemoryActions
+            | SlashCommand::MemoryMissions
             | SlashCommand::MemoryActionCreate
             | SlashCommand::MemoryActionUpdate
+            | SlashCommand::MemoryHandoffs
+            | SlashCommand::MemoryHandoffGenerate
             | SlashCommand::MemoryFrontier
             | SlashCommand::MemoryNext
             | SlashCommand::MemoryDrop

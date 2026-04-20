@@ -36,7 +36,7 @@ pub(crate) const DEFAULT_RUNTIME_RECALL_TOKEN_BUDGET: usize =
     context_planner::DEFAULT_CONTEXT_BUDGET_TOKENS;
 const MEMORY_RUNTIME_DEVELOPER_INSTRUCTIONS: &str = "Use `memory_recall` for prior work, earlier decisions, previous failures, resumed threads, or other historical context that is not already present in the current thread.\n\
      Use `memory_remember` only for durable, high-value knowledge that should survive beyond the current turn.\n\
-     Use `memory_lessons`, `memory_crystals`, `memory_insights`, `memory_actions`, `memory_frontier`, and `memory_next` as read-oriented agentmemory review surfaces when they would materially help with coordination or retrieval.\n\
+     Use `memory_lessons`, `memory_crystals`, `memory_insights`, `memory_actions`, `memory_missions`, `memory_handoffs`, `memory_handoff_generate`, `memory_frontier`, and `memory_next` as read-oriented agentmemory review surfaces when they would materially help with coordination or retrieval.\n\
      Agentmemory startup context may be attached below when available.\n\
      Assistant `memory_recall` stays turn-local unless it explicitly passes `scope: \"thread\"`.\n\
      Prefer targeted queries naming the feature, file, bug, or decision you need.\n\
@@ -713,12 +713,20 @@ impl AgentmemoryAdapter {
         &self,
         project: &Path,
         status: Option<&str>,
+        owner: Option<&str>,
+        limit: Option<u32>,
         memories: &MemoriesConfig,
     ) -> Result<JsonValue, String> {
         let url = format!("{}/agentmemory/actions", self.api_base(memories));
         let mut query = vec![("project".to_string(), project.display().to_string())];
         if let Some(status) = status {
             query.push(("status".to_string(), status.to_string()));
+        }
+        if let Some(owner) = owner {
+            query.push(("owner".to_string(), owner.to_string()));
+        }
+        if let Some(limit) = limit {
+            query.push(("limit".to_string(), limit.to_string()));
         }
         let res = self
             .request_builder(reqwest::Method::GET, &url, memories)
@@ -809,6 +817,118 @@ impl AgentmemoryAdapter {
         let res = self
             .request_builder(reqwest::Method::GET, &url, memories)
             .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn list_missions(
+        &self,
+        project: &Path,
+        status: Option<&str>,
+        owner: Option<&str>,
+        limit: Option<u32>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/missions", self.api_base(memories));
+        let mut query = vec![("project".to_string(), project.display().to_string())];
+        if let Some(status) = status {
+            query.push(("status".to_string(), status.to_string()));
+        }
+        if let Some(owner) = owner {
+            query.push(("owner".to_string(), owner.to_string()));
+        }
+        if let Some(limit) = limit {
+            query.push(("limit".to_string(), limit.to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn get_mission(
+        &self,
+        mission_id: &str,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!(
+            "{}/agentmemory/missions/{mission_id}",
+            self.api_base(memories)
+        );
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn list_handoffs(
+        &self,
+        project: &Path,
+        scope_type: Option<&str>,
+        scope_id: Option<&str>,
+        limit: Option<u32>,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/handoffs", self.api_base(memories));
+        let mut query = vec![("project".to_string(), project.display().to_string())];
+        if let Some(scope_type) = scope_type {
+            query.push(("scopeType".to_string(), scope_type.to_string()));
+        }
+        if let Some(scope_id) = scope_id {
+            query.push(("scopeId".to_string(), scope_id.to_string()));
+        }
+        if let Some(limit) = limit {
+            query.push(("limit".to_string(), limit.to_string()));
+        }
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn get_handoff(
+        &self,
+        handoff_packet_id: &str,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!(
+            "{}/agentmemory/handoffs/{handoff_packet_id}",
+            self.api_base(memories)
+        );
+        let res = self
+            .request_builder(reqwest::Method::GET, &url, memories)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::json_or_error(res).await
+    }
+
+    pub(crate) async fn generate_handoff(
+        &self,
+        scope_type: &str,
+        scope_id: &str,
+        project: &Path,
+        memories: &MemoriesConfig,
+    ) -> Result<JsonValue, String> {
+        let url = format!("{}/agentmemory/handoffs/generate", self.api_base(memories));
+        let body = json!({
+            "scopeType": scope_type,
+            "scopeId": scope_id,
+            "project": project.display().to_string(),
+        });
+        let res = self
+            .request_builder(reqwest::Method::POST, &url, memories)
+            .json(&body)
             .send()
             .await
             .map_err(|err| err.to_string())?;

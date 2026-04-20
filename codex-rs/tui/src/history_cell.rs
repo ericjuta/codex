@@ -2320,6 +2320,9 @@ impl MemoryHistoryCell {
             MemoryOperationKind::Actions => "Memory Actions",
             MemoryOperationKind::ActionCreate => "Memory Action Create",
             MemoryOperationKind::ActionUpdate => "Memory Action Update",
+            MemoryOperationKind::Missions => "Memory Missions",
+            MemoryOperationKind::Handoffs => "Memory Handoffs",
+            MemoryOperationKind::HandoffGenerate => "Memory Handoff Generate",
             MemoryOperationKind::Frontier => "Memory Frontier",
             MemoryOperationKind::Next => "Memory Next",
         }
@@ -2550,6 +2553,15 @@ pub(crate) fn new_memory_actions_submission(status: Option<String>) -> MemoryHis
     )
 }
 
+pub(crate) fn new_memory_missions_submission(query: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Missions,
+        query,
+        "Reviewing missions for this workspace.".to_string(),
+        None,
+    )
+}
+
 pub(crate) fn new_memory_action_create_submission(title: String) -> MemoryHistoryCell {
     new_memory_submission(
         MemoryOperationKind::ActionCreate,
@@ -2568,6 +2580,27 @@ pub(crate) fn new_memory_action_update_submission(
         None,
         "Updating an action work item.".to_string(),
         Some(format!("{action_id} -> {status}")),
+    )
+}
+
+pub(crate) fn new_memory_handoffs_submission(query: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Handoffs,
+        query,
+        "Reviewing handoff packets for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_handoff_generate_submission(
+    scope_type: Option<String>,
+    scope_id: Option<String>,
+) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::HandoffGenerate,
+        scope_type,
+        "Generating a fresh handoff packet.".to_string(),
+        scope_id,
     )
 }
 
