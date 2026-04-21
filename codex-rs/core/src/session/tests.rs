@@ -4710,6 +4710,161 @@ async fn remember_memories_emits_ready_event() {
     assert_eq!(event.summary, "Saved durable memory `mem-123`.");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(agentmemory_env)]
+async fn submission_loop_dispatches_handoff_frontier_and_next_memory_ops() {
+    let agentmemory_server = MockServer::start().await;
+    let _agentmemory_url_guard = EnvVarGuard::set("AGENTMEMORY_URL", &agentmemory_server.uri());
+
+    Mock::given(method("POST"))
+        .and(path("/agentmemory/handoffs/generate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": true,
+            "handoffPacket": {
+                "id": "handoff-123",
+            }
+        })))
+        .expect(1)
+        .mount(&agentmemory_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/agentmemory/frontier"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": true,
+            "frontier": [
+                {
+                    "actionId": "act-1",
+                    "title": "Tighten the resume flow",
+                }
+            ],
+            "totalUnblocked": 2
+        })))
+        .expect(1)
+        .mount(&agentmemory_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/agentmemory/next"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": true,
+            "message": "Resume with the handoff packet review.",
+            "suggestion": {
+                "actionId": "act-1",
+                "title": "Review the handoff packet",
+            }
+        })))
+        .expect(1)
+        .mount(&agentmemory_server)
+        .await;
+
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let mut config = build_test_config(codex_home.path()).await;
+    config.memories.backend = crate::config::types::MemoryBackend::Agentmemory;
+    let config = Arc::new(config);
+    let (session, _turn_context, rx_event) = make_session_and_context_with_rx().await;
+    let (tx_sub, rx_sub) = async_channel::unbounded();
+    let submission_loop = tokio::spawn(handlers::submission_loop(
+        Arc::clone(&session),
+        Arc::clone(&config),
+        rx_sub,
+    ));
+
+    tx_sub
+        .send(Submission {
+            id: "sub-handoff".into(),
+            op: Op::GenerateHandoff {
+                scope_type: None,
+                scope_id: None,
+            },
+            trace: None,
+        })
+        .await
+        .expect("send handoff op");
+    tx_sub
+        .send(Submission {
+            id: "sub-frontier".into(),
+            op: Op::ReviewFrontier { limit: Some(3) },
+            trace: None,
+        })
+        .await
+        .expect("send frontier op");
+    tx_sub
+        .send(Submission {
+            id: "sub-next".into(),
+            op: Op::ReviewNext,
+            trace: None,
+        })
+        .await
+        .expect("send next op");
+    tx_sub
+        .send(Submission {
+            id: "sub-shutdown".into(),
+            op: Op::Shutdown,
+            trace: None,
+        })
+        .await
+        .expect("send shutdown op");
+    drop(tx_sub);
+
+    let memory_events = timeout(StdDuration::from_secs(1), async {
+        let mut events = Vec::new();
+        while events.len() < 3 {
+            let event = rx_event.recv().await.expect("event");
+            if let EventMsg::MemoryOperation(memory_event) = event.msg {
+                events.push(memory_event);
+            }
+        }
+        events
+    })
+    .await
+    .expect("timeout waiting for memory operation events");
+
+    assert_eq!(memory_events.len(), 3);
+    assert_eq!(
+        memory_events[0].operation,
+        codex_protocol::items::MemoryOperationKind::HandoffGenerate
+    );
+    assert_eq!(
+        memory_events[0].status,
+        codex_protocol::items::MemoryOperationStatus::Ready
+    );
+    assert_eq!(
+        memory_events[0].summary,
+        "Generated handoff packet `handoff-123`."
+    );
+
+    assert_eq!(
+        memory_events[1].operation,
+        codex_protocol::items::MemoryOperationKind::Frontier
+    );
+    assert_eq!(
+        memory_events[1].status,
+        codex_protocol::items::MemoryOperationStatus::Ready
+    );
+    assert_eq!(
+        memory_events[1].summary,
+        "Reviewed 1 frontier suggestions (2 unblocked actions total)."
+    );
+
+    assert_eq!(
+        memory_events[2].operation,
+        codex_protocol::items::MemoryOperationKind::Next
+    );
+    assert_eq!(
+        memory_events[2].status,
+        codex_protocol::items::MemoryOperationStatus::Ready
+    );
+    assert_eq!(
+        memory_events[2].summary,
+        "Resume with the handoff packet review."
+    );
+
+    submission_loop
+        .await
+        .expect("submission loop should exit cleanly");
+}
+
 #[tokio::test]
 async fn refresh_mcp_servers_is_deferred_until_next_turn() {
     let (session, turn_context) = make_session_and_context().await;

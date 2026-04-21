@@ -69,8 +69,8 @@ use codex_protocol::mcp::RequestId as ProtocolRequestId;
 use codex_protocol::user_input::UserInput;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
-use serde_json::json;
 use serde_json::Value;
+use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::debug;
@@ -617,63 +617,11 @@ pub async fn compact(sess: &Arc<Session>, sub_id: String) {
 }
 
 pub async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
-    let mut errors = Vec::new();
-
-    if let Some(state_db) = sess.services.state_db.as_deref() {
-        if let Err(err) = state_db.clear_memory_data().await {
-            errors.push(format!("failed clearing memory rows from state db: {err}"));
-        }
-    } else {
-        errors.push("state db unavailable; memory rows were not cleared".to_string());
-    }
-
-    if let Err(err) = crate::memories::clear_memory_roots_contents(&config.codex_home).await {
-        errors.push(format!(
-            "failed clearing memory directories under {}: {err}",
-            config.codex_home.display()
-        ));
-    }
-
-    if errors.is_empty() {
-        let memory_root = crate::memories::memory_root(&config.codex_home);
-        sess.send_event_raw(Event {
-            id: sub_id,
-            msg: EventMsg::Warning(WarningEvent {
-                message: format!(
-                    "Dropped memories at {} and cleared memory rows from state db.",
-                    memory_root.display()
-                ),
-            }),
-        })
-        .await;
-        return;
-    }
-
-    sess.send_event_raw(Event {
-        id: sub_id,
-        msg: EventMsg::Error(ErrorEvent {
-            message: format!("Memory drop completed with errors: {}", errors.join("; ")),
-            codex_error_info: Some(CodexErrorInfo::Other),
-        }),
-    })
-    .await;
+    crate::session::agentmemory_ops::drop_memories(sess, config, sub_id).await;
 }
 
 pub async fn update_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
-    let session_source = {
-        let state = sess.state.lock().await;
-        state.session_configuration.session_source.clone()
-    };
-
-    crate::memories::start_memories_startup_task(sess, Arc::clone(config), &session_source);
-
-    sess.send_event_raw(Event {
-        id: sub_id.clone(),
-        msg: EventMsg::Warning(WarningEvent {
-            message: "Memory update triggered.".to_string(),
-        }),
-    })
-    .await;
+    crate::session::agentmemory_ops::update_memories(sess, config, sub_id).await;
 }
 
 pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) {
@@ -933,7 +881,10 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
     let agentmemory_shutdown = {
         let state = sess.state.lock().await;
         let session_configuration = &state.session_configuration;
-        (session_configuration.original_config_do_not_use.memories.backend
+        (session_configuration
+            .original_config_do_not_use
+            .memories
+            .backend
             == crate::config::types::MemoryBackend::Agentmemory)
             .then(|| {
                 (
@@ -959,14 +910,14 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
             )
             .await;
 
-        let (summary_success, summary_error) = match adapter.summarize_session(&session_id, &memories).await
-        {
-            Ok(summary) => (summary.success, summary.error),
-            Err(err) => {
-                warn!("failed to summarize agentmemory session {session_id}: {err}");
-                (false, Some(err))
-            }
-        };
+        let (summary_success, summary_error) =
+            match adapter.summarize_session(&session_id, &memories).await {
+                Ok(summary) => (summary.success, summary.error),
+                Err(err) => {
+                    warn!("failed to summarize agentmemory session {session_id}: {err}");
+                    (false, Some(err))
+                }
+            };
         let mut session_end_payload = json!({
             "session_id": session_id.as_str(),
             "cwd": cwd.as_str(),
@@ -1228,6 +1179,221 @@ pub(super) async fn submission_loop(
                 }
                 Op::UpdateMemories => {
                     update_memories(&sess, &config, sub.id.clone()).await;
+                    false
+                }
+                Op::RecallMemories { query } => {
+                    crate::session::agentmemory_ops::recall_memories(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        query,
+                    )
+                    .await;
+                    false
+                }
+                Op::RememberMemories { content } => {
+                    crate::session::agentmemory_ops::remember_memories(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        content,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewLessons { query } => {
+                    crate::session::agentmemory_ops::review_lessons(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        query,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewCrystals => {
+                    crate::session::agentmemory_ops::review_crystals(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                    )
+                    .await;
+                    false
+                }
+                Op::CreateCrystals { action_ids } => {
+                    crate::session::agentmemory_ops::create_crystals(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        action_ids,
+                    )
+                    .await;
+                    false
+                }
+                Op::AutoCrystallize { older_than_days } => {
+                    crate::session::agentmemory_ops::auto_crystallize(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        older_than_days,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReflectMemories { max_clusters } => {
+                    crate::session::agentmemory_ops::reflect_memories(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        max_clusters,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewInsights { query } => {
+                    crate::session::agentmemory_ops::review_insights(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        query,
+                    )
+                    .await;
+                    false
+                }
+                Op::ListActions { status } => {
+                    crate::session::agentmemory_ops::list_actions(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        status,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewMissions { mission_id, status } => {
+                    crate::session::agentmemory_ops::review_missions(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        mission_id,
+                        status,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewBranchOverlays { branch } => {
+                    crate::session::agentmemory_ops::review_branch_overlays(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        branch,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewGuardrails { query } => {
+                    crate::session::agentmemory_ops::review_guardrails(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        query,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewDecisions { query } => {
+                    crate::session::agentmemory_ops::review_decisions(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        query,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewDossiers { file_path } => {
+                    crate::session::agentmemory_ops::review_dossiers(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        file_path,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewRoutineCandidates => {
+                    crate::session::agentmemory_ops::review_routine_candidates(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                    )
+                    .await;
+                    false
+                }
+                Op::CreateAction { title } => {
+                    crate::session::agentmemory_ops::create_action(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        title,
+                    )
+                    .await;
+                    false
+                }
+                Op::UpdateAction { action_id, status } => {
+                    crate::session::agentmemory_ops::update_action(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        action_id,
+                        status,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewHandoffs {
+                    handoff_packet_id,
+                    scope_type,
+                    scope_id,
+                } => {
+                    crate::session::agentmemory_ops::review_handoffs(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        handoff_packet_id,
+                        scope_type,
+                        scope_id,
+                    )
+                    .await;
+                    false
+                }
+                Op::GenerateHandoff {
+                    scope_type,
+                    scope_id,
+                } => {
+                    crate::session::agentmemory_ops::generate_handoff(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        scope_type,
+                        scope_id,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewFrontier { limit } => {
+                    crate::session::agentmemory_ops::review_frontier(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        limit,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewNext => {
+                    crate::session::agentmemory_ops::review_next(&sess, &config, sub.id.clone())
+                        .await;
                     false
                 }
                 Op::ThreadRollback { num_turns } => {
