@@ -360,9 +360,9 @@ async fn memory_recall_requires_feature_flag() {
     assert_lacks_tool_name(&tools, "memory_recall");
 }
 
-#[test]
-fn memory_recall_is_absent_with_memory_tool_feature_on_and_native_backend() {
-    let config = test_config();
+#[tokio::test]
+async fn memory_recall_is_absent_with_memory_tool_feature_on_and_native_backend() {
+    let config = test_config().await;
     let model_info = construct_model_info_offline("gpt-5-codex", &config);
     let mut features = Features::with_defaults();
     features.enable(Feature::MemoryTool);
@@ -388,9 +388,9 @@ fn memory_recall_is_absent_with_memory_tool_feature_on_and_native_backend() {
     assert_lacks_tool_name(&tools, "memory_recall");
 }
 
-#[test]
-fn memory_recall_is_exposed_with_memory_tool_feature_on_and_agentmemory_backend() {
-    let config = test_config();
+#[tokio::test]
+async fn memory_recall_is_exposed_with_memory_tool_feature_on_and_agentmemory_backend() {
+    let config = test_config().await;
     let model_info = construct_model_info_offline("gpt-5-codex", &config);
     let mut features = Features::with_defaults();
     features.enable(Feature::MemoryTool);

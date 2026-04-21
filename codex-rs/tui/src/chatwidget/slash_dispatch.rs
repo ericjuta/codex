@@ -1085,7 +1085,7 @@ impl ChatWidget {
                         .map(|(scope_type, scope_id)| format!("{scope_type} {scope_id}"))
                 });
                 self.show_pending_memory_operation(history_cell::new_memory_handoffs_submission(
-                    query.clone(),
+                    query,
                     scope_id.clone(),
                 ));
                 self.submit_op(Op::ReviewHandoffs {
@@ -1244,6 +1244,27 @@ impl ChatWidget {
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop
+            | SlashCommand::MemoryRecall
+            | SlashCommand::MemoryRemember
+            | SlashCommand::MemoryLessons
+            | SlashCommand::MemoryCrystals
+            | SlashCommand::MemoryCrystalsCreate
+            | SlashCommand::MemoryCrystalsAuto
+            | SlashCommand::MemoryInsights
+            | SlashCommand::MemoryReflect
+            | SlashCommand::MemoryActions
+            | SlashCommand::MemoryMissions
+            | SlashCommand::MemoryBranchOverlays
+            | SlashCommand::MemoryGuardrails
+            | SlashCommand::MemoryDecisions
+            | SlashCommand::MemoryDossiers
+            | SlashCommand::MemoryRoutineCandidates
+            | SlashCommand::MemoryActionCreate
+            | SlashCommand::MemoryActionUpdate
+            | SlashCommand::MemoryHandoffs
+            | SlashCommand::MemoryHandoffGenerate
+            | SlashCommand::MemoryFrontier
+            | SlashCommand::MemoryNext
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate
             | SlashCommand::Mcp

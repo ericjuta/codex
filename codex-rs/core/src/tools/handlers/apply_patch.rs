@@ -24,9 +24,9 @@ use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::orchestrator::ToolOrchestrator;
-use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
+use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
@@ -49,9 +49,7 @@ use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 use codex_tools::ApplyPatchToolArgs;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use std::collections::BTreeSet;
 use std::collections::HashSet;
-use std::sync::Arc;
 
 const APPLY_PATCH_ARGUMENT_DIFF_BUFFER_INTERVAL: Duration = Duration::from_millis(500);
 

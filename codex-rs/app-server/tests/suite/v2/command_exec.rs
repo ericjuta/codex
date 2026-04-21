@@ -704,9 +704,9 @@ async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminate
         /*id*/ 101,
         Some(serde_json::json!({
             "command": [
-                "python3",
+                "/bin/sh",
                 "-c",
-                "import time; print('ready', flush=True); time.sleep(30)",
+                "printf 'ready\\n'; sleep 30",
                 marker,
             ],
             "processId": "shared-process",

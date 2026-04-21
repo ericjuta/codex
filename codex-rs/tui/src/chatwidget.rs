@@ -136,8 +136,8 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
-use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::MemoryOperationScope;
+use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
@@ -11625,6 +11625,7 @@ fn extract_first_bold(s: &str) -> Option<String> {
 fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
     match event_name {
         codex_protocol::protocol::HookEventName::PreToolUse => "PreToolUse",
+        codex_protocol::protocol::HookEventName::PermissionRequest => "PermissionRequest",
         codex_protocol::protocol::HookEventName::PostToolUse => "PostToolUse",
         codex_protocol::protocol::HookEventName::PostToolUseFailure => "PostToolUseFailure",
         codex_protocol::protocol::HookEventName::PreCompact => "PreCompact",

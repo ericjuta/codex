@@ -1524,6 +1524,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::PlanUpdate(_)
         | EventMsg::TurnAborted(_)
         | EventMsg::ShutdownComplete
+        | EventMsg::MemoryOperation(_)
         | EventMsg::EnteredReviewMode(_)
         | EventMsg::ExitedReviewMode(_)
         | EventMsg::RawResponseItem(_)

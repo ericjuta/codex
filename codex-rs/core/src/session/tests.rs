@@ -50,6 +50,7 @@ use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
+use serial_test::serial;
 use tracing::Span;
 
 use crate::RolloutRecorderParams;
@@ -4567,6 +4568,34 @@ fn fake_id_token(account_id: &str, user_id: Option<&str>) -> String {
     });
     let payload = URL_SAFE_NO_PAD.encode(payload.to_string());
     format!("{header}.{payload}.signature")
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match self.original.take() {
+            Some(value) => unsafe {
+                std::env::set_var(self.key, value);
+            },
+            None => unsafe {
+                std::env::remove_var(self.key);
+            },
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -2,11 +2,6 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use codex_analytics::HookRunFact;
-use codex_analytics::build_track_events_context;
-use codex_hooks::PermissionRequestDecision;
-use codex_hooks::PermissionRequestOutcome;
-use codex_hooks::PermissionRequestRequest;
 use crate::agentmemory::context_planner::AgentmemoryContextEndpoint;
 use crate::agentmemory::context_planner::AgentmemoryContextEventDetail;
 use crate::agentmemory::context_planner::AgentmemoryContextReason;
@@ -17,6 +12,11 @@ use crate::agentmemory::context_planner::PRETOOL_CONTEXT_BUDGET_TOKENS;
 use crate::agentmemory::context_planner::QUERY_CONTEXT_BUDGET_TOKENS;
 use crate::agentmemory::context_planner::is_trivial_user_turn;
 use crate::agentmemory::retrieval_trace::AgentmemoryRetrievalTraceSummary;
+use codex_analytics::HookRunFact;
+use codex_analytics::build_track_events_context;
+use codex_hooks::PermissionRequestDecision;
+use codex_hooks::PermissionRequestOutcome;
+use codex_hooks::PermissionRequestRequest;
 use codex_hooks::PostToolUseOutcome;
 use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
@@ -1129,9 +1129,16 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookEventName::PreToolUse => "PreToolUse",
         HookEventName::PermissionRequest => "PermissionRequest",
         HookEventName::PostToolUse => "PostToolUse",
+        HookEventName::PostToolUseFailure => "PostToolUseFailure",
+        HookEventName::PreCompact => "PreCompact",
         HookEventName::SessionStart => "SessionStart",
+        HookEventName::SubagentStart => "SubagentStart",
+        HookEventName::SubagentStop => "SubagentStop",
+        HookEventName::Notification => "Notification",
+        HookEventName::TaskCompleted => "TaskCompleted",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
         HookEventName::Stop => "Stop",
+        HookEventName::SessionEnd => "SessionEnd",
     };
     let hook_source = match run.source {
         HookSource::System => "system",

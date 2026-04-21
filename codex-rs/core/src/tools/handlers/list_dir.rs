@@ -4,8 +4,8 @@ use std::fs::FileType;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_protocol::permissions::ReadDenyMatcher;
 use crate::agentmemory::context_planner::AgentmemoryToolCapability;
+use codex_protocol::permissions::ReadDenyMatcher;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 use tokio::fs;

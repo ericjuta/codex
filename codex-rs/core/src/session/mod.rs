@@ -164,8 +164,8 @@ use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::exec_output::StreamOutput;
 
-pub(crate) mod agentmemory_ops;
 mod agent_task_lifecycle;
+pub(crate) mod agentmemory_ops;
 mod handlers;
 mod mcp;
 mod review;
@@ -2960,6 +2960,25 @@ impl Session {
     ) -> Option<codex_hooks::SessionStartSource> {
         let mut state = self.state.lock().await;
         state.take_pending_session_start_source()
+    }
+
+    pub(crate) async fn take_pending_session_start_additional_contexts(&self) -> Vec<String> {
+        let mut state = self.state.lock().await;
+        state.take_pending_session_start_additional_contexts()
+    }
+
+    pub(crate) async fn begin_agentmemory_turn(&self) -> u64 {
+        let mut state = self.state.lock().await;
+        state.begin_agentmemory_turn()
+    }
+
+    pub(crate) async fn register_agentmemory_auto_injection(
+        &self,
+        lane_key: &str,
+        context: &str,
+    ) -> crate::agentmemory::context_planner::AutoInjectionRegistration {
+        let mut state = self.state.lock().await;
+        state.register_agentmemory_auto_injection(lane_key, context)
     }
 
     fn show_raw_agent_reasoning(&self) -> bool {
