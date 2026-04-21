@@ -1,5 +1,5 @@
 use super::*;
-use crate::codex::make_session_and_context;
+use crate::session::tests::make_session_and_context;
 use crate::tools::context::ApplyPatchToolOutput;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_apply_patch::MaybeApplyPatchVerified;

@@ -5,13 +5,17 @@
 //! any other backing store.
 
 mod error;
+mod local;
 mod recorder;
+mod remote;
 mod store;
 mod types;
 
 pub use error::ThreadStoreError;
 pub use error::ThreadStoreResult;
+pub use local::LocalThreadStore;
 pub use recorder::ThreadRecorder;
+pub use remote::RemoteThreadStore;
 pub use store::ThreadStore;
 pub use types::AppendThreadItemsParams;
 pub use types::ArchiveThreadParams;
@@ -23,6 +27,7 @@ pub use types::OptionalStringPatch;
 pub use types::ReadThreadParams;
 pub use types::ResumeThreadRecorderParams;
 pub use types::SetThreadNameParams;
+pub use types::SortDirection;
 pub use types::StoredThread;
 pub use types::StoredThreadHistory;
 pub use types::ThreadEventPersistenceMode;

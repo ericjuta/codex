@@ -1,8 +1,10 @@
 use crate::agentmemory::AgentmemoryAdapter;
-use crate::codex::agentmemory_ops::MemoryOperationEventArgs;
-use crate::codex::agentmemory_ops::send_memory_operation_event_with_scope;
 use crate::config::types::MemoryBackend;
 use crate::function_tool::FunctionCallError;
+use crate::session::agentmemory_ops::MemoryOperationEventArgs;
+use crate::session::agentmemory_ops::send_memory_operation_event_with_scope;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -130,8 +132,8 @@ pub struct MemoryFrontierHandler;
 pub struct MemoryNextHandler;
 
 async fn emit_event(
-    session: &crate::codex::Session,
-    turn: &crate::codex::TurnContext,
+    session: &Session,
+    turn: &TurnContext,
     operation: MemoryOperationKind,
     status: MemoryOperationStatus,
     query: Option<String>,
@@ -156,8 +158,8 @@ async fn emit_event(
 }
 
 async fn emit_event_with_scope(
-    session: &crate::codex::Session,
-    turn: &crate::codex::TurnContext,
+    session: &Session,
+    turn: &TurnContext,
     args: MemoryOperationEventArgs,
     scope: MemoryOperationScope,
 ) {
@@ -165,7 +167,7 @@ async fn emit_event_with_scope(
 }
 
 fn require_agentmemory_backend(
-    turn: &crate::codex::TurnContext,
+    turn: &TurnContext,
     tool_name: &str,
 ) -> Result<(), FunctionCallError> {
     if turn.config.memories.backend != MemoryBackend::Agentmemory {
@@ -1414,8 +1416,8 @@ async fn handle_next(invocation: ToolInvocation) -> Result<FunctionToolOutput, F
 }
 
 async fn handle_review_response(
-    session: &crate::codex::Session,
-    turn: &crate::codex::TurnContext,
+    session: &Session,
+    turn: &TurnContext,
     operation: MemoryOperationKind,
     query: Option<String>,
     response: Result<JsonValue, String>,

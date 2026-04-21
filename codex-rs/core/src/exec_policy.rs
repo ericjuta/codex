@@ -7,6 +7,7 @@ use arc_swap::ArcSwap;
 
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error as ExecPolicyRuleError;
@@ -110,6 +111,12 @@ pub(crate) fn child_uses_parent_exec_policy(parent_config: &Config, child_config
     }
 
     exec_policy_config_folders(parent_config) == exec_policy_config_folders(child_config)
+        && parent_config
+            .config_layer_stack
+            .ignore_user_and_project_exec_policy_rules()
+            == child_config
+                .config_layer_stack
+                .ignore_user_and_project_exec_policy_rules()
         && parent_config.config_layer_stack.requirements().exec_policy
             == child_config.config_layer_stack.requirements().exec_policy
 }
@@ -296,9 +303,19 @@ impl ExecPolicyManager {
                 }
             }
             Decision::Allow => ExecApprovalRequirement::Skip {
-                // Bypass sandbox if execpolicy allows the command
-                bypass_sandbox: evaluation.matched_rules.iter().any(|rule_match| {
-                    is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
+                // Bypass sandbox only when every parsed command segment is
+                // explicitly allowed by execpolicy.
+                bypass_sandbox: commands.iter().all(|command| {
+                    exec_policy
+                        .matches_for_command_with_options(
+                            command,
+                            /*heuristics_fallback*/ None,
+                            &match_options,
+                        )
+                        .iter()
+                        .any(|rule_match| {
+                            is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
+                        })
                 }),
                 proposed_execpolicy_amendment: if auto_amendment_allowed {
                     try_derive_execpolicy_amendment_for_allow_rules(&evaluation.matched_rules)
@@ -485,6 +502,8 @@ async fn load_exec_policy_with_warning(
 }
 
 pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy, ExecPolicyError> {
+    // Disabled project layers already represent the trust decision, so hooks
+    // and exec-policy loading can reuse the normal trusted-layer view.
     // Iterate the layers in increasing order of precedence, adding the *.rules
     // from each layer, so that higher-precedence layers can override
     // rules defined in lower-precedence ones.
@@ -493,6 +512,14 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
         ConfigLayerStackOrdering::LowestPrecedenceFirst,
         /*include_disabled*/ false,
     ) {
+        if config_stack.ignore_user_and_project_exec_policy_rules()
+            && matches!(
+                layer.name,
+                ConfigLayerSource::User { .. } | ConfigLayerSource::Project { .. }
+            )
+        {
+            continue;
+        }
         if let Some(config_folder) = layer.config_folder() {
             let policy_dir = config_folder.join(RULES_DIR_NAME);
             let layer_policy_paths = collect_policy_files(&policy_dir).await?;

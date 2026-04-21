@@ -1,10 +1,23 @@
 use super::*;
-use crate::codex::make_session_and_context;
+use crate::session::tests::make_session_and_context;
 use crate::tools::context::FunctionToolOutput;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::ReadDenyMatcher;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use tempfile::tempdir;
+async fn list_dir_slice(
+    path: &Path,
+    offset: usize,
+    limit: usize,
+    depth: usize,
+) -> Result<Vec<String>, FunctionCallError> {
+    list_dir_slice_with_policy(path, offset, limit, depth, /*read_deny_matcher*/ None).await
+}
 use tokio::sync::Mutex;
 
 #[tokio::test]
@@ -296,4 +309,61 @@ async fn truncation_respects_sorted_order() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+#[tokio::test]
+async fn hides_denied_entries_and_prunes_denied_subtrees() {
+    let temp = tempdir().expect("create tempdir");
+    let dir_path = temp.path();
+    let visible_dir = dir_path.join("visible");
+    let denied_dir = dir_path.join("private");
+    tokio::fs::create_dir(&visible_dir)
+        .await
+        .expect("create visible dir");
+    tokio::fs::create_dir(&denied_dir)
+        .await
+        .expect("create denied dir");
+    tokio::fs::write(visible_dir.join("ok.txt"), b"ok")
+        .await
+        .expect("write visible file");
+    tokio::fs::write(denied_dir.join("secret.txt"), b"secret")
+        .await
+        .expect("write denied file");
+    tokio::fs::write(dir_path.join("top_secret.txt"), b"secret")
+        .await
+        .expect("write denied top-level file");
+
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: denied_dir.try_into().expect("absolute denied dir"),
+            },
+            access: FileSystemAccessMode::None,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: dir_path
+                    .join("top_secret.txt")
+                    .try_into()
+                    .expect("absolute denied file"),
+            },
+            access: FileSystemAccessMode::None,
+        },
+    ]);
+
+    let read_deny_matcher = ReadDenyMatcher::new(&policy, dir_path);
+    let entries = list_dir_slice_with_policy(
+        dir_path,
+        /*offset*/ 1,
+        /*limit*/ 20,
+        /*depth*/ 3,
+        read_deny_matcher.as_ref(),
+    )
+    .await
+    .expect("list directory");
+
+    assert_eq!(
+        entries,
+        vec!["visible/".to_string(), "  ok.txt".to_string(),]
+    );
 }

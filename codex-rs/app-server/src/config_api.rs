@@ -27,8 +27,8 @@ use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::ResidencyRequirement as CoreResidencyRequirement;
 use codex_core::config_loader::SandboxModeRequirement as CoreSandboxModeRequirement;
 use codex_core::plugins::PluginId;
-use codex_core::plugins::collect_plugin_enabled_candidates;
-use codex_core::plugins::installed_plugin_telemetry_metadata;
+use codex_core_plugins::loader::installed_plugin_telemetry_metadata;
+use codex_core_plugins::toggles::collect_plugin_enabled_candidates;
 use codex_features::canonical_feature_for_key;
 use codex_features::feature_for_key;
 use codex_protocol::config_types::WebSearchMode;
@@ -605,6 +605,7 @@ mod tests {
                 }),
                 allow_local_binding: Some(true),
             }),
+            permissions: None,
         };
 
         let mapped = map_requirements_toml_to_api(requirements);
@@ -698,6 +699,7 @@ mod tests {
                 }),
                 allow_local_binding: None,
             }),
+            permissions: None,
         };
 
         let mapped = map_requirements_toml_to_api(requirements);
@@ -739,6 +741,7 @@ mod tests {
             rules: None,
             enforce_residency: None,
             network: None,
+            permissions: None,
         };
 
         let mapped = map_requirements_toml_to_api(requirements);

@@ -1,6 +1,6 @@
 use super::*;
 use crate::agentmemory::context_planner::AgentmemoryToolCapability;
-use crate::codex::make_session_and_context;
+use crate::session::tests::make_session_and_context;
 use crate::tools::context::FunctionToolOutput;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use pretty_assertions::assert_eq;

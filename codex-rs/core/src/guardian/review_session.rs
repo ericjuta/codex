@@ -22,9 +22,6 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::codex::Codex;
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_thread_interactive;
 use crate::config::Config;
 use crate::config::Constrained;
@@ -32,6 +29,9 @@ use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::Permissions;
 use crate::rollout::recorder::RolloutRecorder;
+use crate::session::Codex;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use codex_config::types::McpServerConfig;
 use codex_features::Feature;
 use codex_model_provider_info::ModelProviderInfo;
@@ -720,6 +720,7 @@ pub(crate) fn build_guardian_review_session_config(
     let mut guardian_config = parent_config.clone();
     guardian_config.model = Some(active_model.to_string());
     guardian_config.model_reasoning_effort = reasoning_effort;
+    guardian_config.include_skill_instructions = false;
     guardian_config.developer_instructions = Some(
         parent_config
             .guardian_policy_config
@@ -823,9 +824,9 @@ async fn interrupt_and_drain_turn(codex: &Codex) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn guardian_review_session_config_change_invalidates_cached_session() {
-        let parent_config = crate::config::test_config();
+    #[tokio::test]
+    async fn guardian_review_session_config_change_invalidates_cached_session() {
+        let parent_config = crate::config::test_config().await;
         let cached_spawn_config = build_guardian_review_session_config(
             &parent_config,
             /*live_network_config*/ None,
@@ -855,9 +856,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn guardian_review_session_config_disables_hooks() {
-        let mut parent_config = crate::config::test_config();
+    #[tokio::test]
+    async fn guardian_review_session_config_disables_hooks() {
+        let mut parent_config = crate::config::test_config().await;
         parent_config
             .features
             .enable(Feature::CodexHooks)
@@ -872,6 +873,22 @@ mod tests {
         .expect("guardian config");
 
         assert!(!guardian_config.features.enabled(Feature::CodexHooks));
+    }
+
+    #[tokio::test]
+    async fn guardian_review_session_config_disables_skill_instructions() {
+        let mut parent_config = crate::config::test_config().await;
+        parent_config.include_skill_instructions = true;
+
+        let guardian_config = build_guardian_review_session_config(
+            &parent_config,
+            /*live_network_config*/ None,
+            "active-model",
+            /*reasoning_effort*/ None,
+        )
+        .expect("guardian config");
+
+        assert!(!guardian_config.include_skill_instructions);
     }
 
     #[tokio::test(flavor = "current_thread")]

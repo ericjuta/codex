@@ -14,10 +14,17 @@ use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
+use codex_app_server_protocol::ExternalAgentConfigDetectParams;
+use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
+use codex_app_server_protocol::ExternalAgentConfigImportParams;
+use codex_app_server_protocol::ExternalAgentConfigImportResponse;
+use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::LogoutAccountResponse;
+use codex_app_server_protocol::MemoryResetResponse;
 use codex_app_server_protocol::Model as ApiModel;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
@@ -34,10 +41,15 @@ use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadInjectItemsParams;
+use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
+use codex_app_server_protocol::ThreadMemoryMode;
+use codex_app_server_protocol::ThreadMemoryModeSetParams;
+use codex_app_server_protocol::ThreadMemoryModeSetResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
@@ -71,6 +83,7 @@ use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
@@ -281,6 +294,31 @@ impl AppServerSession {
             .wrap_err("account/read failed during TUI bootstrap")
     }
 
+    pub(crate) async fn external_agent_config_detect(
+        &mut self,
+        params: ExternalAgentConfigDetectParams,
+    ) -> Result<ExternalAgentConfigDetectResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ExternalAgentConfigDetect { request_id, params })
+            .await
+            .wrap_err("externalAgentConfig/detect failed during TUI startup")
+    }
+
+    pub(crate) async fn external_agent_config_import(
+        &mut self,
+        migration_items: Vec<ExternalAgentConfigMigrationItem>,
+    ) -> Result<ExternalAgentConfigImportResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ExternalAgentConfigImport {
+                request_id,
+                params: ExternalAgentConfigImportParams { migration_items },
+            })
+            .await
+            .wrap_err("externalAgentConfig/import failed during TUI startup")
+    }
+
     pub(crate) async fn next_event(&mut self) -> Option<AppServerEvent> {
         self.client.next_event().await
     }
@@ -410,6 +448,29 @@ impl AppServerSession {
         Ok(response.thread)
     }
 
+    pub(crate) async fn thread_inject_items(
+        &mut self,
+        thread_id: ThreadId,
+        items: Vec<ResponseItem>,
+    ) -> Result<ThreadInjectItemsResponse> {
+        let items = items
+            .into_iter()
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .wrap_err("failed to encode thread/inject_items payload")?;
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadInjectItems {
+                request_id,
+                params: ThreadInjectItemsParams {
+                    thread_id: thread_id.to_string(),
+                    items,
+                },
+            })
+            .await
+            .wrap_err("thread/inject_items failed during TUI side conversation setup")
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn turn_start(
         &mut self,
@@ -472,6 +533,10 @@ impl AppServerSession {
         Ok(())
     }
 
+    pub(crate) async fn startup_interrupt(&mut self, thread_id: ThreadId) -> Result<()> {
+        self.turn_interrupt(thread_id, String::new()).await
+    }
+
     pub(crate) async fn turn_steer(
         &mut self,
         thread_id: ThreadId,
@@ -509,6 +574,52 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/name/set failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_memory_mode_set(
+        &mut self,
+        thread_id: ThreadId,
+        mode: ThreadMemoryMode,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadMemoryModeSetResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadMemoryModeSet {
+                request_id,
+                params: ThreadMemoryModeSetParams {
+                    thread_id: thread_id.to_string(),
+                    mode,
+                },
+            })
+            .await
+            .wrap_err("thread/memoryMode/set failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn memory_reset(&mut self) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: MemoryResetResponse = self
+            .client
+            .request_typed(ClientRequest::MemoryReset {
+                request_id,
+                params: None,
+            })
+            .await
+            .wrap_err("memory/reset failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn logout_account(&mut self) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: LogoutAccountResponse = self
+            .client
+            .request_typed(ClientRequest::LogoutAccount {
+                request_id,
+                params: None,
+            })
+            .await
+            .wrap_err("account/logout failed in TUI")?;
         Ok(())
     }
 
@@ -912,6 +1023,8 @@ fn thread_fork_params_from_config(
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
         config: config_request_overrides_from_config(&config),
+        base_instructions: config.base_instructions.clone(),
+        developer_instructions: config.developer_instructions.clone(),
         ephemeral: config.ephemeral,
         persist_extended_history: true,
         ..ThreadForkParams::default()
@@ -1133,6 +1246,7 @@ pub(crate) fn app_server_rate_limit_snapshot_to_core(
         secondary: snapshot.secondary.map(app_server_rate_limit_window_to_core),
         credits: snapshot.credits.map(app_server_credits_snapshot_to_core),
         plan_type: snapshot.plan_type,
+        rate_limit_reached_type: snapshot.rate_limit_reached_type.map(Into::into),
     }
 }
 
@@ -1272,6 +1386,28 @@ mod tests {
         assert_eq!(start.model_provider, None);
         assert_eq!(resume.model_provider, None);
         assert_eq!(fork.model_provider, None);
+    }
+
+    #[tokio::test]
+    async fn thread_fork_params_forward_instruction_overrides() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.base_instructions = Some("Base override.".to_string());
+        config.developer_instructions = Some("Developer override.".to_string());
+        let thread_id = ThreadId::new();
+
+        let params = thread_fork_params_from_config(
+            config,
+            thread_id,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+        );
+
+        assert_eq!(params.base_instructions.as_deref(), Some("Base override."));
+        assert_eq!(
+            params.developer_instructions.as_deref(),
+            Some("Developer override.")
+        );
     }
 
     #[tokio::test]

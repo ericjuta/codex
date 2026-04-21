@@ -102,6 +102,7 @@ use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::WarningNotification;
 use codex_app_server_protocol::build_command_execution_end_item;
 use codex_app_server_protocol::build_file_change_approval_request_item;
 use codex_app_server_protocol::build_file_change_begin_item;
@@ -269,7 +270,21 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
             }
         }
-        EventMsg::Warning(_warning_event) => {}
+        EventMsg::Warning(warning_event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = WarningNotification {
+                    thread_id: Some(conversation_id.to_string()),
+                    message: warning_event.message,
+                };
+                if let Some(analytics_events_client) = analytics_events_client.as_ref() {
+                    analytics_events_client
+                        .track_notification(ServerNotification::Warning(notification.clone()));
+                }
+                outgoing
+                    .send_server_notification(ServerNotification::Warning(notification))
+                    .await;
+            }
+        }
         EventMsg::MemoryOperation(event) => {
             if let ApiVersion::V2 = api_version {
                 let notification = MemoryOperationNotification {
@@ -2035,9 +2050,12 @@ async fn complete_file_change_item(
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
-    let mut state = thread_state.lock().await;
-    state.turn_summary.file_change_started.remove(&item_id);
-    drop(state);
+    thread_state
+        .lock()
+        .await
+        .turn_summary
+        .file_change_started
+        .remove(&item_id);
 
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
@@ -2106,12 +2124,12 @@ async fn complete_command_execution_item(
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
-    let mut state = thread_state.lock().await;
-    let should_emit = state
+    let should_emit = thread_state
+        .lock()
+        .await
         .turn_summary
         .command_execution_started
         .remove(&item_id);
-    drop(state);
     if !should_emit {
         return;
     }
@@ -2929,6 +2947,7 @@ async fn construct_mcp_tool_call_notification(
         tool: begin_event.invocation.tool,
         status: McpToolCallStatus::InProgress,
         arguments: begin_event.invocation.arguments.unwrap_or(JsonValue::Null),
+        mcp_app_resource_uri: begin_event.mcp_app_resource_uri,
         result: None,
         error: None,
         duration_ms: None,
@@ -2955,11 +2974,11 @@ async fn construct_mcp_tool_call_end_notification(
 
     let (result, error) = match &end_event.result {
         Ok(value) => (
-            Some(McpToolCallResult {
+            Some(Box::new(McpToolCallResult {
                 content: value.content.clone(),
                 structured_content: value.structured_content.clone(),
                 meta: value.meta.clone(),
-            }),
+            })),
             None,
         ),
         Err(message) => (
@@ -2976,6 +2995,7 @@ async fn construct_mcp_tool_call_end_notification(
         tool: end_event.invocation.tool,
         status,
         arguments: end_event.invocation.arguments.unwrap_or(JsonValue::Null),
+        mcp_app_resource_uri: end_event.mcp_app_resource_uri,
         result,
         error,
         duration_ms,
@@ -4155,6 +4175,7 @@ mod tests {
                 balance: Some("5".to_string()),
             }),
             plan_type: None,
+            rate_limit_reached_type: None,
         };
 
         handle_token_count_event(
@@ -4238,6 +4259,7 @@ mod tests {
                 tool: "list_mcp_resources".to_string(),
                 arguments: Some(serde_json::json!({"server": ""})),
             },
+            mcp_app_resource_uri: Some("ui://widget/list-resources.html".to_string()),
         };
 
         let thread_id = ThreadId::new().to_string();
@@ -4258,6 +4280,7 @@ mod tests {
                 tool: begin_event.invocation.tool,
                 status: McpToolCallStatus::InProgress,
                 arguments: serde_json::json!({"server": ""}),
+                mcp_app_resource_uri: Some("ui://widget/list-resources.html".to_string()),
                 result: None,
                 error: None,
                 duration_ms: None,
@@ -4398,6 +4421,7 @@ mod tests {
                 tool: "list_mcp_resources".to_string(),
                 arguments: None,
             },
+            mcp_app_resource_uri: None,
         };
 
         let thread_id = ThreadId::new().to_string();
@@ -4418,6 +4442,7 @@ mod tests {
                 tool: begin_event.invocation.tool,
                 status: McpToolCallStatus::InProgress,
                 arguments: JsonValue::Null,
+                mcp_app_resource_uri: None,
                 result: None,
                 error: None,
                 duration_ms: None,
@@ -4449,6 +4474,7 @@ mod tests {
                 tool: "list_mcp_resources".to_string(),
                 arguments: Some(serde_json::json!({"server": ""})),
             },
+            mcp_app_resource_uri: Some("ui://widget/list-resources.html".to_string()),
             duration: Duration::from_nanos(92708),
             result: Ok(result),
         };
@@ -4471,13 +4497,14 @@ mod tests {
                 tool: end_event.invocation.tool,
                 status: McpToolCallStatus::Completed,
                 arguments: serde_json::json!({"server": ""}),
-                result: Some(McpToolCallResult {
+                mcp_app_resource_uri: Some("ui://widget/list-resources.html".to_string()),
+                result: Some(Box::new(McpToolCallResult {
                     content,
                     structured_content: None,
                     meta: Some(serde_json::json!({
                         "ui/resourceUri": "ui://widget/list-resources.html"
                     })),
-                }),
+                })),
                 error: None,
                 duration_ms: Some(0),
             },
@@ -4495,6 +4522,7 @@ mod tests {
                 tool: "list_mcp_resources".to_string(),
                 arguments: None,
             },
+            mcp_app_resource_uri: None,
             duration: Duration::from_millis(1),
             result: Err("boom".to_string()),
         };
@@ -4517,6 +4545,7 @@ mod tests {
                 tool: end_event.invocation.tool,
                 status: McpToolCallStatus::Failed,
                 arguments: JsonValue::Null,
+                mcp_app_resource_uri: None,
                 result: None,
                 error: Some(McpToolCallError {
                     message: "boom".to_string(),
