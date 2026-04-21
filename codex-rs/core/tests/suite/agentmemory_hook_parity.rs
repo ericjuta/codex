@@ -336,13 +336,17 @@ async fn glob_lane_enrichment_and_post_tool_capture_use_native_contract() -> Res
             config.memories.backend = MemoryBackend::Agentmemory;
             config.memories.agentmemory.base_url = agentmemory_base_url;
             config.memories.agentmemory.inject_context = true;
+            let active_model = config
+                .model
+                .clone()
+                .unwrap_or_else(|| "gpt-5.4".to_string());
             let mut model_catalog = bundled_models_response()
                 .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
             let model = model_catalog
                 .models
                 .iter_mut()
-                .find(|model| model.slug == "gpt-5.3-codex")
-                .expect("gpt-5.3-codex exists in bundled models.json");
+                .find(|model| model.slug == active_model)
+                .unwrap_or_else(|| panic!("{active_model} exists in bundled models.json"));
             model
                 .experimental_supported_tools
                 .push("list_dir".to_string());

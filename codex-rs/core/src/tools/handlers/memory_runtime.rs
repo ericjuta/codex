@@ -2,7 +2,6 @@ use crate::agentmemory::AgentmemoryAdapter;
 use crate::config::types::MemoryBackend;
 use crate::function_tool::FunctionCallError;
 use crate::session::agentmemory_ops::MemoryOperationEventArgs;
-use crate::session::agentmemory_ops::send_memory_operation_event_with_scope;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
@@ -15,6 +14,8 @@ use codex_protocol::items::MemoryOperationKind;
 use codex_protocol::items::MemoryOperationScope;
 use codex_protocol::items::MemoryOperationStatus;
 use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::MemoryOperationEvent;
 use codex_protocol::protocol::MemoryOperationSource;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -163,7 +164,30 @@ async fn emit_event_with_scope(
     args: MemoryOperationEventArgs,
     scope: MemoryOperationScope,
 ) {
-    send_memory_operation_event_with_scope(session, &turn.sub_id, args, scope).await;
+    let MemoryOperationEventArgs {
+        source,
+        operation,
+        status,
+        query,
+        summary,
+        detail,
+        context_injected,
+    } = args;
+    session
+        .send_event(
+            turn,
+            EventMsg::MemoryOperation(MemoryOperationEvent {
+                source,
+                operation,
+                status,
+                query,
+                summary,
+                detail,
+                scope,
+                context_injected,
+            }),
+        )
+        .await;
 }
 
 fn require_agentmemory_backend(
@@ -276,13 +300,16 @@ async fn handle_recall(
     };
 
     if response.recalled && applied_scope == MemoryOperationScope::Thread {
+        let persisted_turn_context = session
+            .new_default_turn_with_sub_id(turn.sub_id.clone())
+            .await;
         let message: codex_protocol::models::ResponseItem = DeveloperInstructions::new(format!(
             "<agentmemory-recall>\n{}\n</agentmemory-recall>",
             response.context
         ))
         .into();
         session
-            .record_conversation_items(turn.as_ref(), std::slice::from_ref(&message))
+            .record_conversation_items(&persisted_turn_context, std::slice::from_ref(&message))
             .await;
     }
 

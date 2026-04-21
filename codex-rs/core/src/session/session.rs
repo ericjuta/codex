@@ -846,6 +846,13 @@ impl Session {
             }
             InitialHistory::Cleared => codex_hooks::SessionStartSource::Clear,
         };
+        let review_latest_session_handoff_on_resume =
+            matches!(&initial_history, InitialHistory::Resumed(_))
+                && config.memories.backend == crate::config::types::MemoryBackend::Agentmemory
+                && !matches!(
+                    &session_configuration.session_source,
+                    SessionSource::SubAgent(_)
+                );
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
@@ -889,6 +896,12 @@ impl Session {
             Arc::clone(&config),
             &session_configuration.session_source,
         );
+        if review_latest_session_handoff_on_resume {
+            crate::session::agentmemory_ops::review_latest_session_handoff_automatic(
+                &sess, &config,
+            )
+            .await;
+        }
 
         Ok(sess)
     }

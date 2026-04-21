@@ -1919,6 +1919,93 @@ pub(crate) async fn review_handoffs(
     }
 }
 
+pub(crate) async fn review_latest_session_handoff_automatic(
+    sess: &Arc<Session>,
+    config: &Arc<Config>,
+) {
+    if config.memories.backend != crate::config::types::MemoryBackend::Agentmemory {
+        return;
+    }
+
+    let adapter = AgentmemoryAdapter::new();
+    let project = project_path(config);
+    let session_id = sess.conversation_id.to_string();
+    let query = Some(format!("session {session_id}"));
+    match adapter
+        .list_handoffs(
+            project.as_path(),
+            Some("session"),
+            Some(session_id.as_str()),
+            Some(1),
+            &config.memories,
+        )
+        .await
+    {
+        Ok(response) if response_success(&response) => {
+            let count = response_count(&response, "handoffPackets");
+            let status = if count > 0 {
+                MemoryOperationStatus::Ready
+            } else {
+                MemoryOperationStatus::Empty
+            };
+            let summary = if count > 0 {
+                format!("Reviewed {count} `session` handoff packets for `{session_id}`.")
+            } else {
+                format!("No `session` handoff packets were found for `{session_id}`.")
+            };
+            send_memory_operation_event_with_scope(
+                sess,
+                crate::session::INITIAL_SUBMIT_ID,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Automatic,
+                    operation: MemoryOperationKind::Handoffs,
+                    status,
+                    query,
+                    summary,
+                    detail: response_pretty_json(&response),
+                    context_injected: false,
+                },
+                MemoryOperationScope::None,
+            )
+            .await;
+        }
+        Ok(response) => {
+            send_memory_operation_event_with_scope(
+                sess,
+                crate::session::INITIAL_SUBMIT_ID,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Automatic,
+                    operation: MemoryOperationKind::Handoffs,
+                    status: MemoryOperationStatus::Error,
+                    query,
+                    summary: "Handoff review failed.".to_string(),
+                    detail: response_detail(&response),
+                    context_injected: false,
+                },
+                MemoryOperationScope::None,
+            )
+            .await;
+        }
+        Err(err) => {
+            send_memory_operation_event_with_scope(
+                sess,
+                crate::session::INITIAL_SUBMIT_ID,
+                MemoryOperationEventArgs {
+                    source: MemoryOperationSource::Automatic,
+                    operation: MemoryOperationKind::Handoffs,
+                    status: MemoryOperationStatus::Error,
+                    query,
+                    summary: "Handoff review failed.".to_string(),
+                    detail: Some(err),
+                    context_injected: false,
+                },
+                MemoryOperationScope::None,
+            )
+            .await;
+        }
+    }
+}
+
 pub(crate) async fn generate_handoff(
     sess: &Arc<Session>,
     config: &Arc<Config>,
