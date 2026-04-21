@@ -69,6 +69,7 @@ use codex_protocol::mcp::RequestId as ProtocolRequestId;
 use codex_protocol::user_input::UserInput;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
+use serde_json::json;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -929,6 +930,68 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         .await;
     sess.guardian_review_session.shutdown().await;
     info!("Shutting down Codex instance");
+    let agentmemory_shutdown = {
+        let state = sess.state.lock().await;
+        let session_configuration = &state.session_configuration;
+        (session_configuration.original_config_do_not_use.memories.backend
+            == crate::config::types::MemoryBackend::Agentmemory)
+            .then(|| {
+                (
+                    session_configuration
+                        .original_config_do_not_use
+                        .memories
+                        .clone(),
+                    session_configuration.cwd.display().to_string(),
+                )
+            })
+    };
+    if let Some((memories, cwd)) = agentmemory_shutdown {
+        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+        let session_id = sess.conversation_id.to_string();
+        adapter
+            .capture_event(
+                "Stop",
+                json!({
+                    "session_id": session_id.as_str(),
+                    "cwd": cwd.as_str(),
+                }),
+                &memories,
+            )
+            .await;
+
+        let (summary_success, summary_error) = match adapter.summarize_session(&session_id, &memories).await
+        {
+            Ok(summary) => (summary.success, summary.error),
+            Err(err) => {
+                warn!("failed to summarize agentmemory session {session_id}: {err}");
+                (false, Some(err))
+            }
+        };
+        let mut session_end_payload = json!({
+            "session_id": session_id.as_str(),
+            "cwd": cwd.as_str(),
+            "summary_success": summary_success,
+        });
+        if let Some(summary_error) = &summary_error {
+            session_end_payload["summary_error"] = Value::String(summary_error.clone());
+        }
+        adapter
+            .capture_event("SessionEnd", session_end_payload, &memories)
+            .await;
+
+        if let Err(err) = adapter.end_session(&session_id, &memories).await {
+            warn!("failed to end agentmemory session {session_id}: {err}");
+        }
+
+        if adapter.consolidation_enabled(&memories) {
+            if let Err(err) = adapter.auto_crystallize(Some(0), None, &memories).await {
+                warn!("failed to auto-crystallize agentmemory on shutdown: {err}");
+            }
+            if let Err(err) = adapter.consolidate_pipeline(&memories).await {
+                warn!("failed to run agentmemory consolidate-pipeline on shutdown: {err}");
+            }
+        }
+    }
     let history = sess.clone_history().await;
     let turn_count = history
         .raw_items()

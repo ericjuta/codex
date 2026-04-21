@@ -855,6 +855,35 @@ impl Session {
             state.set_pending_session_start_source(Some(session_start_source));
         }
 
+        if config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
+            let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+            let memories = config.memories.clone();
+            let project = crate::agentmemory::workspace_project(session_configuration.cwd.as_ref());
+            match adapter
+                .start_session(
+                    &conversation_id.to_string(),
+                    project.as_path(),
+                    session_configuration.cwd.as_ref(),
+                    &memories,
+                )
+                .await
+            {
+                Ok(context)
+                    if adapter.inject_context_enabled(&memories) && !context.trim().is_empty() =>
+                {
+                    let mut state = sess.state.lock().await;
+                    state.push_pending_session_start_additional_context(context);
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::warn!(
+                        "failed to register agentmemory session {}: {err}",
+                        conversation_id
+                    );
+                }
+            }
+        }
+
         memories::start_memories_startup_task(
             &sess,
             Arc::clone(&config),

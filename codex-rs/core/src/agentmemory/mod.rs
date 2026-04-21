@@ -202,6 +202,25 @@ impl AgentmemoryAdapter {
         serde_json::from_value(payload).map_err(|err| err.to_string())
     }
 
+    async fn parse_optional_context_result(
+        response: reqwest::Response,
+    ) -> Result<AgentmemoryContextResult, String> {
+        let status = response.status();
+        let body = response.text().await.map_err(|err| err.to_string())?;
+        if !status.is_success() {
+            let detail = if body.trim().is_empty() {
+                String::new()
+            } else {
+                format!(": {body}")
+            };
+            return Err(format!("request failed with status {status}{detail}"));
+        }
+        if body.trim().is_empty() {
+            return Ok(AgentmemoryContextResult::default());
+        }
+        serde_json::from_str::<AgentmemoryContextResult>(&body).map_err(|err| err.to_string())
+    }
+
     /// Builds the developer instructions for the assistant-facing memory recall
     /// tool when the `agentmemory` backend is active.
     pub async fn build_startup_developer_instructions(
@@ -418,7 +437,7 @@ impl AgentmemoryAdapter {
             .send()
             .await
             .map_err(|e| e.to_string())?;
-        let payload = Self::parse_context_result(res).await?;
+        let payload = Self::parse_optional_context_result(res).await?;
         Ok(payload.context)
     }
 
@@ -1276,6 +1295,35 @@ mod tests {
             context,
             "<agentmemory-context>remember this</agentmemory-context>"
         );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn start_session_treats_empty_success_body_as_empty_context() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _url_guard = EnvVarGuard::set("AGENTMEMORY_URL", "");
+        let memories = test_memories(&server);
+
+        Mock::given(method("POST"))
+            .and(path("/agentmemory/session/start"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let context = adapter
+            .start_session(
+                "session-1",
+                Path::new("/tmp/project"),
+                Path::new("/tmp/project"),
+                &memories,
+            )
+            .await
+            .expect("session start should succeed");
+
+        assert_eq!(context, "");
     }
 
     #[test]
