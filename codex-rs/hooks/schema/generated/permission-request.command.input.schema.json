@@ -52,6 +52,7 @@
       "$ref": "#/definitions/PermissionRequestToolInput"
     },
     "tool_name": {
+      "const": "Bash",
       "type": "string"
     },
     "transcript_path": {
