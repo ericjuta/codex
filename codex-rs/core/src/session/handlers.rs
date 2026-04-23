@@ -910,38 +910,47 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
             )
             .await;
 
-        let (summary_success, summary_error) =
-            match adapter.summarize_session(&session_id, &memories).await {
-                Ok(summary) => (summary.success, summary.error),
+        let (closeout_success, closeout_steps, closeout_errors) =
+            match adapter.closeout_session(&session_id, &memories).await {
+                Ok(closeout) => (
+                    closeout.success,
+                    Some(closeout.steps_json()),
+                    (!closeout.errors.is_empty()).then(|| {
+                        closeout
+                            .errors
+                            .into_iter()
+                            .map(|error| {
+                                json!({
+                                    "step": error.step,
+                                    "message": error.message,
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    }),
+                ),
                 Err(err) => {
-                    warn!("failed to summarize agentmemory session {session_id}: {err}");
-                    (false, Some(err))
+                    warn!("failed to close out agentmemory session {session_id}: {err}");
+                    (
+                        false,
+                        None,
+                        Some(vec![json!({ "step": "closeout", "message": err })]),
+                    )
                 }
             };
         let mut session_end_payload = json!({
             "session_id": session_id.as_str(),
             "cwd": cwd.as_str(),
-            "summary_success": summary_success,
+            "closeout_success": closeout_success,
         });
-        if let Some(summary_error) = &summary_error {
-            session_end_payload["summary_error"] = Value::String(summary_error.clone());
+        if let Some(closeout_steps) = closeout_steps {
+            session_end_payload["closeout_steps"] = closeout_steps;
+        }
+        if let Some(closeout_errors) = closeout_errors {
+            session_end_payload["closeout_errors"] = Value::Array(closeout_errors);
         }
         adapter
             .capture_event("SessionEnd", session_end_payload, &memories)
             .await;
-
-        if let Err(err) = adapter.end_session(&session_id, &memories).await {
-            warn!("failed to end agentmemory session {session_id}: {err}");
-        }
-
-        if adapter.consolidation_enabled(&memories) {
-            if let Err(err) = adapter.auto_crystallize(Some(0), None, &memories).await {
-                warn!("failed to auto-crystallize agentmemory on shutdown: {err}");
-            }
-            if let Err(err) = adapter.consolidate_pipeline(&memories).await {
-                warn!("failed to run agentmemory consolidate-pipeline on shutdown: {err}");
-            }
-        }
     }
     let history = sess.clone_history().await;
     let turn_count = history

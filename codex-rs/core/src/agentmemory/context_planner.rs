@@ -3,6 +3,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
 
+use crate::agentmemory::AgentmemoryContextItemSummary;
 use crate::agentmemory::retrieval_trace::AgentmemoryRetrievalTraceSummary;
 use codex_protocol::items::MemoryOperationScope;
 use serde::Serialize;
@@ -44,9 +45,7 @@ impl AgentmemoryContextReason {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AgentmemoryContextEndpoint {
     SessionStart,
-    ContextRefresh,
     Context,
-    Enrich,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -114,6 +113,8 @@ pub(crate) struct AgentmemoryContextEventDetail {
     pub(crate) context_injected: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) retrieval_trace: Option<AgentmemoryRetrievalTraceSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) retrieval_items: Option<Vec<AgentmemoryContextItemSummary>>,
 }
 
 impl AgentmemoryContextEventDetail {

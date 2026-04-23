@@ -1,6 +1,7 @@
 use super::Event;
 use super::Session;
 use crate::agentmemory::AgentmemoryAdapter;
+use crate::agentmemory::AgentmemorySessionBootstrap;
 use crate::agentmemory::workspace_project;
 use crate::config::Config;
 use codex_protocol::items::MemoryOperationKind;
@@ -2006,25 +2007,30 @@ pub(crate) async fn review_handoffs(
 pub(crate) async fn review_latest_session_handoff_automatic(
     sess: &Arc<Session>,
     config: &Arc<Config>,
+    bootstrap: Option<&AgentmemorySessionBootstrap>,
 ) {
     if config.memories.backend != crate::config::types::MemoryBackend::Agentmemory {
         return;
     }
 
-    let adapter = AgentmemoryAdapter::new();
-    let project = project_path(config);
     let session_id = sess.conversation_id.to_string();
     let query = Some(format!("session {session_id}"));
-    match adapter
-        .list_handoffs(
-            project.as_path(),
-            Some("session"),
-            Some(session_id.as_str()),
-            Some(1),
-            &config.memories,
-        )
-        .await
-    {
+    let response = if let Some(bootstrap) = bootstrap {
+        Ok(bootstrap.latest_handoff_packets_response())
+    } else {
+        let adapter = AgentmemoryAdapter::new();
+        let project = project_path(config);
+        adapter
+            .list_handoffs(
+                project.as_path(),
+                Some("session"),
+                Some(session_id.as_str()),
+                Some(1),
+                &config.memories,
+            )
+            .await
+    };
+    match response {
         Ok(response) if response_success(&response) => {
             let count = response_count(&response, "handoffPackets");
             let resume_context = if count > 0 {

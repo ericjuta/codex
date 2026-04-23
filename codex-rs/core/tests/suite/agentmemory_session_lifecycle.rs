@@ -29,34 +29,16 @@ async fn agentmemory_session_lifecycle_is_registered_end_to_end() -> Result<()> 
         .mount(&agentmemory_server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/agentmemory/session/end"))
-        .respond_with(ResponseTemplate::new(200))
-        .expect(1)
-        .mount(&agentmemory_server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/agentmemory/summarize"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "success": false,
-            "error": "no_observations"
-        })))
-        .expect(1)
-        .mount(&agentmemory_server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/agentmemory/crystals/auto"))
+        .and(path("/agentmemory/session/closeout"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "success": true,
-            "groupCount": 0,
-            "crystalIds": [],
-        })))
-        .expect(1)
-        .mount(&agentmemory_server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/agentmemory/consolidate-pipeline"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "success": true,
+            "steps": {
+                "summarize": "ok",
+                "endSession": "ok",
+                "crystallize": "ok",
+                "consolidate": "ok"
+            },
+            "errors": []
         })))
         .expect(1)
         .mount(&agentmemory_server)
@@ -84,10 +66,7 @@ async fn agentmemory_session_lifecycle_is_registered_end_to_end() -> Result<()> 
         "project": cwd,
         "cwd": cwd,
     });
-    let expected_end = json!({
-        "sessionId": session_id,
-    });
-    let expected_summarize = json!({
+    let expected_closeout = json!({
         "sessionId": session_id,
     });
     let expected_stop_observe = json!({
@@ -130,8 +109,13 @@ async fn agentmemory_session_lifecycle_is_registered_end_to_end() -> Result<()> 
         "data": {
             "session_id": session_id,
             "cwd": cwd,
-            "summary_success": false,
-            "summary_error": "no_observations",
+            "closeout_success": true,
+            "closeout_steps": {
+                "summarize": "ok",
+                "endSession": "ok",
+                "crystallize": "ok",
+                "consolidate": "ok",
+            },
         },
     });
 
@@ -152,10 +136,6 @@ async fn agentmemory_session_lifecycle_is_registered_end_to_end() -> Result<()> 
         "session start request should be emitted",
     );
     assert!(
-        normalized.contains(&("/agentmemory/summarize".to_string(), expected_summarize)),
-        "session summarize request should be emitted",
-    );
-    assert!(
         normalized.contains(&("/agentmemory/observe".to_string(), expected_stop_observe)),
         "stop observe payload should be emitted",
     );
@@ -164,25 +144,14 @@ async fn agentmemory_session_lifecycle_is_registered_end_to_end() -> Result<()> 
             "/agentmemory/observe".to_string(),
             expected_session_end_observe
         )),
-        "session end observe payload should be emitted",
-    );
-    assert!(
-        normalized.contains(&("/agentmemory/session/end".to_string(), expected_end)),
-        "session end request should be emitted",
+        "session end observe payload should be emitted: {normalized:?}",
     );
     assert!(
         normalized.contains(&(
-            "/agentmemory/crystals/auto".to_string(),
-            json!({ "olderThanDays": 0 }),
+            "/agentmemory/session/closeout".to_string(),
+            expected_closeout,
         )),
-        "session end should trigger crystals/auto when consolidation is enabled",
-    );
-    assert!(
-        normalized.contains(&(
-            "/agentmemory/consolidate-pipeline".to_string(),
-            json!({ "tier": "all", "force": true }),
-        )),
-        "session end should trigger consolidate-pipeline when consolidation is enabled",
+        "session closeout request should be emitted",
     );
     agentmemory_server.verify().await;
 
@@ -209,21 +178,33 @@ async fn session_start_context_is_injected_from_session_start_without_memory_too
         .and(path("/agentmemory/session/start"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "context": startup_context,
+            "bootstrap": {
+                "context": startup_context,
+                "nextAction": {
+                    "title": "Verify bootstrap adoption"
+                },
+                "guardrails": [
+                    {
+                        "riskLevel": "high",
+                        "explanation": "Keep bootstrap injection bounded"
+                    }
+                ]
+            }
         })))
         .expect(1)
         .mount(&agentmemory_server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/agentmemory/session/end"))
-        .respond_with(ResponseTemplate::new(200))
-        .expect(1)
-        .mount(&agentmemory_server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/agentmemory/summarize"))
+        .and(path("/agentmemory/session/closeout"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "success": false,
-            "error": "no_observations"
+            "success": true,
+            "steps": {
+                "summarize": "ok",
+                "endSession": "ok",
+                "crystallize": "ok",
+                "consolidate": "ok"
+            },
+            "errors": []
         })))
         .expect(1)
         .mount(&agentmemory_server)
@@ -249,10 +230,16 @@ async fn session_start_context_is_injected_from_session_start_without_memory_too
 
     let request = response.single_request();
     assert!(
-        request
-            .message_input_texts("developer")
-            .contains(&startup_context.to_string()),
+        request.body_contains_text(startup_context),
         "startup context should be injected into the first model turn",
+    );
+    assert!(
+        request.body_contains_text("Next action: Verify bootstrap adoption"),
+        "startup bootstrap nextAction should be injected into the first model turn",
+    );
+    assert!(
+        request.body_contains_text("Guardrail: [high] Keep bootstrap injection bounded"),
+        "startup bootstrap guardrails should be injected into the first model turn",
     );
 
     let request_paths = agentmemory_server
@@ -295,16 +282,16 @@ async fn session_start_context_respects_config_inject_context_flag() -> Result<(
         .mount(&agentmemory_server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/agentmemory/session/end"))
-        .respond_with(ResponseTemplate::new(200))
-        .expect(1)
-        .mount(&agentmemory_server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/agentmemory/summarize"))
+        .and(path("/agentmemory/session/closeout"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "success": false,
-            "error": "no_observations"
+            "success": true,
+            "steps": {
+                "summarize": "ok",
+                "endSession": "ok",
+                "crystallize": "ok",
+                "consolidate": "ok"
+            },
+            "errors": []
         })))
         .expect(1)
         .mount(&agentmemory_server)
@@ -365,7 +352,7 @@ async fn prompt_submit_refresh_injects_context_even_when_startup_injection_is_di
         .mount(&agentmemory_server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/agentmemory/context/refresh"))
+        .and(path("/agentmemory/context"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "context": refresh_context,
             "skipped": false,
@@ -374,16 +361,16 @@ async fn prompt_submit_refresh_injects_context_even_when_startup_injection_is_di
         .mount(&agentmemory_server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/agentmemory/session/end"))
-        .respond_with(ResponseTemplate::new(200))
-        .expect(1)
-        .mount(&agentmemory_server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/agentmemory/summarize"))
+        .and(path("/agentmemory/session/closeout"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "success": false,
-            "error": "no_observations"
+            "success": true,
+            "steps": {
+                "summarize": "ok",
+                "endSession": "ok",
+                "crystallize": "ok",
+                "consolidate": "ok"
+            },
+            "errors": []
         })))
         .expect(1)
         .mount(&agentmemory_server)
@@ -424,8 +411,8 @@ async fn prompt_submit_refresh_injects_context_even_when_startup_injection_is_di
         .map(|request| request.url.path().to_string())
         .collect::<Vec<_>>();
     assert!(
-        request_paths.contains(&"/agentmemory/context/refresh".to_string()),
-        "prompt submit should call /agentmemory/context/refresh",
+        request_paths.contains(&"/agentmemory/context".to_string()),
+        "prompt submit should call /agentmemory/context",
     );
 
     Ok(())

@@ -193,6 +193,9 @@ impl HookFamily {
                     "summary_status",
                     "summary_error",
                     "summary_success",
+                    "closeout_success",
+                    "closeout_steps",
+                    "closeout_errors",
                 ],
             ),
         }

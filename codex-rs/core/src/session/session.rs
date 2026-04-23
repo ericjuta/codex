@@ -862,6 +862,7 @@ impl Session {
             state.set_pending_session_start_source(Some(session_start_source));
         }
 
+        let mut agentmemory_session_start_bootstrap = None;
         if config.memories.backend == crate::config::types::MemoryBackend::Agentmemory {
             let adapter = crate::agentmemory::AgentmemoryAdapter::new();
             let memories = config.memories.clone();
@@ -875,13 +876,15 @@ impl Session {
                 )
                 .await
             {
-                Ok(context)
-                    if adapter.inject_context_enabled(&memories) && !context.trim().is_empty() =>
-                {
-                    let mut state = sess.state.lock().await;
-                    state.push_pending_session_start_additional_context(context);
+                Ok(start_result) => {
+                    agentmemory_session_start_bootstrap = start_result.bootstrap.clone();
+                    if adapter.inject_context_enabled(&memories)
+                        && let Some(context) = start_result.developer_context()
+                    {
+                        let mut state = sess.state.lock().await;
+                        state.push_pending_session_start_additional_context(context);
+                    }
                 }
-                Ok(_) => {}
                 Err(err) => {
                     tracing::warn!(
                         "failed to register agentmemory session {}: {err}",
@@ -898,7 +901,9 @@ impl Session {
         );
         if review_latest_session_handoff_on_resume {
             crate::session::agentmemory_ops::review_latest_session_handoff_automatic(
-                &sess, &config,
+                &sess,
+                &config,
+                agentmemory_session_start_bootstrap.as_ref(),
             )
             .await;
         }

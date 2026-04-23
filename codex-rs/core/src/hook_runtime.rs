@@ -87,6 +87,7 @@ struct AutomaticContextInjectionArgs {
     request_budget_tokens: Option<usize>,
     context: String,
     retrieval_trace: Option<AgentmemoryRetrievalTraceSummary>,
+    retrieval_items: Option<Vec<crate::agentmemory::AgentmemoryContextItemSummary>>,
 }
 
 async fn emit_automatic_memory_event(
@@ -129,6 +130,7 @@ async fn register_automatic_context_injection(
         request_budget_tokens,
         context,
         retrieval_trace,
+        retrieval_items,
     } = args;
     let lane_key = reason.lane_key(tool_name.as_deref());
     match sess
@@ -158,6 +160,7 @@ async fn register_automatic_context_injection(
                     retrieval_attempted: true,
                     context_injected: true,
                     retrieval_trace,
+                    retrieval_items,
                 },
                 true,
             )
@@ -190,6 +193,7 @@ async fn register_automatic_context_injection(
                     retrieval_attempted: true,
                     context_injected: false,
                     retrieval_trace,
+                    retrieval_items,
                 },
                 false,
             )
@@ -220,6 +224,7 @@ async fn register_automatic_context_injection(
                     retrieval_attempted: true,
                     context_injected: false,
                     retrieval_trace,
+                    retrieval_items,
                 },
                 false,
             )
@@ -320,6 +325,7 @@ pub(crate) async fn run_pending_session_start_hooks(
                         retrieval_attempted: true,
                         context_injected: true,
                         retrieval_trace: None,
+                        retrieval_items: None,
                     },
                     true,
                 )
@@ -389,6 +395,7 @@ pub(crate) async fn run_pending_session_start_hooks(
                     retrieval_attempted: true,
                     context_injected: true,
                     retrieval_trace: None,
+                    retrieval_items: None,
                 },
                 true,
             )
@@ -441,15 +448,17 @@ pub(crate) async fn run_pre_tool_use_hooks(
             match (agentmemory_capability, agentmemory_input) {
                 (Some(tool_capability), Some(tool_input)) => {
                     match adapter
-                        .enrich_context(
+                        .file_enrichment_context_result(
                             &sess.conversation_id.to_string(),
-                            request.tool_name.as_str(),
                             &tool_input,
+                            turn_context.cwd.as_path(),
                             &memories,
                         )
                         .await
                     {
-                        Ok(context) if !context.trim().is_empty() => {
+                        Ok(payload) if !payload.context.trim().is_empty() => {
+                            let retrieval_trace = payload.retrieval_trace_summary();
+                            let retrieval_items = Some(payload.retrieval_item_summaries());
                             if let Some(context) = register_automatic_context_injection(
                                 sess,
                                 turn_context,
@@ -458,11 +467,12 @@ pub(crate) async fn run_pre_tool_use_hooks(
                                     tool_name: Some(request.tool_name.clone()),
                                     tool_capability: Some(tool_capability),
                                     query: None,
-                                    endpoint: AgentmemoryContextEndpoint::Enrich,
+                                    endpoint: AgentmemoryContextEndpoint::Context,
                                     fallback_endpoint: None,
                                     request_budget_tokens: Some(PRETOOL_CONTEXT_BUDGET_TOKENS),
-                                    context,
-                                    retrieval_trace: None,
+                                    context: payload.context,
+                                    retrieval_trace,
+                                    retrieval_items,
                                 },
                             )
                             .await
@@ -470,7 +480,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
                                 additional_contexts.push(context);
                             }
                         }
-                        Ok(_) => {
+                        Ok(payload) => {
                             emit_automatic_memory_event(
                                 sess,
                                 turn_context,
@@ -485,7 +495,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
                                     tool_name: Some(request.tool_name.clone()),
                                     tool_capability: Some(tool_capability),
                                     query: None,
-                                    endpoint: Some(AgentmemoryContextEndpoint::Enrich),
+                                    endpoint: Some(AgentmemoryContextEndpoint::Context),
                                     fallback_endpoint: None,
                                     request_budget_tokens: Some(PRETOOL_CONTEXT_BUDGET_TOKENS),
                                     backend_error: None,
@@ -495,7 +505,8 @@ pub(crate) async fn run_pre_tool_use_hooks(
                                     fallback_used: false,
                                     retrieval_attempted: true,
                                     context_injected: false,
-                                    retrieval_trace: None,
+                                    retrieval_trace: payload.retrieval_trace_summary(),
+                                    retrieval_items: Some(payload.retrieval_item_summaries()),
                                 },
                                 false,
                             )
@@ -520,7 +531,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
                                     tool_name: Some(request.tool_name.clone()),
                                     tool_capability: Some(tool_capability),
                                     query: None,
-                                    endpoint: Some(AgentmemoryContextEndpoint::Enrich),
+                                    endpoint: Some(AgentmemoryContextEndpoint::Context),
                                     fallback_endpoint: None,
                                     request_budget_tokens: Some(PRETOOL_CONTEXT_BUDGET_TOKENS),
                                     backend_error: Some(err),
@@ -531,6 +542,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
                                     retrieval_attempted: true,
                                     context_injected: false,
                                     retrieval_trace: None,
+                                    retrieval_items: None,
                                 },
                                 false,
                             )
@@ -553,7 +565,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
                             tool_name: Some(request.tool_name.clone()),
                             tool_capability: Some(tool_capability),
                             query: None,
-                            endpoint: Some(AgentmemoryContextEndpoint::Enrich),
+                            endpoint: Some(AgentmemoryContextEndpoint::Context),
                             fallback_endpoint: None,
                             request_budget_tokens: Some(PRETOOL_CONTEXT_BUDGET_TOKENS),
                             backend_error: None,
@@ -564,6 +576,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
                             retrieval_attempted: false,
                             context_injected: false,
                             retrieval_trace: None,
+                            retrieval_items: None,
                         },
                         false,
                     )
@@ -763,6 +776,7 @@ pub(crate) async fn run_user_prompt_submit_hooks(
                         retrieval_attempted: false,
                         context_injected: false,
                         retrieval_trace: None,
+                        retrieval_items: None,
                     },
                     false,
                 )
@@ -770,21 +784,19 @@ pub(crate) async fn run_user_prompt_submit_hooks(
             } else {
                 let session_id = sess.conversation_id.to_string();
                 let query = trimmed_prompt.to_string();
-                let mut resolved_context = None;
-                let mut refresh_error = None;
-                let refresh_result = adapter
+                let resolved_context = match adapter
                     .refresh_context_result(
                         &session_id,
                         turn_context.cwd.as_path(),
                         query.as_str(),
                         &turn_context.config.memories,
                     )
-                    .await;
-
-                match refresh_result {
-                    Ok(payload) if !payload.skipped && !payload.context.trim().is_empty() => {
+                    .await
+                {
+                    Ok(payload) if !payload.context.trim().is_empty() => {
                         let retrieval_trace = payload.retrieval_trace_summary();
-                        resolved_context = register_automatic_context_injection(
+                        let retrieval_items = Some(payload.retrieval_item_summaries());
+                        register_automatic_context_injection(
                             sess,
                             turn_context,
                             AutomaticContextInjectionArgs {
@@ -792,128 +804,81 @@ pub(crate) async fn run_user_prompt_submit_hooks(
                                 tool_name: None,
                                 tool_capability: None,
                                 query: Some(query.clone()),
-                                endpoint: AgentmemoryContextEndpoint::ContextRefresh,
+                                endpoint: AgentmemoryContextEndpoint::Context,
                                 fallback_endpoint: None,
-                                request_budget_tokens: None,
+                                request_budget_tokens: Some(QUERY_CONTEXT_BUDGET_TOKENS),
                                 context: payload.context,
                                 retrieval_trace,
+                                retrieval_items,
                             },
                         )
-                        .await;
+                        .await
                     }
-                    Ok(_) => {}
+                    Ok(payload) => {
+                        emit_automatic_memory_event(
+                            sess,
+                            turn_context,
+                            MemoryOperationStatus::Empty,
+                            Some(query.clone()),
+                            "Agentmemory retrieval returned no usable context for this user turn."
+                                .to_string(),
+                            AgentmemoryContextEventDetail {
+                                reason: AgentmemoryContextReason::UserTurn.summary_label(),
+                                tool_name: None,
+                                tool_capability: None,
+                                query: Some(query.clone()),
+                                endpoint: Some(AgentmemoryContextEndpoint::Context),
+                                fallback_endpoint: None,
+                                request_budget_tokens: Some(QUERY_CONTEXT_BUDGET_TOKENS),
+                                backend_error: None,
+                                scope: MemoryOperationScope::None,
+                                skip_reason: Some(AgentmemoryContextSkipReason::EmptyResult),
+                                duplicate_suppressed: false,
+                                fallback_used: false,
+                                retrieval_attempted: true,
+                                context_injected: false,
+                                retrieval_trace: payload.retrieval_trace_summary(),
+                                retrieval_items: Some(payload.retrieval_item_summaries()),
+                            },
+                            false,
+                        )
+                        .await;
+                        None
+                    }
                     Err(err) => {
                         tracing::warn!(
-                            "failed to refresh agentmemory context on prompt submit: {err}"
+                            "failed to retrieve agentmemory context on prompt submit: {err}"
                         );
-                        refresh_error = Some(err);
-                    }
-                }
-
-                if resolved_context.is_none() {
-                    match adapter
-                        .recall_context_result(
-                            &session_id,
-                            turn_context.cwd.as_path(),
-                            Some(query.as_str()),
-                            QUERY_CONTEXT_BUDGET_TOKENS,
-                            &turn_context.config.memories,
+                        emit_automatic_memory_event(
+                            sess,
+                            turn_context,
+                            MemoryOperationStatus::Error,
+                            Some(query.clone()),
+                            "Agentmemory retrieval failed for this user turn.".to_string(),
+                            AgentmemoryContextEventDetail {
+                                reason: AgentmemoryContextReason::UserTurn.summary_label(),
+                                tool_name: None,
+                                tool_capability: None,
+                                query: Some(query),
+                                endpoint: Some(AgentmemoryContextEndpoint::Context),
+                                fallback_endpoint: None,
+                                request_budget_tokens: Some(QUERY_CONTEXT_BUDGET_TOKENS),
+                                backend_error: Some(err),
+                                scope: MemoryOperationScope::None,
+                                skip_reason: Some(AgentmemoryContextSkipReason::BackendError),
+                                duplicate_suppressed: false,
+                                fallback_used: false,
+                                retrieval_attempted: true,
+                                context_injected: false,
+                                retrieval_trace: None,
+                                retrieval_items: None,
+                            },
+                            false,
                         )
-                        .await
-                    {
-                        Ok(payload) if !payload.context.trim().is_empty() => {
-                            let retrieval_trace = payload.retrieval_trace_summary();
-                            resolved_context = register_automatic_context_injection(
-                                sess,
-                                turn_context,
-                                AutomaticContextInjectionArgs {
-                                    reason: AgentmemoryContextReason::UserTurn,
-                                    tool_name: None,
-                                    tool_capability: None,
-                                    query: Some(query.clone()),
-                                    endpoint: AgentmemoryContextEndpoint::Context,
-                                    fallback_endpoint: Some(
-                                        AgentmemoryContextEndpoint::ContextRefresh,
-                                    ),
-                                    request_budget_tokens: Some(QUERY_CONTEXT_BUDGET_TOKENS),
-                                    context: payload.context,
-                                    retrieval_trace,
-                                },
-                            )
-                            .await;
-                        }
-                        Ok(payload) => {
-                            emit_automatic_memory_event(
-                                sess,
-                                turn_context,
-                                MemoryOperationStatus::Empty,
-                                Some(query.clone()),
-                                "Agentmemory retrieval returned no usable context for this user turn."
-                                    .to_string(),
-                                AgentmemoryContextEventDetail {
-                                    reason: AgentmemoryContextReason::UserTurn.summary_label(),
-                                    tool_name: None,
-                                    tool_capability: None,
-                                    query: Some(query.clone()),
-                                    endpoint: Some(AgentmemoryContextEndpoint::Context),
-                                    fallback_endpoint: Some(
-                                        AgentmemoryContextEndpoint::ContextRefresh,
-                                    ),
-                                    request_budget_tokens: Some(QUERY_CONTEXT_BUDGET_TOKENS),
-                                    backend_error: refresh_error,
-                                    scope: MemoryOperationScope::None,
-                                    skip_reason: Some(AgentmemoryContextSkipReason::EmptyResult),
-                                    duplicate_suppressed: false,
-                                    fallback_used: true,
-                                    retrieval_attempted: true,
-                                    context_injected: false,
-                                    retrieval_trace: payload.retrieval_trace_summary(),
-                                },
-                                false,
-                            )
-                            .await;
-                        }
-                        Err(err) => {
-                            tracing::warn!(
-                                "failed to fall back to /agentmemory/context on prompt submit: {err}"
-                            );
-                            let backend_error = match refresh_error {
-                                Some(refresh_error) => {
-                                    Some(format!("refresh: {refresh_error}; fallback: {err}"))
-                                }
-                                None => Some(err),
-                            };
-                            emit_automatic_memory_event(
-                                sess,
-                                turn_context,
-                                MemoryOperationStatus::Error,
-                                Some(query.clone()),
-                                "Agentmemory retrieval failed for this user turn.".to_string(),
-                                AgentmemoryContextEventDetail {
-                                    reason: AgentmemoryContextReason::UserTurn.summary_label(),
-                                    tool_name: None,
-                                    tool_capability: None,
-                                    query: Some(query),
-                                    endpoint: Some(AgentmemoryContextEndpoint::Context),
-                                    fallback_endpoint: Some(
-                                        AgentmemoryContextEndpoint::ContextRefresh,
-                                    ),
-                                    request_budget_tokens: Some(QUERY_CONTEXT_BUDGET_TOKENS),
-                                    backend_error,
-                                    scope: MemoryOperationScope::None,
-                                    skip_reason: Some(AgentmemoryContextSkipReason::BackendError),
-                                    duplicate_suppressed: false,
-                                    fallback_used: true,
-                                    retrieval_attempted: true,
-                                    context_injected: false,
-                                    retrieval_trace: None,
-                                },
-                                false,
-                            )
-                            .await;
-                        }
+                        .await;
+                        None
                     }
-                }
+                };
 
                 let preview_runs = sess.hooks().preview_user_prompt_submit(&request);
                 let mut outcome = run_context_injecting_hook(

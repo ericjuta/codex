@@ -2442,6 +2442,92 @@ impl MemoryHistoryCell {
         };
 
         match self.operation {
+            MemoryOperationKind::Recall => {
+                if let Some(items) = detail
+                    .get("retrieval_items")
+                    .and_then(serde_json::Value::as_array)
+                {
+                    let shown = items.len().min(2);
+                    for item in items.iter().take(2) {
+                        let source_type = item
+                            .get("source_type")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("unknown");
+                        let title = item
+                            .get("title")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("Untitled memory");
+                        push_labeled(&mut lines, "Retrieved", format!("[{source_type}] {title}"));
+                        if let Some(why) = item.get("why").and_then(serde_json::Value::as_str) {
+                            push_labeled(&mut lines, "Why", why.to_string());
+                        }
+                        if let Some(freshness) =
+                            item.get("freshness").and_then(serde_json::Value::as_str)
+                        {
+                            push_labeled(&mut lines, "Freshness", freshness.to_string());
+                        }
+                        if let Some(confidence) =
+                            item.get("confidence").and_then(serde_json::Value::as_f64)
+                        {
+                            push_labeled(&mut lines, "Confidence", format!("{confidence:.2}"));
+                        }
+                        push_array_values(
+                            &mut lines,
+                            "File",
+                            item.get("relevant_files")
+                                .and_then(serde_json::Value::as_array),
+                            2,
+                        );
+                        push_array_values(
+                            &mut lines,
+                            "Concept",
+                            item.get("concepts").and_then(serde_json::Value::as_array),
+                            2,
+                        );
+                        if let Some(blocker) =
+                            item.get("blocker").and_then(serde_json::Value::as_str)
+                        {
+                            push_labeled(&mut lines, "Blocker", blocker.to_string());
+                        }
+                        if let Some(next_step) = item
+                            .get("recommended_next_step")
+                            .and_then(serde_json::Value::as_str)
+                        {
+                            push_labeled(&mut lines, "Next step", next_step.to_string());
+                        }
+                    }
+                    push_more(&mut lines, items.len().saturating_sub(shown));
+                }
+                if let Some(retrieval_trace) = detail.get("retrieval_trace") {
+                    if let Some(selected_count) = retrieval_trace
+                        .get("selected_count")
+                        .and_then(serde_json::Value::as_u64)
+                    {
+                        push_labeled(
+                            &mut lines,
+                            "Selected",
+                            format!("{selected_count} candidates"),
+                        );
+                    }
+                    if let Some(skipped_count) = retrieval_trace
+                        .get("skipped_count")
+                        .and_then(serde_json::Value::as_u64)
+                    {
+                        push_labeled(&mut lines, "Skipped", format!("{skipped_count} candidates"));
+                    }
+                    push_array_values(
+                        &mut lines,
+                        "Query term",
+                        retrieval_trace
+                            .get("query_terms")
+                            .and_then(serde_json::Value::as_array),
+                        3,
+                    );
+                }
+                if lines.is_empty() {
+                    return None;
+                }
+            }
             MemoryOperationKind::Handoffs | MemoryOperationKind::HandoffGenerate => {
                 let packets = detail
                     .get("handoffPackets")
@@ -4009,6 +4095,72 @@ mod tests {
   Recalled memory context and injected it into the current thread.
   Preview:
     <agentmemory-context>remember this</agentmemory-context>
+"###);
+    }
+
+    #[test]
+    fn memory_recall_automatic_structured_result_snapshot() {
+        let cell = new_memory_operation_event(MemoryOperationEvent {
+            source: MemoryOperationSource::Automatic,
+            operation: MemoryOperationKind::Recall,
+            status: MemoryOperationStatus::Ready,
+            scope: MemoryOperationScope::Turn,
+            query: Some("harbor regression".to_string()),
+            summary: "Auto-injected agentmemory context for this user turn.".to_string(),
+            detail: Some(
+                serde_json::to_string_pretty(&json!({
+                    "reason": "user turn",
+                    "endpoint": "context",
+                    "scope": "turn",
+                    "duplicate_suppressed": false,
+                    "fallback_used": false,
+                    "retrieval_attempted": true,
+                    "context_injected": true,
+                    "retrieval_items": [
+                        {
+                            "source_type": "handoff_packet",
+                            "source_id": "hdf_1",
+                            "title": "Resume harbor follow-up",
+                            "why": "Fresh same-session handoff matched the request",
+                            "freshness": "hot",
+                            "confidence": 0.82,
+                            "relevant_files": ["src/session.rs"],
+                            "concepts": ["resume", "harbor"],
+                            "blocker": "Need to verify the resume event",
+                            "recommended_next_step": "Run the resume-path regression test"
+                        }
+                    ],
+                    "retrieval_trace": {
+                        "selected_count": 1,
+                        "skipped_count": 1,
+                        "query_terms": ["harbor", "regression"]
+                    }
+                }))
+                .expect("recall detail should serialize"),
+            ),
+            context_injected: true,
+        });
+        let rendered = render_lines(&cell.display_lines(90)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+🧠 Memory Recall Ready
+  Query: harbor regression
+  Injected: yes
+  Scope: turn
+  Source: automatic
+  Auto-injected agentmemory context for this user turn.
+  Retrieved: [handoff_packet] Resume harbor follow-up
+  Why: Fresh same-session handoff matched the request
+  Freshness: hot
+  Confidence: 0.82
+  File: src/session.rs
+  Concept: resume
+  Concept: harbor
+  Blocker: Need to verify the resume event
+  Next step: Run the resume-path regression test
+  Selected: 1 candidates
+  Skipped: 1 candidates
+  Query term: harbor
+  Query term: regression
 "###);
     }
 

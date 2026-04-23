@@ -42,6 +42,8 @@ const MEMORY_RUNTIME_DEVELOPER_INSTRUCTIONS: &str = "Use `memory_recall` for pri
      Prefer targeted queries naming the feature, file, bug, or decision you need.\n\
      If the current runtime exposes tools through a wrapper surface (for example, `exec` with nested `tools`), treat the callable nested tool surface as authoritative when checking whether these memory tools are available.\n\
      Do not call memory tools on every turn; first use the current thread context, then reach for agentmemory when that context appears insufficient.";
+const CONTEXT_ITEM_PREVIEW_LIMIT: usize = 3;
+const BOOTSTRAP_TEXT_PREVIEW_LIMIT: usize = 160;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct MemoryRecallResult {
@@ -59,19 +61,301 @@ pub(crate) struct AgentmemoryConsolidateResult {
     pub(crate) total_observations: Option<usize>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-pub(crate) struct AgentmemorySummarizeResult {
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AgentmemoryRetrievalIntent {
+    UserTurn,
+    ManualRecall,
+    FileEnrich,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AgentmemoryContextItem {
     #[serde(default)]
-    pub(crate) success: bool,
-    pub(crate) error: Option<String>,
+    pub(crate) source_type: String,
+    #[serde(default)]
+    pub(crate) source_id: String,
+    #[serde(default)]
+    pub(crate) title: String,
+    #[serde(default)]
+    pub(crate) why: String,
+    #[serde(default)]
+    pub(crate) freshness: String,
+    pub(crate) confidence: Option<f64>,
+    #[serde(default)]
+    pub(crate) relevant_files: Vec<String>,
+    #[serde(default)]
+    pub(crate) concepts: Vec<String>,
+    pub(crate) blocker: Option<String>,
+    pub(crate) recommended_next_step: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct AgentmemoryContextItemSummary {
+    pub(crate) source_type: String,
+    pub(crate) source_id: String,
+    pub(crate) title: String,
+    pub(crate) why: String,
+    pub(crate) freshness: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) confidence: Option<f64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) relevant_files: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) concepts: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) blocker: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) recommended_next_step: Option<String>,
+}
+
+impl From<&AgentmemoryContextItem> for AgentmemoryContextItemSummary {
+    fn from(value: &AgentmemoryContextItem) -> Self {
+        Self {
+            source_type: value.source_type.clone(),
+            source_id: value.source_id.clone(),
+            title: value.title.clone(),
+            why: value.why.clone(),
+            freshness: value.freshness.clone(),
+            confidence: value.confidence,
+            relevant_files: value.relevant_files.clone(),
+            concepts: value.concepts.clone(),
+            blocker: value.blocker.clone(),
+            recommended_next_step: value.recommended_next_step.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AgentmemorySessionBootstrap {
+    #[serde(default)]
+    pub(crate) context: String,
+    #[serde(default)]
+    pub(crate) items: Vec<AgentmemoryContextItem>,
+    pub(crate) latest_handoff: Option<JsonValue>,
+    pub(crate) next_action: Option<JsonValue>,
+    #[serde(default)]
+    pub(crate) guardrails: Vec<JsonValue>,
+    #[serde(default)]
+    pub(crate) active_decisions: Vec<JsonValue>,
+    pub(crate) branch_overlay_summary: Option<String>,
+    pub(crate) retrieval_trace: Option<AgentmemoryRetrievalTrace>,
+}
+
+impl AgentmemorySessionBootstrap {
+    pub(crate) fn retrieval_item_summaries(&self) -> Vec<AgentmemoryContextItemSummary> {
+        self.items
+            .iter()
+            .take(CONTEXT_ITEM_PREVIEW_LIMIT)
+            .map(AgentmemoryContextItemSummary::from)
+            .collect()
+    }
+
+    pub(crate) fn latest_handoff_packets_response(&self) -> JsonValue {
+        let handoff_packets = self
+            .latest_handoff
+            .clone()
+            .map_or_else(Vec::new, |latest_handoff| vec![latest_handoff]);
+        json!({
+            "success": true,
+            "handoffPackets": handoff_packets,
+        })
+    }
+
+    pub(crate) fn coordination_context(&self) -> Option<String> {
+        let mut lines = vec!["<agentmemory-bootstrap>".to_string()];
+        if let Some(branch_overlay_summary) = self
+            .branch_overlay_summary
+            .as_deref()
+            .map(str::trim)
+            .filter(|summary| !summary.is_empty())
+        {
+            lines.push(format!(
+                "Branch overlay: {}",
+                truncate_agentmemory_text(branch_overlay_summary, BOOTSTRAP_TEXT_PREVIEW_LIMIT)
+            ));
+        }
+
+        if let Some(next_action) = self.next_action.as_ref() {
+            if let Some(title) = json_string_field(next_action, "title") {
+                lines.push(format!(
+                    "Next action: {}",
+                    truncate_agentmemory_text(title, BOOTSTRAP_TEXT_PREVIEW_LIMIT)
+                ));
+            }
+            if let Some(description) = json_string_field(next_action, "description") {
+                lines.push(format!(
+                    "Action detail: {}",
+                    truncate_agentmemory_text(description, BOOTSTRAP_TEXT_PREVIEW_LIMIT)
+                ));
+            }
+        }
+
+        for guardrail in self.guardrails.iter().take(2) {
+            let explanation =
+                json_string_field(guardrail, "explanation").unwrap_or("Unnamed guardrail");
+            let risk = json_string_field(guardrail, "riskLevel").unwrap_or("unknown");
+            lines.push(format!(
+                "Guardrail: [{}] {}",
+                truncate_agentmemory_text(risk, 24),
+                truncate_agentmemory_text(explanation, BOOTSTRAP_TEXT_PREVIEW_LIMIT)
+            ));
+        }
+
+        for decision in self.active_decisions.iter().take(2) {
+            let title = json_string_field(decision, "title").unwrap_or("Unnamed decision");
+            let choice = json_string_field(decision, "decision").unwrap_or("-");
+            lines.push(format!(
+                "Decision: {} => {}",
+                truncate_agentmemory_text(title, 96),
+                truncate_agentmemory_text(choice, BOOTSTRAP_TEXT_PREVIEW_LIMIT)
+            ));
+        }
+
+        for item in self.retrieval_item_summaries().iter().take(2) {
+            if !item.title.trim().is_empty() {
+                lines.push(format!(
+                    "Retrieved: {}",
+                    truncate_agentmemory_text(item.title.trim(), BOOTSTRAP_TEXT_PREVIEW_LIMIT)
+                ));
+            }
+            if !item.why.trim().is_empty() {
+                lines.push(format!(
+                    "Why: {}",
+                    truncate_agentmemory_text(item.why.trim(), BOOTSTRAP_TEXT_PREVIEW_LIMIT)
+                ));
+            }
+            if let Some(next_step) = item
+                .recommended_next_step
+                .as_deref()
+                .map(str::trim)
+                .filter(|next_step| !next_step.is_empty())
+            {
+                lines.push(format!(
+                    "Suggested next step: {}",
+                    truncate_agentmemory_text(next_step, BOOTSTRAP_TEXT_PREVIEW_LIMIT)
+                ));
+            }
+        }
+
+        if lines.len() == 1 {
+            return None;
+        }
+        lines.push("</agentmemory-bootstrap>".to_string());
+        Some(lines.join("\n"))
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub(crate) struct AgentmemorySessionStartResult {
+    #[serde(default)]
+    pub(crate) context: String,
+    pub(crate) bootstrap: Option<AgentmemorySessionBootstrap>,
+}
+
+impl AgentmemorySessionStartResult {
+    pub(crate) fn developer_context(&self) -> Option<String> {
+        let base_context = self
+            .context
+            .trim()
+            .is_empty()
+            .then(|| {
+                self.bootstrap
+                    .as_ref()
+                    .map(|bootstrap| bootstrap.context.trim().to_string())
+                    .filter(|context| !context.is_empty())
+            })
+            .flatten()
+            .unwrap_or_else(|| self.context.trim().to_string());
+        let bootstrap_context = self
+            .bootstrap
+            .as_ref()
+            .and_then(AgentmemorySessionBootstrap::coordination_context);
+        let mut sections = Vec::new();
+        if !base_context.is_empty() {
+            sections.push(base_context);
+        }
+        if let Some(bootstrap_context) = bootstrap_context {
+            sections.push(bootstrap_context);
+        }
+        (!sections.is_empty()).then(|| sections.join("\n\n"))
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AgentmemorySessionCloseoutSteps {
+    pub(crate) summarize: String,
+    pub(crate) end_session: String,
+    pub(crate) crystallize: String,
+    pub(crate) consolidate: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub(crate) struct AgentmemorySessionCloseoutError {
+    pub(crate) step: String,
+    pub(crate) message: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AgentmemorySessionCloseoutResult {
+    #[serde(default)]
+    pub(crate) success: bool,
+    pub(crate) steps: AgentmemorySessionCloseoutSteps,
+    #[serde(default)]
+    pub(crate) errors: Vec<AgentmemorySessionCloseoutError>,
+}
+
+impl AgentmemorySessionCloseoutResult {
+    pub(crate) fn steps_json(&self) -> JsonValue {
+        json!({
+            "summarize": self.steps.summarize,
+            "endSession": self.steps.end_session,
+            "crystallize": self.steps.crystallize,
+            "consolidate": self.steps.consolidate,
+        })
+    }
+}
+
+fn truncate_agentmemory_text(value: &str, max_chars: usize) -> String {
+    let mut truncated = value.chars().take(max_chars).collect::<String>();
+    if value.chars().count() > max_chars {
+        truncated.push_str("...");
+    }
+    truncated
+}
+
+fn json_string_field<'a>(value: &'a JsonValue, field: &str) -> Option<&'a str> {
+    value
+        .get(field)
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|field_value| !field_value.is_empty())
+}
+
+struct AgentmemoryContextQuery<'a> {
+    session_id: &'a str,
+    cwd: &'a Path,
+    query: Option<&'a str>,
+    intent: AgentmemoryRetrievalIntent,
+    files: &'a [String],
+    terms: &'a [String],
+    token_budget: usize,
+    max_blocks: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 pub(crate) struct AgentmemoryContextResult {
     #[serde(default)]
     pub(crate) context: String,
     #[serde(default)]
     pub(crate) skipped: bool,
+    #[serde(default)]
+    pub(crate) items: Vec<AgentmemoryContextItem>,
     #[serde(default)]
     pub(crate) trace: Option<AgentmemoryRetrievalTrace>,
 }
@@ -81,6 +365,14 @@ impl AgentmemoryContextResult {
         self.trace
             .as_ref()
             .map(AgentmemoryRetrievalTraceSummary::from)
+    }
+
+    pub(crate) fn retrieval_item_summaries(&self) -> Vec<AgentmemoryContextItemSummary> {
+        self.items
+            .iter()
+            .take(CONTEXT_ITEM_PREVIEW_LIMIT)
+            .map(AgentmemoryContextItemSummary::from)
+            .collect()
     }
 }
 
@@ -128,14 +420,6 @@ impl AgentmemoryAdapter {
             .as_deref()
             .and_then(parse_bool_override)
             .unwrap_or(memories.agentmemory.inject_context)
-    }
-
-    pub(crate) fn consolidation_enabled(&self, memories: &MemoriesConfig) -> bool {
-        std::env::var("CONSOLIDATION_ENABLED")
-            .ok()
-            .as_deref()
-            .and_then(parse_bool_override)
-            .unwrap_or(memories.use_memories)
     }
 
     fn auth_secret(&self, memories: &MemoriesConfig) -> Option<String> {
@@ -202,9 +486,9 @@ impl AgentmemoryAdapter {
         serde_json::from_value(payload).map_err(|err| err.to_string())
     }
 
-    async fn parse_optional_context_result(
+    async fn parse_session_start_result(
         response: reqwest::Response,
-    ) -> Result<AgentmemoryContextResult, String> {
+    ) -> Result<AgentmemorySessionStartResult, String> {
         let status = response.status();
         let body = response.text().await.map_err(|err| err.to_string())?;
         if !status.is_success() {
@@ -216,9 +500,9 @@ impl AgentmemoryAdapter {
             return Err(format!("request failed with status {status}{detail}"));
         }
         if body.trim().is_empty() {
-            return Ok(AgentmemoryContextResult::default());
+            return Ok(AgentmemorySessionStartResult::default());
         }
-        serde_json::from_str::<AgentmemoryContextResult>(&body).map_err(|err| err.to_string())
+        serde_json::from_str::<AgentmemorySessionStartResult>(&body).map_err(|err| err.to_string())
     }
 
     /// Builds the developer instructions for the assistant-facing memory recall
@@ -293,6 +577,52 @@ impl AgentmemoryAdapter {
         (files, search_terms)
     }
 
+    async fn context_result_with_intent(
+        &self,
+        request: AgentmemoryContextQuery<'_>,
+        memories: &MemoriesConfig,
+    ) -> Result<AgentmemoryContextResult, String> {
+        let AgentmemoryContextQuery {
+            session_id,
+            cwd,
+            query,
+            intent,
+            files,
+            terms,
+            token_budget,
+            max_blocks,
+        } = request;
+        let url = format!("{}/agentmemory/context", self.api_base(memories));
+        let project = workspace_project(cwd);
+        let mut body = json!({
+            "sessionId": session_id,
+            "project": project.to_string_lossy(),
+            "budget": token_budget,
+            "intent": intent,
+        });
+        if let Some(query) = query
+            && !query.trim().is_empty()
+        {
+            body["query"] = JsonValue::String(query.to_string());
+        }
+        if !files.is_empty() {
+            body["files"] = json!(files);
+        }
+        if !terms.is_empty() {
+            body["terms"] = json!(terms);
+        }
+        if let Some(max_blocks) = max_blocks {
+            body["maxBlocks"] = json!(max_blocks);
+        }
+        let res = self
+            .request_builder(reqwest::Method::POST, &url, memories)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        Self::parse_context_result(res).await
+    }
+
     /// Asynchronously captures and stores lifecycle events in `agentmemory`.
     ///
     /// This method allows Codex hooks (like `SessionStart`, `PostToolUse`) to
@@ -360,25 +690,20 @@ impl AgentmemoryAdapter {
         token_budget: usize,
         memories: &MemoriesConfig,
     ) -> Result<AgentmemoryContextResult, String> {
-        let url = format!("{}/agentmemory/context", self.api_base(memories));
-        let project = workspace_project(cwd);
-
-        let mut body = json!({
-            "sessionId": session_id,
-            "project": project.to_string_lossy(),
-            "budget": token_budget,
-        });
-        if let Some(q) = query {
-            body["query"] = serde_json::Value::String(q.to_string());
-        }
-
-        let res = self
-            .request_builder(reqwest::Method::POST, &url, memories)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        Self::parse_context_result(res).await
+        self.context_result_with_intent(
+            AgentmemoryContextQuery {
+                session_id,
+                cwd,
+                query,
+                intent: AgentmemoryRetrievalIntent::ManualRecall,
+                files: &[],
+                terms: &[],
+                token_budget,
+                max_blocks: None,
+            },
+            memories,
+        )
+        .await
     }
 
     pub async fn recall_context(
@@ -418,13 +743,13 @@ impl AgentmemoryAdapter {
     }
 
     /// Registers a session so Agentmemory's session-backed views can discover it.
-    pub async fn start_session(
+    pub(crate) async fn start_session(
         &self,
         session_id: &str,
         project: &Path,
         cwd: &Path,
         memories: &MemoriesConfig,
-    ) -> Result<String, String> {
+    ) -> Result<AgentmemorySessionStartResult, String> {
         let url = format!("{}/agentmemory/session/start", self.api_base(memories));
         let body = json!({
             "sessionId": session_id,
@@ -437,38 +762,35 @@ impl AgentmemoryAdapter {
             .send()
             .await
             .map_err(|e| e.to_string())?;
-        let payload = Self::parse_optional_context_result(res).await?;
-        Ok(payload.context)
+        Self::parse_session_start_result(res).await
     }
 
-    pub async fn enrich_context(
+    pub(crate) async fn file_enrichment_context_result(
         &self,
         session_id: &str,
-        tool_name: &str,
         tool_input: &serde_json::Value,
+        cwd: &Path,
         memories: &MemoriesConfig,
-    ) -> Result<String, String> {
+    ) -> Result<AgentmemoryContextResult, String> {
         let tool_input = Self::parse_structured_tool_input(tool_input);
         let (files, terms) = Self::extract_file_enrichment(&tool_input);
         if files.is_empty() && terms.is_empty() {
-            return Ok(String::new());
+            return Ok(AgentmemoryContextResult::default());
         }
-
-        let url = format!("{}/agentmemory/enrich", self.api_base(memories));
-        let body = json!({
-            "sessionId": session_id,
-            "files": files,
-            "terms": terms,
-            "toolName": tool_name,
-        });
-        let res = self
-            .request_builder(reqwest::Method::POST, &url, memories)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|err| err.to_string())?;
-        let payload = Self::parse_context_result(res).await?;
-        Ok(payload.context)
+        self.context_result_with_intent(
+            AgentmemoryContextQuery {
+                session_id,
+                cwd,
+                query: None,
+                intent: AgentmemoryRetrievalIntent::FileEnrich,
+                files: files.as_slice(),
+                terms: terms.as_slice(),
+                token_budget: context_planner::PRETOOL_CONTEXT_BUDGET_TOKENS,
+                max_blocks: Some(8),
+            },
+            memories,
+        )
+        .await
     }
 
     pub(crate) async fn refresh_context_result(
@@ -478,19 +800,38 @@ impl AgentmemoryAdapter {
         query: &str,
         memories: &MemoriesConfig,
     ) -> Result<AgentmemoryContextResult, String> {
-        let url = format!("{}/agentmemory/context/refresh", self.api_base(memories));
-        let body = json!({
-            "sessionId": session_id,
-            "project": workspace_project(cwd).display().to_string(),
-            "query": query,
-        });
+        self.context_result_with_intent(
+            AgentmemoryContextQuery {
+                session_id,
+                cwd,
+                query: Some(query),
+                intent: AgentmemoryRetrievalIntent::UserTurn,
+                files: &[],
+                terms: &[],
+                token_budget: context_planner::QUERY_CONTEXT_BUDGET_TOKENS,
+                max_blocks: None,
+            },
+            memories,
+        )
+        .await
+    }
+
+    pub(crate) async fn closeout_session(
+        &self,
+        session_id: &str,
+        memories: &MemoriesConfig,
+    ) -> Result<AgentmemorySessionCloseoutResult, String> {
+        let url = format!("{}/agentmemory/session/closeout", self.api_base(memories));
+        let body = json!({ "sessionId": session_id });
         let res = self
             .request_builder(reqwest::Method::POST, &url, memories)
             .json(&body)
             .send()
             .await
             .map_err(|err| err.to_string())?;
-        Self::parse_context_result(res).await
+        let payload = Self::json_or_error(res).await?;
+        serde_json::from_value::<AgentmemorySessionCloseoutResult>(payload)
+            .map_err(|err| err.to_string())
     }
 
     /// Marks a session completed so Agentmemory's viewer can stop showing it as active.
@@ -541,25 +882,6 @@ impl AgentmemoryAdapter {
         let payload = Self::json_or_error(res).await?;
         serde_json::from_value::<AgentmemoryConsolidateResult>(payload)
             .map_err(|err| err.to_string())
-    }
-
-    /// Best-effort end-of-session summarization so later recalls can use durable
-    /// cross-session summaries.
-    pub(crate) async fn summarize_session(
-        &self,
-        session_id: &str,
-        memories: &MemoriesConfig,
-    ) -> Result<AgentmemorySummarizeResult, String> {
-        let url = format!("{}/agentmemory/summarize", self.api_base(memories));
-        let body = json!({ "sessionId": session_id });
-        let res = self
-            .request_builder(reqwest::Method::POST, &url, memories)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        let payload = Self::json_or_error(res).await?;
-        serde_json::from_value::<AgentmemorySummarizeResult>(payload).map_err(|err| err.to_string())
     }
 
     /// Asynchronously drops/clears the memory store in `agentmemory`.
@@ -1133,24 +1455,6 @@ impl AgentmemoryAdapter {
             .map_err(|err| err.to_string())?;
         Self::json_or_error(res).await
     }
-
-    pub(crate) async fn consolidate_pipeline(
-        &self,
-        memories: &MemoriesConfig,
-    ) -> Result<JsonValue, String> {
-        let url = format!(
-            "{}/agentmemory/consolidate-pipeline",
-            self.api_base(memories)
-        );
-        let body = json!({ "tier": "all", "force": true });
-        let res = self
-            .request_builder(reqwest::Method::POST, &url, memories)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|err| err.to_string())?;
-        Self::json_or_error(res).await
-    }
 }
 #[cfg(test)]
 #[allow(clippy::await_holding_lock)]
@@ -1281,7 +1585,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let context = adapter
+        let result = adapter
             .start_session(
                 "session-1",
                 Path::new("/tmp/project"),
@@ -1292,9 +1596,10 @@ mod tests {
             .expect("session start should succeed");
 
         assert_eq!(
-            context,
+            result.context,
             "<agentmemory-context>remember this</agentmemory-context>"
         );
+        assert_eq!(result.bootstrap, None);
     }
 
     #[tokio::test]
@@ -1313,7 +1618,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let context = adapter
+        let result = adapter
             .start_session(
                 "session-1",
                 Path::new("/tmp/project"),
@@ -1323,7 +1628,90 @@ mod tests {
             .await
             .expect("session start should succeed");
 
-        assert_eq!(context, "");
+        assert_eq!(result, AgentmemorySessionStartResult::default());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn start_session_parses_bootstrap_payload() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _url_guard = EnvVarGuard::set("AGENTMEMORY_URL", "");
+        let memories = test_memories(&server);
+
+        Mock::given(method("POST"))
+            .and(path("/agentmemory/session/start"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "context": "<agentmemory-context>remember this</agentmemory-context>",
+                "bootstrap": {
+                    "context": "<agentmemory-context>remember this</agentmemory-context>",
+                    "items": [
+                        {
+                            "sourceType": "handoff_packet",
+                            "sourceId": "hdf-1",
+                            "title": "Resume packet",
+                            "why": "fresh session handoff",
+                            "freshness": "hot",
+                            "confidence": 0.81,
+                            "relevantFiles": ["src/session.rs"],
+                            "concepts": ["resume"],
+                            "recommendedNextStep": "verify bootstrap"
+                        }
+                    ],
+                    "latestHandoff": {
+                        "id": "hdf-1",
+                        "summary": "Resume packet"
+                    },
+                    "nextAction": {
+                        "title": "Verify bootstrap"
+                    },
+                    "guardrails": [
+                        {
+                            "riskLevel": "high",
+                            "explanation": "Keep the startup path bounded"
+                        }
+                    ],
+                    "activeDecisions": [
+                        {
+                            "title": "Use bootstrap",
+                            "decision": "Prefer session/start over generic reads"
+                        }
+                    ],
+                    "branchOverlaySummary": "main still has an active overlay"
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let result = adapter
+            .start_session(
+                "session-1",
+                Path::new("/tmp/project"),
+                Path::new("/tmp/project"),
+                &memories,
+            )
+            .await
+            .expect("session start should succeed");
+
+        assert_eq!(
+            result.bootstrap.as_ref().and_then(|bootstrap| {
+                bootstrap
+                    .next_action
+                    .as_ref()
+                    .and_then(|next_action| next_action.get("title"))
+                    .and_then(JsonValue::as_str)
+            }),
+            Some("Verify bootstrap")
+        );
+        assert!(
+            result
+                .developer_context()
+                .expect("bootstrap developer context")
+                .contains("Guardrail: [high] Keep the startup path bounded"),
+            "bootstrap developer context should include guardrail summary",
+        );
     }
 
     #[test]
@@ -1438,7 +1826,7 @@ mod tests {
 
     #[tokio::test]
     #[serial_test::serial(agentmemory_env)]
-    async fn enrich_context_sends_claude_parity_payload_for_supported_tool_names() {
+    async fn file_enrichment_context_uses_unified_context_payload_for_supported_tool_inputs() {
         let server = MockServer::start().await;
         let adapter = AgentmemoryAdapter::new();
         let _guard = ENV_LOCK.lock().expect("lock env");
@@ -1446,24 +1834,26 @@ mod tests {
         let memories = test_memories(&server);
 
         Mock::given(method("POST"))
-            .and(path("/agentmemory/enrich"))
+            .and(path("/agentmemory/context"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "context": "" })))
             .expect(5)
             .mount(&server)
             .await;
 
-        for (tool_name, input) in [
-            ("Edit", json!({ "paths": ["src/lib.rs"] })),
-            ("Write", json!({ "file_path": "src/new.rs" })),
-            ("Read", json!({ "path": "src/main.rs" })),
-            ("Glob", json!({ "dir_path": "/tmp/project" })),
-            (
-                "Grep",
-                json!({ "paths": ["src"], "pattern": "memory_recall" }),
-            ),
+        for input in [
+            json!({ "paths": ["src/lib.rs"] }),
+            json!({ "file_path": "src/new.rs" }),
+            json!({ "path": "src/main.rs" }),
+            json!({ "dir_path": "/tmp/project" }),
+            json!({ "paths": ["src"], "pattern": "memory_recall" }),
         ] {
             adapter
-                .enrich_context("session-1", tool_name, &input, &memories)
+                .file_enrichment_context_result(
+                    "session-1",
+                    &input,
+                    Path::new("/tmp/project"),
+                    &memories,
+                )
                 .await
                 .expect("enrichment should succeed");
         }
@@ -1483,33 +1873,44 @@ mod tests {
             vec![
                 json!({
                     "sessionId": "session-1",
+                    "project": "/tmp/project",
+                    "budget": context_planner::PRETOOL_CONTEXT_BUDGET_TOKENS,
+                    "intent": "file_enrich",
                     "files": ["src/lib.rs"],
-                    "terms": [],
-                    "toolName": "Edit",
+                    "maxBlocks": 8,
                 }),
                 json!({
                     "sessionId": "session-1",
+                    "project": "/tmp/project",
+                    "budget": context_planner::PRETOOL_CONTEXT_BUDGET_TOKENS,
+                    "intent": "file_enrich",
                     "files": ["src/new.rs"],
-                    "terms": [],
-                    "toolName": "Write",
+                    "maxBlocks": 8,
                 }),
                 json!({
                     "sessionId": "session-1",
+                    "project": "/tmp/project",
+                    "budget": context_planner::PRETOOL_CONTEXT_BUDGET_TOKENS,
+                    "intent": "file_enrich",
                     "files": ["src/main.rs"],
-                    "terms": [],
-                    "toolName": "Read",
+                    "maxBlocks": 8,
                 }),
                 json!({
                     "sessionId": "session-1",
+                    "project": "/tmp/project",
+                    "budget": context_planner::PRETOOL_CONTEXT_BUDGET_TOKENS,
+                    "intent": "file_enrich",
                     "files": ["/tmp/project"],
-                    "terms": [],
-                    "toolName": "Glob",
+                    "maxBlocks": 8,
                 }),
                 json!({
                     "sessionId": "session-1",
+                    "project": "/tmp/project",
+                    "budget": context_planner::PRETOOL_CONTEXT_BUDGET_TOKENS,
+                    "intent": "file_enrich",
                     "files": ["src"],
                     "terms": ["memory_recall"],
-                    "toolName": "Grep",
+                    "maxBlocks": 8,
                 }),
             ]
         );
@@ -1525,7 +1926,7 @@ mod tests {
         let memories = test_memories(&server);
 
         Mock::given(method("POST"))
-            .and(path("/agentmemory/context/refresh"))
+            .and(path("/agentmemory/context"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "context": "<agentmemory-context>fresh</agentmemory-context>",
                 "skipped": false,
@@ -1560,6 +1961,8 @@ mod tests {
             json!({
                 "sessionId": "session-1",
                 "project": "/tmp/project",
+                "budget": context_planner::QUERY_CONTEXT_BUDGET_TOKENS,
+                "intent": "user_turn",
                 "query": "debug agentmemory refresh semantics",
             })
         );
@@ -1575,7 +1978,7 @@ mod tests {
         let memories = test_memories(&server);
 
         Mock::given(method("POST"))
-            .and(path("/agentmemory/context/refresh"))
+            .and(path("/agentmemory/context"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "context": "<agentmemory-context>fresh</agentmemory-context>",
                 "skipped": false,
@@ -1697,9 +2100,55 @@ mod tests {
                 "sessionId": "session-1",
                 "project": "/tmp/project",
                 "budget": DEFAULT_RUNTIME_RECALL_TOKEN_BUDGET,
+                "intent": "manual_recall",
                 "query": "debug agentmemory recall semantics",
             })
         );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(agentmemory_env)]
+    async fn closeout_session_posts_bounded_closeout_payload() {
+        let server = MockServer::start().await;
+        let adapter = AgentmemoryAdapter::new();
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _url_guard = EnvVarGuard::set("AGENTMEMORY_URL", "");
+        let memories = test_memories(&server);
+
+        Mock::given(method("POST"))
+            .and(path("/agentmemory/session/closeout"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "success": false,
+                "steps": {
+                    "summarize": "ok",
+                    "endSession": "ok",
+                    "crystallize": "failed",
+                    "consolidate": "ok"
+                },
+                "errors": [
+                    {
+                        "step": "crystallize",
+                        "message": "timeout"
+                    }
+                ]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let result = adapter
+            .closeout_session("session-1", &memories)
+            .await
+            .expect("closeout should succeed");
+
+        assert!(!result.success);
+        assert_eq!(result.steps.crystallize, "failed");
+        assert_eq!(result.errors[0].step, "crystallize");
+
+        let requests = server.received_requests().await.unwrap_or_default();
+        let body = serde_json::from_slice::<serde_json::Value>(&requests[0].body)
+            .expect("closeout request body should be json");
+        assert_eq!(body, json!({ "sessionId": "session-1" }));
     }
 
     #[tokio::test]

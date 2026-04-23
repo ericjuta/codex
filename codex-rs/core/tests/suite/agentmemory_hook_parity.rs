@@ -39,10 +39,13 @@ fn normalized_observe_payload(mut payload: serde_json::Value) -> serde_json::Val
     payload
 }
 
-async fn mount_agentmemory_runtime(agentmemory_server: &MockServer) {
+async fn mount_agentmemory_runtime_with_session_start(
+    agentmemory_server: &MockServer,
+    session_start_body: serde_json::Value,
+) {
     Mock::given(method("POST"))
         .and(path("/agentmemory/session/start"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "context": "" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(session_start_body))
         .mount(agentmemory_server)
         .await;
     Mock::given(method("POST"))
@@ -51,17 +54,23 @@ async fn mount_agentmemory_runtime(agentmemory_server: &MockServer) {
         .mount(agentmemory_server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/agentmemory/session/end"))
-        .respond_with(ResponseTemplate::new(200))
-        .mount(agentmemory_server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/agentmemory/summarize"))
+        .and(path("/agentmemory/session/closeout"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "success": false,
-            "error": "no_observations",
+            "success": true,
+            "steps": {
+                "summarize": "ok",
+                "endSession": "ok",
+                "crystallize": "ok",
+                "consolidate": "ok"
+            },
+            "errors": [],
         })))
         .mount(agentmemory_server)
+        .await;
+}
+
+async fn mount_agentmemory_runtime(agentmemory_server: &MockServer) {
+    mount_agentmemory_runtime_with_session_start(agentmemory_server, json!({ "context": "" }))
         .await;
 }
 
@@ -119,7 +128,7 @@ async fn pre_tool_enrichment_injects_context_for_write_lane() -> Result<()> {
     let agentmemory_server = MockServer::start().await;
     mount_agentmemory_runtime(&agentmemory_server).await;
     Mock::given(method("POST"))
-        .and(path("/agentmemory/enrich"))
+        .and(path("/agentmemory/context"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "context": "<agentmemory-context>glob tide note</agentmemory-context>",
         })))
@@ -161,7 +170,7 @@ async fn pre_tool_enrichment_injects_context_for_write_lane() -> Result<()> {
     )
     .await;
 
-    test.submit_turn("list the current directory").await?;
+    test.submit_turn("ok").await?;
     test.codex.shutdown_and_wait().await?;
 
     let requests = responses.requests();
@@ -180,8 +189,8 @@ async fn pre_tool_enrichment_injects_context_for_write_lane() -> Result<()> {
         .map(|request| String::from_utf8_lossy(&request.body).into_owned())
         .collect::<Vec<_>>();
     assert!(
-        agentmemory_paths.contains(&"/agentmemory/enrich".to_string()),
-        "write lane should call /agentmemory/enrich: {agentmemory_paths:?}; observe={observe_bodies:?}",
+        agentmemory_paths.contains(&"/agentmemory/context".to_string()),
+        "write lane should call /agentmemory/context: {agentmemory_paths:?}; observe={observe_bodies:?}",
     );
     assert!(
         requests[1].body_contains_text("glob tide note"),
@@ -297,7 +306,7 @@ async fn pre_tool_enrichment_skips_non_matching_tools() -> Result<()> {
     )
     .await;
 
-    test.submit_turn("update the plan").await?;
+    test.submit_turn("ok").await?;
     test.codex.shutdown_and_wait().await?;
 
     let request_paths = agentmemory_server
@@ -308,7 +317,7 @@ async fn pre_tool_enrichment_skips_non_matching_tools() -> Result<()> {
         .map(|request| request.url.path().to_string())
         .collect::<Vec<_>>();
     assert!(
-        !request_paths.contains(&"/agentmemory/enrich".to_string()),
+        !request_paths.contains(&"/agentmemory/context".to_string()),
         "non-matching tools should not trigger agentmemory enrichment",
     );
 
@@ -322,7 +331,7 @@ async fn glob_lane_enrichment_and_post_tool_capture_use_native_contract() -> Res
     let agentmemory_server = MockServer::start().await;
     mount_agentmemory_runtime(&agentmemory_server).await;
     Mock::given(method("POST"))
-        .and(path("/agentmemory/enrich"))
+        .and(path("/agentmemory/context"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "context": "<agentmemory-context>glob lane note</agentmemory-context>",
         })))
@@ -383,7 +392,7 @@ async fn glob_lane_enrichment_and_post_tool_capture_use_native_contract() -> Res
     )
     .await;
 
-    test.submit_turn("list the directory").await?;
+    test.submit_turn("ok").await?;
     test.codex.shutdown_and_wait().await?;
 
     let requests = responses.requests();
@@ -502,23 +511,14 @@ async fn assistant_result_is_emitted_as_native_observe_payload() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial(agentmemory_env)]
-async fn user_turn_retrieval_falls_back_to_context_and_emits_automatic_ready_event() -> Result<()> {
+async fn user_turn_retrieval_uses_unified_context_and_emits_automatic_ready_event() -> Result<()> {
     let model_server = start_mock_server().await;
     let agentmemory_server = MockServer::start().await;
     mount_agentmemory_runtime(&agentmemory_server).await;
     Mock::given(method("POST"))
-        .and(path("/agentmemory/context/refresh"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "context": "",
-            "skipped": true,
-        })))
-        .expect(1)
-        .mount(&agentmemory_server)
-        .await;
-    Mock::given(method("POST"))
         .and(path("/agentmemory/context"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "context": "<agentmemory-context>fallback harbor note</agentmemory-context>",
+            "context": "<agentmemory-context>harbor note</agentmemory-context>",
             "trace": {
                 "queryTerms": ["fix", "harbor", "regression"],
                 "laneBudgets": { "hot": 100, "warm": 200, "cold": 300 },
@@ -574,8 +574,8 @@ async fn user_turn_retrieval_falls_back_to_context_and_emits_automatic_ready_eve
     let requests = responses.requests();
     assert_eq!(requests.len(), 1);
     assert!(
-        requests[0].body_contains_text("fallback harbor note"),
-        "fallback /agentmemory/context result should be injected into the turn body",
+        requests[0].body_contains_text("harbor note"),
+        "unified /agentmemory/context result should be injected into the turn body",
     );
     let automatic_event = events
         .into_iter()
@@ -594,10 +594,6 @@ async fn user_turn_retrieval_falls_back_to_context_and_emits_automatic_ready_eve
     let detail = automatic_event
         .detail
         .expect("automatic event should include detail");
-    assert!(
-        detail.contains("\"fallback_endpoint\": \"context_refresh\""),
-        "detail should record refresh->context fallback: {detail}",
-    );
     assert!(
         detail.contains("\"retrieval_trace\""),
         "detail should preserve retrieval trace summary: {detail}",
@@ -693,29 +689,11 @@ async fn assistant_memory_recall_thread_scope_persists_and_reports_scope() -> Re
 #[serial(agentmemory_env)]
 async fn resume_auto_reviews_latest_session_handoff_packet() -> Result<()> {
     let model_server = start_mock_server().await;
-    let agentmemory_server = MockServer::start().await;
-    mount_agentmemory_runtime(&agentmemory_server).await;
-    Mock::given(method("GET"))
-        .and(path("/agentmemory/handoffs"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "success": true,
-            "handoffPackets": [
-                {
-                    "id": "hdf_resume_1",
-                    "summary": "Resume the packet-first polish work",
-                    "scopeType": "session",
-                    "scopeId": "thread-fill-in",
-                    "recommendedNextStep": "Verify the automatic resume surface",
-                    "blockers": ["none"],
-                }
-            ]
-        })))
-        .expect(1)
-        .mount(&agentmemory_server)
-        .await;
+    let initial_agentmemory_server = MockServer::start().await;
+    mount_agentmemory_runtime(&initial_agentmemory_server).await;
 
     let mut initial_builder = test_codex().with_config({
-        let agentmemory_base_url = agentmemory_server.uri();
+        let agentmemory_base_url = initial_agentmemory_server.uri();
         move |config| {
             config.memories.backend = MemoryBackend::Agentmemory;
             config.memories.agentmemory.base_url = agentmemory_base_url;
@@ -740,8 +718,27 @@ async fn resume_auto_reviews_latest_session_handoff_packet() -> Result<()> {
         .expect("resume test should have a rollout path");
     initial.codex.shutdown_and_wait().await?;
 
+    let resume_agentmemory_server = MockServer::start().await;
+    mount_agentmemory_runtime_with_session_start(
+        &resume_agentmemory_server,
+        json!({
+            "context": "",
+            "bootstrap": {
+                "latestHandoff": {
+                    "id": "hdf_resume_1",
+                    "summary": "Resume the packet-first polish work",
+                    "scopeType": "session",
+                    "scopeId": "thread-fill-in",
+                    "recommendedNextStep": "Verify the automatic resume surface",
+                    "blockers": ["none"]
+                }
+            }
+        }),
+    )
+    .await;
+
     let mut resume_builder = test_codex().with_config({
-        let agentmemory_base_url = agentmemory_server.uri();
+        let agentmemory_base_url = resume_agentmemory_server.uri();
         move |config| {
             config.memories.backend = MemoryBackend::Agentmemory;
             config.memories.agentmemory.base_url = agentmemory_base_url;
@@ -789,30 +786,16 @@ async fn resume_auto_reviews_latest_session_handoff_packet() -> Result<()> {
         json!("Verify the automatic resume surface"),
     );
 
-    let handoff_requests = agentmemory_server
+    let handoff_requests = resume_agentmemory_server
         .received_requests()
         .await
         .unwrap_or_default()
         .into_iter()
         .filter(|request| request.url.path() == "/agentmemory/handoffs")
         .collect::<Vec<_>>();
-    assert_eq!(handoff_requests.len(), 1);
-    let request = &handoff_requests[0];
-    let query = request
-        .url
-        .query()
-        .expect("handoff review should include query params");
     assert!(
-        query.contains("scopeType=session"),
-        "resume handoff review should target session scope: {query}",
-    );
-    assert!(
-        query.contains(&format!("scopeId={resumed_session_id}")),
-        "resume handoff review should target the resumed session id: {query}",
-    );
-    assert!(
-        query.contains("limit=1"),
-        "resume handoff review should only fetch the latest packet: {query}",
+        handoff_requests.is_empty(),
+        "resume should not issue a generic /agentmemory/handoffs read when bootstrap provides latestHandoff",
     );
 
     Ok(())
@@ -822,30 +805,11 @@ async fn resume_auto_reviews_latest_session_handoff_packet() -> Result<()> {
 #[serial(agentmemory_env)]
 async fn resume_handoff_packet_context_is_first_turn_only() -> Result<()> {
     let model_server = start_mock_server().await;
-    let agentmemory_server = MockServer::start().await;
-    mount_agentmemory_runtime(&agentmemory_server).await;
-    Mock::given(method("GET"))
-        .and(path("/agentmemory/handoffs"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "success": true,
-            "handoffPackets": [
-                {
-                    "id": "hdf_resume_1",
-                    "title": "Resume packet",
-                    "summary": "Resume the packet-first polish work",
-                    "scopeType": "session",
-                    "scopeId": "thread-fill-in",
-                    "recommendedNextStep": "Verify the automatic resume surface",
-                    "blockers": ["finish the guarded follow-up"],
-                }
-            ]
-        })))
-        .expect(1)
-        .mount(&agentmemory_server)
-        .await;
+    let initial_agentmemory_server = MockServer::start().await;
+    mount_agentmemory_runtime(&initial_agentmemory_server).await;
 
     let mut initial_builder = test_codex().with_config({
-        let agentmemory_base_url = agentmemory_server.uri();
+        let agentmemory_base_url = initial_agentmemory_server.uri();
         move |config| {
             config.memories.backend = MemoryBackend::Agentmemory;
             config.memories.agentmemory.base_url = agentmemory_base_url;
@@ -871,6 +835,26 @@ async fn resume_handoff_packet_context_is_first_turn_only() -> Result<()> {
         .expect("resume test should have a rollout path");
     initial.codex.shutdown_and_wait().await?;
 
+    let resume_agentmemory_server = MockServer::start().await;
+    mount_agentmemory_runtime_with_session_start(
+        &resume_agentmemory_server,
+        json!({
+            "context": "",
+            "bootstrap": {
+                "latestHandoff": {
+                    "id": "hdf_resume_1",
+                    "title": "Resume packet",
+                    "summary": "Resume the packet-first polish work",
+                    "scopeType": "session",
+                    "scopeId": "thread-fill-in",
+                    "recommendedNextStep": "Verify the automatic resume surface",
+                    "blockers": ["finish the guarded follow-up"]
+                }
+            }
+        }),
+    )
+    .await;
+
     let resumed_responses = mount_sse_sequence(
         &model_server,
         vec![
@@ -889,7 +873,7 @@ async fn resume_handoff_packet_context_is_first_turn_only() -> Result<()> {
     .await;
 
     let mut resume_builder = test_codex().with_config({
-        let agentmemory_base_url = agentmemory_server.uri();
+        let agentmemory_base_url = resume_agentmemory_server.uri();
         move |config| {
             config.memories.backend = MemoryBackend::Agentmemory;
             config.memories.agentmemory.base_url = agentmemory_base_url;
@@ -961,20 +945,11 @@ async fn resume_handoff_packet_context_is_first_turn_only() -> Result<()> {
 #[serial(agentmemory_env)]
 async fn resume_without_handoff_packet_emits_explicit_empty_item() -> Result<()> {
     let model_server = start_mock_server().await;
-    let agentmemory_server = MockServer::start().await;
-    mount_agentmemory_runtime(&agentmemory_server).await;
-    Mock::given(method("GET"))
-        .and(path("/agentmemory/handoffs"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "success": true,
-            "handoffPackets": []
-        })))
-        .expect(1)
-        .mount(&agentmemory_server)
-        .await;
+    let initial_agentmemory_server = MockServer::start().await;
+    mount_agentmemory_runtime(&initial_agentmemory_server).await;
 
     let mut initial_builder = test_codex().with_config({
-        let agentmemory_base_url = agentmemory_server.uri();
+        let agentmemory_base_url = initial_agentmemory_server.uri();
         move |config| {
             config.memories.backend = MemoryBackend::Agentmemory;
             config.memories.agentmemory.base_url = agentmemory_base_url;
@@ -1000,6 +975,18 @@ async fn resume_without_handoff_packet_emits_explicit_empty_item() -> Result<()>
         .expect("resume test should have a rollout path");
     initial.codex.shutdown_and_wait().await?;
 
+    let resume_agentmemory_server = MockServer::start().await;
+    mount_agentmemory_runtime_with_session_start(
+        &resume_agentmemory_server,
+        json!({
+            "context": "",
+            "bootstrap": {
+                "latestHandoff": null
+            }
+        }),
+    )
+    .await;
+
     let resumed_responses = mount_sse_sequence(
         &model_server,
         vec![sse(vec![
@@ -1011,7 +998,7 @@ async fn resume_without_handoff_packet_emits_explicit_empty_item() -> Result<()>
     .await;
 
     let mut resume_builder = test_codex().with_config({
-        let agentmemory_base_url = agentmemory_server.uri();
+        let agentmemory_base_url = resume_agentmemory_server.uri();
         move |config| {
             config.memories.backend = MemoryBackend::Agentmemory;
             config.memories.agentmemory.base_url = agentmemory_base_url;
