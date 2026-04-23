@@ -225,6 +225,68 @@ Required behavior:
 - `Feature::MemoryTool` continues to gate `memory_recall`, but does not disable
   the hook-based injection lane
 
+## Confirmed Live Endpoint Inventory
+
+This section is descriptive rather than normative. It records what the current
+`codex` branch is actually wired to call today so operators do not have to
+reconstruct endpoint coverage from multiple codepaths.
+
+### Always-On Runtime Hooks
+
+Confirmed runtime hooks:
+
+- `POST /agentmemory/observe`
+- `POST /agentmemory/session/start`
+- `POST /agentmemory/context/refresh`
+- `POST /agentmemory/context` when `context/refresh` is skipped, empty, or
+  errors and query-aware retrieval still applies
+- `POST /agentmemory/enrich`
+- `GET /agentmemory/handoffs` for best-effort latest session handoff packet
+  review on resume
+- `POST /agentmemory/summarize`
+- `POST /agentmemory/session/end`
+- `POST /agentmemory/crystals/auto` when consolidation is enabled
+- `POST /agentmemory/consolidate-pipeline` when consolidation is enabled
+
+### Explicit Human / Assistant Surfaces
+
+Confirmed explicit Codex-backed endpoint surface:
+
+- `POST /agentmemory/remember`
+- `POST /agentmemory/consolidate`
+- `GET /agentmemory/lessons`
+- `POST /agentmemory/lessons/search`
+- `GET /agentmemory/crystals`
+- `POST /agentmemory/crystals/create`
+- `POST /agentmemory/reflect`
+- `GET /agentmemory/insights`
+- `POST /agentmemory/insights/search`
+- `GET /agentmemory/actions`
+- `POST /agentmemory/actions`
+- `POST /agentmemory/actions/update`
+- `GET /agentmemory/frontier`
+- `GET /agentmemory/next`
+- `GET /agentmemory/missions`
+- `GET /agentmemory/missions/:id`
+- `GET /agentmemory/branch-overlays`
+- `GET /agentmemory/guardrails`
+- `POST /agentmemory/guardrails/search`
+- `GET /agentmemory/decisions`
+- `POST /agentmemory/decisions/search`
+- `GET /agentmemory/dossiers`
+- `GET /agentmemory/dossiers/get`
+- `GET /agentmemory/routine-candidates`
+- `GET /agentmemory/handoffs`
+- `GET /agentmemory/handoffs/:id`
+- `POST /agentmemory/handoffs/generate`
+
+### Current Caveat
+
+- The adapter also exposes `POST /agentmemory/forget`, but current
+  `DropMemories` behavior in `codex` is local state cleanup rather than a
+  backend `forget` call. Do not treat `/agentmemory/forget` as a live
+  Codex-backed endpoint until that wiring exists.
+
 ## Runtime Surfaces
 
 ### Human Surface
