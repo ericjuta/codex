@@ -707,6 +707,7 @@ fn notification_sender(inner: &Inner) -> Option<RpcNotificationSender> {
 mod tests {
     use super::*;
     use codex_config::types::ShellEnvironmentPolicyInherit;
+    use codex_utils_pty::ProcessDriver;
     use pretty_assertions::assert_eq;
     use tokio::sync::oneshot;
     use tokio::time::timeout;
@@ -877,7 +878,7 @@ mod tests {
         let previous = processes.insert(
             process_id.clone(),
             ProcessEntry::Running(Box::new(RunningProcess {
-                session: dummy_session().await,
+                session: dummy_session(),
                 tty: false,
                 pipe_stdin: false,
                 output: VecDeque::new(),
@@ -923,16 +924,21 @@ mod tests {
         }
     }
 
-    async fn dummy_session() -> ExecCommandSession {
-        codex_utils_pty::spawn_pipe_process_no_stdin(
-            "true",
-            &[],
-            std::path::Path::new("/tmp"),
-            &HashMap::new(),
-            &None,
-        )
-        .await
-        .expect("spawn dummy process")
+    fn dummy_session() -> ExecCommandSession {
+        let (writer_tx, _writer_rx) = mpsc::channel(1);
+        let (_stdout_tx, stdout_rx) = tokio::sync::broadcast::channel(1);
+        let (_stderr_tx, stderr_rx) = tokio::sync::broadcast::channel(1);
+        let (_exit_tx, exit_rx) = oneshot::channel();
+
+        codex_utils_pty::spawn_from_driver(ProcessDriver {
+            writer_tx,
+            stdout_rx,
+            stderr_rx: Some(stderr_rx),
+            exit_rx,
+            terminator: None,
+            writer_handle: None,
+            resizer: None,
+        })
         .session
     }
 
