@@ -4,6 +4,8 @@
 
 Pending after the April 20, 2026 feature-complete lane.
 
+Updated April 23, 2026 after the follow-up parity check and resume UX review.
+
 This document tracks what remains after the core `agentmemory` integration is
 already working in `codex`.
 
@@ -20,6 +22,9 @@ The current branch already ships:
 - replay/history support for the new memory operations
 - packet-backed resume integration
 - richer TUI rendering for key review surfaces
+- automatic latest-session handoff review on real resume
+- replay/app-server/manual review consistency checks for handoff rendering
+- app-server `thread/resume` mapping coverage for automatic handoff review items
 
 That means the product lane is already landed.
 
@@ -27,8 +32,9 @@ What remains is the usual post-feature work:
 
 - broader validation
 - hygiene and lint cleanup
-- optional UX polish where the current implementation is correct but still
-  generic
+- the final packet-first resume behavior decision and its bounded first-turn
+  implementation
+- final doc cleanup now that the intent is clearer
 
 ## Goal
 
@@ -120,15 +126,9 @@ Goal:
 
 What remains:
 
-- richer presentation for structured memory review payloads where the current
-  rendering is still generic
-- selective improvements to readability, grouping, and skimmability of:
-  - guardrails
-  - decisions
-  - dossiers
-  - handoffs
-  - routine candidates
-- additional snapshot coverage for the improved rendering states
+- treat this track as mostly complete on the current branch
+- only reopen it if broader validation turns up concrete readability gaps that
+  still hurt daily use
 
 Expected outputs:
 
@@ -145,15 +145,14 @@ Notes:
 
 Goal:
 
-- make packet-backed resume behavior feel more explicit and reliable for human
-  operators
+- make packet-backed resume behavior explicit, reliable, and useful for both the
+  human operator and the first resumed turn
 
 What remains:
 
 - verify that resume always surfaces the most relevant session-scoped handoff
   packet at the right time
-- evaluate whether the current post-resume handoff review should be made more
-  visible or more user-controllable
+- implement the agreed packet-first resume contract described below
 - ensure packet-first resume semantics remain consistent across:
   - slash-command review
   - resumed app-server threads
@@ -163,6 +162,8 @@ Expected outputs:
 
 - a clearly defined “packet-first resume” UX contract
 - tests for the resume path where packet review should appear automatically
+- tests for bounded first-turn packet-derived context injection and
+  first-turn-only consumption
 
 Current contract on this branch:
 
@@ -174,10 +175,48 @@ Current contract on this branch:
 - the packet is surfaced as a human review artifact, not injected into the
   model prompt
 
+Agreed target contract:
+
+- missing orientation is worse than extra noise
+- on a real resume attach, Codex should still automatically review the latest
+  session-scoped handoff packet
+- the packet should remain visible in normal history, not a separate banner or
+  dashboard
+- if no packet exists, Codex should emit an explicit “no session handoff packet
+  found” history item rather than failing silently
+- the packet should influence the first resumed turn only
+- that influence should use a bounded distilled resume context derived from the
+  packet, not raw packet injection
+- the distilled context should be labeled as packet-derived and hard-capped to
+  a small, predictable shape
+- likely fields for that distilled context:
+  - summary
+  - next step
+  - blockers
+  - scope/title when useful
+- the packet-derived context should be consumed once and should not stay sticky
+  across later turns
+- Codex should not re-emit the automatic packet review on mere replay/reconnect
+  noise; it should appear once per real resume attach
+- the fastest recovery path for a stale/wrong packet should be regeneration,
+  not a purely dismissive flow
+
+Implementation tasks still open in this track:
+
+- define the exact distilled packet-to-turn payload shape
+- wire that distilled payload into the first resumed turn only
+- ensure the payload is not reused after the first resumed submission
+- add the explicit “no session handoff packet found” history item for the
+  absent-packet case
+- make sure replay/reconnect paths do not duplicate the automatic review item
+- expose or document the regenerate path clearly enough that the operator can
+  recover quickly when the packet is stale
+
 Notes:
 
 - do not auto-inject arbitrary handoff content into every prompt
 - keep the distinction between human review surfaces and model prompt surfaces
+- prefer one-shot bounded resume guidance over sticky hidden state
 
 ### Track 5: Operator Documentation Cleanup
 
@@ -196,6 +235,8 @@ What remains:
 Expected outputs:
 
 - no ambiguity about what is complete vs what is still polish/hardening
+- the resume docs reflect the agreed first-turn-only packet-derived context
+  contract
 
 ## File Plan
 
@@ -215,9 +256,11 @@ Expected primary files:
 
 1. Finish scoped lint/hygiene cleanup.
 2. Run the broader validation matrix and record results.
-3. Tighten any remaining TUI rendering rough edges.
-4. Tighten resume UX only if the broader validation shows gaps or operator
-   confusion remains.
+3. Implement the agreed packet-first resume contract:
+   - explicit absent-packet history item
+   - bounded packet-derived context for the first resumed turn only
+   - no duplicate auto-review on replay/reconnect noise
+4. Add/refresh tests for that resume contract across the relevant paths.
 5. Close doc drift after the above stabilizes.
 
 ## Acceptance Criteria
@@ -228,4 +271,6 @@ This hardening spec is complete when:
 - the branch has a documented confidence bar beyond the narrow smoke tests
 - the new memory review surfaces render cleanly and predictably in the TUI
 - packet-first resume behavior is tested and documented clearly
+- the first resumed turn receives bounded packet-derived context exactly once
+- the no-packet case is explicit rather than silent
 - the docs distinguish implemented functionality from remaining polish work
