@@ -766,7 +766,7 @@ async fn resume_auto_reviews_latest_session_handoff_packet() -> Result<()> {
 
     assert_eq!(handoff_event.status, MemoryOperationStatus::Ready);
     assert_eq!(handoff_event.scope, MemoryOperationScope::None);
-    assert_eq!(handoff_event.context_injected, false);
+    assert_eq!(handoff_event.context_injected, true);
     assert_eq!(
         handoff_event.query,
         Some(format!("session {resumed_session_id}"))
@@ -813,6 +813,248 @@ async fn resume_auto_reviews_latest_session_handoff_packet() -> Result<()> {
     assert!(
         query.contains("limit=1"),
         "resume handoff review should only fetch the latest packet: {query}",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(agentmemory_env)]
+async fn resume_handoff_packet_context_is_first_turn_only() -> Result<()> {
+    let model_server = start_mock_server().await;
+    let agentmemory_server = MockServer::start().await;
+    mount_agentmemory_runtime(&agentmemory_server).await;
+    Mock::given(method("GET"))
+        .and(path("/agentmemory/handoffs"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": true,
+            "handoffPackets": [
+                {
+                    "id": "hdf_resume_1",
+                    "title": "Resume packet",
+                    "summary": "Resume the packet-first polish work",
+                    "scopeType": "session",
+                    "scopeId": "thread-fill-in",
+                    "recommendedNextStep": "Verify the automatic resume surface",
+                    "blockers": ["finish the guarded follow-up"],
+                }
+            ]
+        })))
+        .expect(1)
+        .mount(&agentmemory_server)
+        .await;
+
+    let mut initial_builder = test_codex().with_config({
+        let agentmemory_base_url = agentmemory_server.uri();
+        move |config| {
+            config.memories.backend = MemoryBackend::Agentmemory;
+            config.memories.agentmemory.base_url = agentmemory_base_url;
+        }
+    });
+    let initial = initial_builder.build(&model_server).await?;
+    let initial_responses = mount_sse_sequence(
+        &model_server,
+        vec![sse(vec![
+            ev_response_created("resp-initial"),
+            ev_assistant_message("msg-initial", "seeded"),
+            ev_completed("resp-initial"),
+        ])],
+    )
+    .await;
+    initial.submit_turn("seed resume history").await?;
+    let _ = initial_responses.single_request();
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("resume test should have a rollout path");
+    initial.codex.shutdown_and_wait().await?;
+
+    let resumed_responses = mount_sse_sequence(
+        &model_server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-resume-1"),
+                ev_assistant_message("msg-resume-1", "first resumed reply"),
+                ev_completed("resp-resume-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-resume-2"),
+                ev_assistant_message("msg-resume-2", "second resumed reply"),
+                ev_completed("resp-resume-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut resume_builder = test_codex().with_config({
+        let agentmemory_base_url = agentmemory_server.uri();
+        move |config| {
+            config.memories.backend = MemoryBackend::Agentmemory;
+            config.memories.agentmemory.base_url = agentmemory_base_url;
+        }
+    });
+    let resumed = resume_builder
+        .resume(&model_server, home, rollout_path)
+        .await?;
+
+    let _handoff_event = wait_for_event_match(&resumed.codex, |event| match event {
+        EventMsg::MemoryOperation(event)
+            if event.source == MemoryOperationSource::Automatic
+                && event.operation == codex_protocol::items::MemoryOperationKind::Handoffs =>
+        {
+            Some(event.clone())
+        }
+        _ => None,
+    })
+    .await;
+
+    resumed.submit_turn("continue with the handoff").await?;
+    resumed.submit_turn("continue after the handoff").await?;
+    resumed.codex.shutdown_and_wait().await?;
+
+    let requests = resumed_responses.requests();
+    assert_eq!(requests.len(), 2, "expected two resumed requests");
+
+    let first_developer_texts = requests[0].message_input_texts("developer");
+    let first_resume_contexts = first_developer_texts
+        .iter()
+        .filter(|text| text.contains("<packet_derived_resume_context>"))
+        .collect::<Vec<_>>();
+    assert_eq!(first_resume_contexts.len(), 1);
+    assert!(
+        first_resume_contexts[0].contains("Title: Resume packet"),
+        "expected distilled resume title, got {first_resume_contexts:?}"
+    );
+    assert!(
+        first_resume_contexts[0].contains("Summary: Resume the packet-first polish work"),
+        "expected distilled resume summary, got {first_resume_contexts:?}"
+    );
+    assert!(
+        first_resume_contexts[0].contains("Next step: Verify the automatic resume surface"),
+        "expected distilled next step, got {first_resume_contexts:?}"
+    );
+    assert!(
+        first_resume_contexts[0].contains("- finish the guarded follow-up"),
+        "expected distilled blocker, got {first_resume_contexts:?}"
+    );
+    assert!(
+        !first_resume_contexts[0].contains("\"handoffPackets\""),
+        "did not expect raw handoff json in developer context"
+    );
+
+    let second_developer_texts = requests[1].message_input_texts("developer");
+    let second_resume_context_count = second_developer_texts
+        .iter()
+        .filter(|text| text.contains("<packet_derived_resume_context>"))
+        .count();
+    assert_eq!(
+        second_resume_context_count, 0,
+        "did not expect the resume handoff context after the first resumed turn"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(agentmemory_env)]
+async fn resume_without_handoff_packet_emits_explicit_empty_item() -> Result<()> {
+    let model_server = start_mock_server().await;
+    let agentmemory_server = MockServer::start().await;
+    mount_agentmemory_runtime(&agentmemory_server).await;
+    Mock::given(method("GET"))
+        .and(path("/agentmemory/handoffs"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": true,
+            "handoffPackets": []
+        })))
+        .expect(1)
+        .mount(&agentmemory_server)
+        .await;
+
+    let mut initial_builder = test_codex().with_config({
+        let agentmemory_base_url = agentmemory_server.uri();
+        move |config| {
+            config.memories.backend = MemoryBackend::Agentmemory;
+            config.memories.agentmemory.base_url = agentmemory_base_url;
+        }
+    });
+    let initial = initial_builder.build(&model_server).await?;
+    let initial_responses = mount_sse_sequence(
+        &model_server,
+        vec![sse(vec![
+            ev_response_created("resp-initial"),
+            ev_assistant_message("msg-initial", "seeded"),
+            ev_completed("resp-initial"),
+        ])],
+    )
+    .await;
+    initial.submit_turn("seed resume history").await?;
+    let _ = initial_responses.single_request();
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("resume test should have a rollout path");
+    initial.codex.shutdown_and_wait().await?;
+
+    let resumed_responses = mount_sse_sequence(
+        &model_server,
+        vec![sse(vec![
+            ev_response_created("resp-resume"),
+            ev_assistant_message("msg-resume", "reply after empty handoff"),
+            ev_completed("resp-resume"),
+        ])],
+    )
+    .await;
+
+    let mut resume_builder = test_codex().with_config({
+        let agentmemory_base_url = agentmemory_server.uri();
+        move |config| {
+            config.memories.backend = MemoryBackend::Agentmemory;
+            config.memories.agentmemory.base_url = agentmemory_base_url;
+        }
+    });
+    let resumed = resume_builder
+        .resume(&model_server, home, rollout_path)
+        .await?;
+    let resumed_session_id = resumed.session_configured.session_id.to_string();
+
+    let handoff_event = wait_for_event_match(&resumed.codex, |event| match event {
+        EventMsg::MemoryOperation(event)
+            if event.source == MemoryOperationSource::Automatic
+                && event.operation == codex_protocol::items::MemoryOperationKind::Handoffs =>
+        {
+            Some(event.clone())
+        }
+        _ => None,
+    })
+    .await;
+
+    resumed
+        .submit_turn("continue after an empty handoff")
+        .await?;
+    resumed.codex.shutdown_and_wait().await?;
+
+    assert_eq!(handoff_event.status, MemoryOperationStatus::Empty);
+    assert_eq!(handoff_event.scope, MemoryOperationScope::None);
+    assert_eq!(handoff_event.context_injected, false);
+    assert_eq!(
+        handoff_event.query,
+        Some(format!("session {resumed_session_id}"))
+    );
+    assert_eq!(handoff_event.summary, "No session handoff packet found.");
+
+    let requests = resumed_responses.requests();
+    assert_eq!(requests.len(), 1, "expected one resumed request");
+    let developer_texts = requests[0].message_input_texts("developer");
+    assert!(
+        developer_texts
+            .iter()
+            .all(|text| !text.contains("<packet_derived_resume_context>")),
+        "did not expect packet-derived resume context without a handoff packet"
     );
 
     Ok(())

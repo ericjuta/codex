@@ -154,6 +154,90 @@ fn response_detail(response: &JsonValue) -> Option<String> {
     response_error(response).or_else(|| response_pretty_json(response))
 }
 
+fn truncate_resume_context_text(value: &str, max_chars: usize) -> String {
+    let mut truncated = value.chars().take(max_chars).collect::<String>();
+    if value.chars().count() > max_chars {
+        truncated.push_str("...");
+    }
+    truncated
+}
+
+fn build_packet_derived_resume_context(response: &JsonValue) -> Option<String> {
+    let packet = response.pointer("/handoffPackets/0")?;
+    let mut lines = vec![
+        "<packet_derived_resume_context>".to_string(),
+        "This context was distilled from the latest session handoff packet. Use it only for this first resumed turn.".to_string(),
+    ];
+
+    if let Some(title) = packet.get("title").and_then(JsonValue::as_str) {
+        let title = title.trim();
+        if !title.is_empty() {
+            lines.push(format!(
+                "Title: {}",
+                truncate_resume_context_text(title, 120)
+            ));
+        }
+    }
+
+    let scope_type = packet.get("scopeType").and_then(JsonValue::as_str);
+    let scope_id = packet.get("scopeId").and_then(JsonValue::as_str);
+    if let (Some(scope_type), Some(scope_id)) = (scope_type, scope_id)
+        && !scope_type.trim().is_empty()
+        && !scope_id.trim().is_empty()
+    {
+        lines.push(format!(
+            "Scope: {}",
+            truncate_resume_context_text(&format!("{scope_type} {scope_id}"), 160)
+        ));
+    }
+
+    if let Some(summary) = packet.get("summary").and_then(JsonValue::as_str) {
+        let summary = summary.trim();
+        if !summary.is_empty() {
+            lines.push(format!(
+                "Summary: {}",
+                truncate_resume_context_text(summary, 240)
+            ));
+        }
+    }
+
+    if let Some(next_step) = packet
+        .get("recommendedNextStep")
+        .and_then(JsonValue::as_str)
+    {
+        let next_step = next_step.trim();
+        if !next_step.is_empty() {
+            lines.push(format!(
+                "Next step: {}",
+                truncate_resume_context_text(next_step, 200)
+            ));
+        }
+    }
+
+    let blockers = packet
+        .get("blockers")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|blocker| !blocker.is_empty())
+        .take(3)
+        .map(|blocker| format!("- {}", truncate_resume_context_text(blocker, 120)))
+        .collect::<Vec<_>>();
+    if !blockers.is_empty() {
+        lines.push("Blockers:".to_string());
+        lines.extend(blockers);
+    }
+
+    if lines.len() == 2 {
+        return None;
+    }
+
+    lines.push("</packet_derived_resume_context>".to_string());
+    Some(lines.join("\n"))
+}
+
 struct ReviewJsonResponseArgs {
     operation: MemoryOperationKind,
     query: Option<String>,
@@ -1943,6 +2027,15 @@ pub(crate) async fn review_latest_session_handoff_automatic(
     {
         Ok(response) if response_success(&response) => {
             let count = response_count(&response, "handoffPackets");
+            let resume_context = if count > 0 {
+                build_packet_derived_resume_context(&response)
+            } else {
+                None
+            };
+            {
+                let mut state = sess.state.lock().await;
+                state.set_pending_resume_handoff_context(resume_context.clone());
+            }
             let status = if count > 0 {
                 MemoryOperationStatus::Ready
             } else {
@@ -1951,7 +2044,7 @@ pub(crate) async fn review_latest_session_handoff_automatic(
             let summary = if count > 0 {
                 format!("Reviewed {count} `session` handoff packets for `{session_id}`.")
             } else {
-                format!("No `session` handoff packets were found for `{session_id}`.")
+                "No session handoff packet found.".to_string()
             };
             send_memory_operation_event_with_scope(
                 sess,
@@ -1963,7 +2056,7 @@ pub(crate) async fn review_latest_session_handoff_automatic(
                     query,
                     summary,
                     detail: response_pretty_json(&response),
-                    context_injected: false,
+                    context_injected: resume_context.is_some(),
                 },
                 MemoryOperationScope::None,
             )

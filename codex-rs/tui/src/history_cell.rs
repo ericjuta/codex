@@ -2425,6 +2425,22 @@ impl MemoryHistoryCell {
             }
         };
 
+        let push_array_values = |lines: &mut Vec<Line<'static>>,
+                                 label: &str,
+                                 values: Option<&Vec<serde_json::Value>>,
+                                 limit: usize| {
+            let Some(values) = values else {
+                return;
+            };
+            for value in values
+                .iter()
+                .take(limit)
+                .filter_map(serde_json::Value::as_str)
+            {
+                push_labeled(lines, label, value.to_string());
+            }
+        };
+
         match self.operation {
             MemoryOperationKind::Handoffs | MemoryOperationKind::HandoffGenerate => {
                 let packets = detail
@@ -2452,21 +2468,14 @@ impl MemoryHistoryCell {
                         .get("recommendedNextStep")
                         .and_then(serde_json::Value::as_str)
                     {
-                        push_labeled(&mut lines, "Next", next_step.to_string());
+                        push_labeled(&mut lines, "Next step", next_step.to_string());
                     }
-                    if let Some(blockers) = packet
-                        .get("blockers")
-                        .and_then(serde_json::Value::as_array)
-                        .filter(|blockers| !blockers.is_empty())
-                    {
-                        let blocker_text = blockers
-                            .iter()
-                            .take(2)
-                            .filter_map(serde_json::Value::as_str)
-                            .collect::<Vec<_>>()
-                            .join(" | ");
-                        push_labeled(&mut lines, "Blockers", blocker_text);
-                    }
+                    push_array_values(
+                        &mut lines,
+                        "Blocker",
+                        packet.get("blockers").and_then(serde_json::Value::as_array),
+                        2,
+                    );
                 }
                 push_more(&mut lines, packets.len().saturating_sub(shown));
             }
@@ -2484,7 +2493,8 @@ impl MemoryHistoryCell {
                         .get("explanation")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("Untitled guardrail");
-                    push_labeled(&mut lines, "Guardrail", format!("[{risk}] {explanation}"));
+                    push_labeled(&mut lines, "Risk", risk.to_string());
+                    push_labeled(&mut lines, "Guardrail", explanation.to_string());
                     let scope_type = guardrail
                         .get("scopeType")
                         .and_then(serde_json::Value::as_str)
@@ -2494,14 +2504,14 @@ impl MemoryHistoryCell {
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("-");
                     push_labeled(&mut lines, "Scope", format!("{scope_type} {scope_id}"));
-                    if let Some(trigger) = guardrail
-                        .get("triggerConditions")
-                        .and_then(serde_json::Value::as_array)
-                        .and_then(|triggers| triggers.first())
-                        .and_then(serde_json::Value::as_str)
-                    {
-                        push_labeled(&mut lines, "Trigger", trigger.to_string());
-                    }
+                    push_array_values(
+                        &mut lines,
+                        "Trigger",
+                        guardrail
+                            .get("triggerConditions")
+                            .and_then(serde_json::Value::as_array),
+                        2,
+                    );
                 }
                 push_more(&mut lines, guardrails.len().saturating_sub(shown));
             }
@@ -2519,15 +2529,16 @@ impl MemoryHistoryCell {
                         .get("decision")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("-");
-                    push_labeled(&mut lines, "Decision", format!("{title} -> {chosen}"));
-                    if let Some(revisit) = decision
-                        .get("reconsiderWhen")
-                        .and_then(serde_json::Value::as_array)
-                        .and_then(|items| items.first())
-                        .and_then(serde_json::Value::as_str)
-                    {
-                        push_labeled(&mut lines, "Revisit", revisit.to_string());
-                    }
+                    push_labeled(&mut lines, "Title", title.to_string());
+                    push_labeled(&mut lines, "Chosen", chosen.to_string());
+                    push_array_values(
+                        &mut lines,
+                        "Revisit",
+                        decision
+                            .get("reconsiderWhen")
+                            .and_then(serde_json::Value::as_array),
+                        2,
+                    );
                 }
                 push_more(&mut lines, decisions.len().saturating_sub(shown));
             }
@@ -2543,20 +2554,20 @@ impl MemoryHistoryCell {
                         .get("filePath")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("unknown");
-                    push_labeled(&mut lines, "Dossier", file_path.to_string());
+                    push_labeled(&mut lines, "File", file_path.to_string());
                     if let Some(summary) =
                         dossier.get("summary").and_then(serde_json::Value::as_str)
                     {
                         push_labeled(&mut lines, "Summary", summary.to_string());
                     }
-                    if let Some(risk) = dossier
-                        .get("activeRisks")
-                        .and_then(serde_json::Value::as_array)
-                        .and_then(|risks| risks.first())
-                        .and_then(serde_json::Value::as_str)
-                    {
-                        push_labeled(&mut lines, "Risk", risk.to_string());
-                    }
+                    push_array_values(
+                        &mut lines,
+                        "Active risk",
+                        dossier
+                            .get("activeRisks")
+                            .and_then(serde_json::Value::as_array),
+                        2,
+                    );
                 }
                 push_more(&mut lines, dossiers.len().saturating_sub(shown));
             }
@@ -2575,20 +2586,20 @@ impl MemoryHistoryCell {
                         .get("evidenceCount")
                         .and_then(serde_json::Value::as_u64)
                     {
-                        push_labeled(&mut lines, "Evidence", evidence_count.to_string());
+                        push_labeled(
+                            &mut lines,
+                            "Evidence",
+                            format!("{evidence_count} supporting runs"),
+                        );
                     }
-                    if let Some(steps) = candidate
-                        .get("stepTitles")
-                        .and_then(serde_json::Value::as_array)
-                    {
-                        let rendered = steps
-                            .iter()
-                            .take(3)
-                            .filter_map(serde_json::Value::as_str)
-                            .collect::<Vec<_>>()
-                            .join(" -> ");
-                        push_labeled(&mut lines, "Steps", rendered);
-                    }
+                    push_array_values(
+                        &mut lines,
+                        "Step",
+                        candidate
+                            .get("stepTitles")
+                            .and_then(serde_json::Value::as_array),
+                        3,
+                    );
                 }
                 push_more(&mut lines, candidates.len().saturating_sub(shown));
             }
@@ -4074,10 +4085,12 @@ mod tests {
   Query: endpoint counts
   Scope: none
   Reviewed 2 guardrails.
-  Guardrail: [high] Keep endpoint counts aligned
+  Risk: high
+  Guardrail: Keep endpoint counts aligned
   Scope: file src/index.ts
   Trigger: when editing endpoint counts
-  Guardrail: [medium] Prefer 127.0.0.1 over localhost
+  Risk: medium
+  Guardrail: Prefer 127.0.0.1 over localhost
   Scope: project /repo
   Trigger: when writing integration tests
 "###);
@@ -4113,8 +4126,8 @@ mod tests {
   Query: resume flow
   Scope: none
   Reviewed 1 decisions.
-  Decision: Prefer packet-first resume -> Load the latest session handoff packet
-after resume
+  Title: Prefer packet-first resume
+  Chosen: Load the latest session handoff packet after resume
   Revisit: resume becomes too noisy
 "###);
     }
@@ -4147,9 +4160,9 @@ after resume
   Query: codex-rs/tui/src/history_cell.rs
   Scope: none
   Reviewed dossier for `codex-rs/tui/src/history_cell.rs`.
-  Dossier: codex-rs/tui/src/history_cell.rs
+  File: codex-rs/tui/src/history_cell.rs
   Summary: Memory cells now render structured agentmemory payloads.
-  Risk: avoid raw JSON previews for review surfaces
+  Active risk: avoid raw JSON previews for review surfaces
 "###);
     }
 
@@ -4187,8 +4200,8 @@ after resume
   Reviewed 1 `session` handoff packets for `thr_123`.
   Packet: Resume the deferred memory polish work
   Scope: session thr_123
-  Next: Tighten the TUI rendering and resume flow
-  Blockers: finish snapshot coverage
+  Next step: Tighten the TUI rendering and resume flow
+  Blocker: finish snapshot coverage
 "###);
     }
 
@@ -4227,8 +4240,49 @@ after resume
   Reviewed 1 `session` handoff packets for `thr_123`.
   Packet: Resume the deferred memory polish work
   Scope: session thr_123
-  Next: Verify replay and app-server rendering
-  Blockers: finish TUI snapshots
+  Next step: Verify replay and app-server rendering
+  Blocker: finish TUI snapshots
+"###);
+    }
+
+    #[test]
+    fn memory_routine_candidates_result_snapshot() {
+        let cell = new_memory_operation_event(MemoryOperationEvent {
+            source: MemoryOperationSource::Human,
+            operation: MemoryOperationKind::RoutineCandidates,
+            status: MemoryOperationStatus::Ready,
+            scope: MemoryOperationScope::None,
+            query: None,
+            summary: "Reviewed 1 routine candidates.".to_string(),
+            detail: Some(
+                serde_json::to_string_pretty(&json!({
+                    "success": true,
+                    "routineCandidates": [
+                        {
+                            "name": "Publish replay validation summary",
+                            "evidenceCount": 4,
+                            "stepTitles": [
+                                "Collect replay artifacts",
+                                "Summarize the deltas",
+                                "Post the validation note"
+                            ]
+                        }
+                    ]
+                }))
+                .expect("routine candidate response should serialize"),
+            ),
+            context_injected: false,
+        });
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+🧠 Memory Routine Candidates Ready
+  Scope: none
+  Reviewed 1 routine candidates.
+  Routine: Publish replay validation summary
+  Evidence: 4 supporting runs
+  Step: Collect replay artifacts
+  Step: Summarize the deltas
+  Step: Post the validation note
 "###);
     }
 

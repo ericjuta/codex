@@ -860,8 +860,10 @@ async fn replayed_automatic_handoff_item_renders_resume_packet_cell() {
     };
     assert!(rendered.contains("Memory Handoffs"));
     assert!(rendered.contains("Source: automatic"));
-    assert!(rendered.contains("session thr_123"));
-    assert!(rendered.contains("Resume the deferred memory polish work"));
+    assert!(rendered.contains("Query: session thr_123"));
+    assert!(rendered.contains("Packet: Resume the deferred memory polish work"));
+    assert!(rendered.contains("Next step: Verify replay and app-server rendering"));
+    assert!(rendered.contains("Blocker: finish TUI snapshots"));
 }
 
 #[tokio::test]

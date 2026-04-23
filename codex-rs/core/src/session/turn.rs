@@ -12,6 +12,7 @@ use crate::collect_env_var_dependencies;
 use crate::collect_explicit_skill_mentions;
 use crate::compact::InitialContextInjection;
 use crate::compact::collect_user_messages;
+use crate::compact::insert_initial_context_before_last_real_user_or_summary;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
@@ -78,6 +79,7 @@ use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -394,6 +396,7 @@ pub(crate) async fn run_turn(
     // 1. At the start of a turn, so the fresh user prompt in `input` gets sampled first.
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
     let mut can_drain_pending_input = input.is_empty();
+    let mut resume_handoff_context_items: Option<Vec<ResponseItem>> = None;
 
     loop {
         if run_pending_session_start_hooks(&sess, &turn_context).await {
@@ -450,6 +453,17 @@ pub(crate) async fn run_turn(
         }
 
         // Construct the input that we will send to the model.
+        if resume_handoff_context_items.is_none() {
+            let resume_handoff_context = {
+                let mut state = sess.state.lock().await;
+                state.take_pending_resume_handoff_context()
+            };
+            resume_handoff_context_items = Some(
+                resume_handoff_context
+                    .map(|context| vec![DeveloperInstructions::new(context).into()])
+                    .unwrap_or_default(),
+            );
+        }
         let sampling_request_input: Vec<ResponseItem> = {
             sess.clone_history()
                 .await
@@ -472,6 +486,7 @@ pub(crate) async fn run_turn(
             &mut client_session,
             turn_metadata_header.as_deref(),
             sampling_request_input,
+            resume_handoff_context_items.as_deref().unwrap_or(&[]),
             &explicitly_enabled_connectors,
             skills_outcome,
             &mut server_model_warning_emitted_for_turn,
@@ -1007,6 +1022,7 @@ async fn run_sampling_request(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
+    turn_scoped_prompt_context: &[ResponseItem],
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     server_model_warning_emitted_for_turn: &mut bool,
@@ -1043,13 +1059,19 @@ async fn run_sampling_request(
     let mut retries = 0;
     let mut initial_input = Some(input);
     loop {
-        let prompt_input = if let Some(input) = initial_input.take() {
+        let mut prompt_input = if let Some(input) = initial_input.take() {
             input
         } else {
             sess.clone_history()
                 .await
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
+        if !turn_scoped_prompt_context.is_empty() {
+            prompt_input = insert_initial_context_before_last_real_user_or_summary(
+                prompt_input,
+                turn_scoped_prompt_context.to_vec(),
+            );
+        }
         let prompt = build_prompt(
             prompt_input,
             router.as_ref(),

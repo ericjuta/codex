@@ -1519,6 +1519,123 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resume_response_restores_automatic_handoff_memory_item() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+        let thread_id = ThreadId::new();
+        let response = ThreadResumeResponse {
+            thread: codex_app_server_protocol::Thread {
+                id: thread_id.to_string(),
+                forked_from_id: None,
+                preview: "resume packet".to_string(),
+                ephemeral: false,
+                model_provider: "openai".to_string(),
+                created_at: 1,
+                updated_at: 2,
+                status: ThreadStatus::Idle,
+                path: None,
+                cwd: test_path_buf("/tmp/project").abs(),
+                cli_version: "0.0.0".to_string(),
+                source: codex_protocol::protocol::SessionSource::Cli.into(),
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: Some("resume-packet".to_string()),
+                turns: vec![Turn {
+                    id: "turn-1".to_string(),
+                    items: vec![codex_app_server_protocol::ThreadItem::MemoryOperation {
+                        id: "memory-handoff-1".to_string(),
+                        source: codex_app_server_protocol::MemoryOperationSource::Automatic,
+                        operation: codex_app_server_protocol::MemoryOperationKind::Handoffs,
+                        status: codex_app_server_protocol::MemoryOperationStatus::Ready,
+                        scope: codex_app_server_protocol::MemoryOperationScope::None,
+                        query: Some("session thr_123".to_string()),
+                        summary: "Reviewed 1 `session` handoff packets for `thr_123`."
+                            .to_string(),
+                        detail: Some(
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "success": true,
+                                "handoffPackets": [
+                                    {
+                                        "summary": "Resume the deferred memory polish work",
+                                        "scopeType": "session",
+                                        "scopeId": "thr_123",
+                                        "recommendedNextStep": "Verify replay and app-server rendering",
+                                        "blockers": ["finish TUI snapshots"]
+                                    }
+                                ]
+                            }))
+                            .expect("handoff detail should serialize"),
+                        ),
+                        context_injected: false,
+                    }],
+                    status: TurnStatus::Completed,
+                    error: None,
+                    started_at: None,
+                    completed_at: None,
+                    duration_ms: None,
+                }],
+            },
+            model: "gpt-5.4".to_string(),
+            model_provider: "openai".to_string(),
+            service_tier: None,
+            cwd: test_path_buf("/tmp/project").abs(),
+            instruction_sources: vec![test_path_buf("/tmp/project/AGENTS.md").abs()],
+            approval_policy: codex_protocol::protocol::AskForApproval::Never.into(),
+            approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,
+            sandbox: codex_protocol::protocol::SandboxPolicy::new_read_only_policy().into(),
+            reasoning_effort: None,
+        };
+
+        let started = started_thread_from_resume_response(response.clone(), &config)
+            .await
+            .expect("resume response should map");
+        assert_eq!(started.turns.len(), 1);
+        assert_eq!(started.turns[0], response.thread.turns[0]);
+
+        let codex_app_server_protocol::ThreadItem::MemoryOperation {
+            source,
+            operation,
+            status,
+            query,
+            summary,
+            detail,
+            ..
+        } = &started.turns[0].items[0]
+        else {
+            panic!("expected memory operation item");
+        };
+        assert_eq!(
+            *source,
+            codex_app_server_protocol::MemoryOperationSource::Automatic
+        );
+        assert_eq!(
+            *operation,
+            codex_app_server_protocol::MemoryOperationKind::Handoffs
+        );
+        assert_eq!(
+            *status,
+            codex_app_server_protocol::MemoryOperationStatus::Ready
+        );
+        assert_eq!(query.as_deref(), Some("session thr_123"));
+        assert_eq!(
+            summary,
+            "Reviewed 1 `session` handoff packets for `thr_123`."
+        );
+        let detail_json: serde_json::Value = serde_json::from_str(
+            detail
+                .as_deref()
+                .expect("handoff memory item should include detail"),
+        )
+        .expect("handoff detail should be valid json");
+        assert_eq!(detail_json["handoffPackets"][0]["scopeId"], "thr_123");
+        assert_eq!(
+            detail_json["handoffPackets"][0]["recommendedNextStep"],
+            "Verify replay and app-server rendering"
+        );
+    }
+
+    #[tokio::test]
     async fn session_configured_populates_history_metadata() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let config = build_config(&temp_dir).await;

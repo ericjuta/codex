@@ -37,6 +37,7 @@ pub(crate) struct SessionState {
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
     pending_session_start_additional_contexts: Vec<String>,
+    pending_resume_handoff_context: Option<String>,
     agentmemory_planner_state: AgentmemoryPlannerState,
     granted_permissions: Option<PermissionProfile>,
     next_turn_is_first: bool,
@@ -59,6 +60,7 @@ impl SessionState {
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
             pending_session_start_additional_contexts: Vec::new(),
+            pending_resume_handoff_context: None,
             agentmemory_planner_state: AgentmemoryPlannerState::default(),
             granted_permissions: None,
             next_turn_is_first: true,
@@ -249,6 +251,14 @@ impl SessionState {
 
     pub(crate) fn take_pending_session_start_additional_contexts(&mut self) -> Vec<String> {
         std::mem::take(&mut self.pending_session_start_additional_contexts)
+    }
+
+    pub(crate) fn set_pending_resume_handoff_context(&mut self, context: Option<String>) {
+        self.pending_resume_handoff_context = context;
+    }
+
+    pub(crate) fn take_pending_resume_handoff_context(&mut self) -> Option<String> {
+        self.pending_resume_handoff_context.take()
     }
 
     pub(crate) fn begin_agentmemory_turn(&mut self) -> u64 {
