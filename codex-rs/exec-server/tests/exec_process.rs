@@ -371,17 +371,11 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
         .next_seq
         .checked_sub(1)
         .context("exit response should advance next_seq")?;
+    let mut wake_rx = process.subscribe_wake();
     std::fs::write(&release_path, b"go")?;
 
-    let late_response = timeout(
-        Duration::from_secs(2),
-        process.read(
-            /*after_seq*/ Some(exit_seq),
-            /*max_bytes*/ None,
-            /*wait_ms*/ Some(2_000),
-        ),
-    )
-    .await??;
+    let late_response =
+        read_process_until_change(Arc::clone(&process), &mut wake_rx, Some(exit_seq)).await?;
     let mut late_output = String::new();
     for chunk in late_response.chunks {
         assert_eq!(chunk.stream, ExecOutputStream::Stdout);
@@ -389,7 +383,6 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
     }
     assert_eq!(late_output, "late output after exit\n");
 
-    let wake_rx = process.subscribe_wake();
     let actual = collect_process_output_from_reads(process, wake_rx).await?;
     assert_eq!(
         actual,

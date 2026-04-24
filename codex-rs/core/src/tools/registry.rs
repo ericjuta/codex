@@ -180,7 +180,7 @@ fn pre_tool_use_hooks_enabled(payload: &PreToolUsePayload) -> bool {
     payload.agentmemory_capability.is_some()
         || matches!(
             payload.tool_name.as_str(),
-            "shell" | "shell_command" | "local_shell" | "exec_command"
+            "shell" | "shell_command" | "local_shell" | "exec_command" | "Bash"
         )
 }
 
@@ -191,6 +191,7 @@ fn post_tool_use_hooks_enabled(payload: &PostToolUsePayload) -> bool {
             | "shell_command"
             | "local_shell"
             | "exec_command"
+            | "Bash"
             | "Edit"
             | "Write"
             | "Read"

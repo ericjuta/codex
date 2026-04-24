@@ -784,7 +784,7 @@ mod tests {
             .expect("send late stdout");
 
         let late_response =
-            read_process_until_change(&backend, &process.process_id, /*after_seq*/ Some(1)).await;
+            read_process_until_chunk(&backend, &process.process_id, /*after_seq*/ Some(1)).await;
         assert_eq!(
             late_response.chunks,
             vec![ProcessOutputChunk {
@@ -950,6 +950,32 @@ mod tests {
         .await
         .expect("process read should finish")
         .expect("process read")
+    }
+
+    async fn read_process_until_chunk(
+        backend: &LocalProcess,
+        process_id: &ProcessId,
+        after_seq: Option<u64>,
+    ) -> ReadResponse {
+        timeout(Duration::from_secs(1), async {
+            loop {
+                let response = backend
+                    .exec_read(ReadParams {
+                        process_id: process_id.clone(),
+                        after_seq,
+                        max_bytes: None,
+                        wait_ms: Some(50),
+                    })
+                    .await
+                    .expect("process read");
+                if !response.chunks.is_empty() {
+                    break response;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("process chunk read should finish")
     }
 
     async fn read_process_until_closed(

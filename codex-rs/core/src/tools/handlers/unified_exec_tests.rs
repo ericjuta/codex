@@ -216,7 +216,7 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
             payload,
         }),
         Some(crate::tools::registry::PreToolUsePayload {
-            tool_name: "exec_command".to_string(),
+            tool_name: "Bash".to_string(),
             command: "printf exec command".to_string(),
             agentmemory_input: None,
             agentmemory_capability: None,
@@ -275,7 +275,7 @@ async fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_s
     assert_eq!(
         UnifiedExecHandler.post_tool_use_payload(&invocation, &output),
         Some(crate::tools::registry::PostToolUsePayload {
-            tool_name: "exec_command".to_string(),
+            tool_name: "Bash".to_string(),
             tool_use_id: "call-43".to_string(),
             command: "echo three".to_string(),
             tool_response: serde_json::json!("three"),
@@ -313,7 +313,7 @@ async fn exec_command_post_tool_use_payload_uses_output_for_interactive_completi
     assert_eq!(
         UnifiedExecHandler.post_tool_use_payload(&invocation, &output),
         Some(crate::tools::registry::PostToolUsePayload {
-            tool_name: "exec_command".to_string(),
+            tool_name: "Bash".to_string(),
             tool_use_id: "call-44".to_string(),
             command: "echo three".to_string(),
             tool_response: serde_json::json!("three"),
@@ -388,7 +388,7 @@ async fn write_stdin_post_tool_use_payload_uses_original_exec_call_id_and_comman
     assert_eq!(
         UnifiedExecHandler.post_tool_use_payload(&invocation, &output),
         Some(crate::tools::registry::PostToolUsePayload {
-            tool_name: "exec_command".to_string(),
+            tool_name: "Bash".to_string(),
             tool_use_id: "exec-call-45".to_string(),
             command: "sleep 1; echo finished".to_string(),
             tool_response: serde_json::json!("finished\n"),
@@ -452,13 +452,13 @@ async fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separ
         payloads,
         [
             Some(crate::tools::registry::PostToolUsePayload {
-                tool_name: "exec_command".to_string(),
+                tool_name: "Bash".to_string(),
                 tool_use_id: "exec-call-b".to_string(),
                 command: "sleep 1; echo beta".to_string(),
                 tool_response: serde_json::json!("beta\n"),
             }),
             Some(crate::tools::registry::PostToolUsePayload {
-                tool_name: "exec_command".to_string(),
+                tool_name: "Bash".to_string(),
                 tool_use_id: "exec-call-a".to_string(),
                 command: "sleep 2; echo alpha".to_string(),
                 tool_response: serde_json::json!("alpha\n"),
