@@ -295,6 +295,7 @@ async fn build_post_tool_use_payload_uses_tool_output_wire_value() {
         handler.post_tool_use_payload(&invocation, &output),
         Some(crate::tools::registry::PostToolUsePayload {
             tool_name: "shell_command".to_string(),
+            tool_use_id: "call-42".to_string(),
             command: "printf shell command".to_string(),
             tool_response: json!("shell output"),
         })

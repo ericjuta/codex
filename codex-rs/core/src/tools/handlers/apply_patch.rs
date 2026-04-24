@@ -370,13 +370,14 @@ impl ToolHandler for ApplyPatchHandler {
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
-        result: &dyn ToolOutput,
+        result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
         let patch_input = patch_input_from_payload(&invocation.payload)?;
         let tool_response =
             result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
             tool_name: agentmemory_patch_tool_name(&patch_input).to_string(),
+            tool_use_id: invocation.call_id.clone(),
             command: patch_input,
             tool_response,
         })

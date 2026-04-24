@@ -119,6 +119,7 @@ async fn default_tool_handler_populates_agentmemory_input_for_native_file_tools(
     assert_eq!(
         post_tool_use_hooks_enabled(&PostToolUsePayload {
             tool_name: "Read".to_string(),
+            tool_use_id: "call-1".to_string(),
             command: r#"{"path":"src/main.rs"}"#.to_string(),
             tool_response: serde_json::json!("ok"),
         }),

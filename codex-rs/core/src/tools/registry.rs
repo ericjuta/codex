@@ -81,12 +81,13 @@ pub trait ToolHandler: Send + Sync {
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
-        result: &dyn ToolOutput,
+        result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
         let tool_response =
             result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
             tool_name: invocation.tool_name.display(),
+            tool_use_id: invocation.call_id.clone(),
             command: invocation.payload.log_payload().into_owned(),
             tool_response,
         })
@@ -122,6 +123,7 @@ pub(crate) struct AnyToolResult {
     pub(crate) call_id: String,
     pub(crate) payload: ToolPayload,
     pub(crate) result: Box<dyn ToolOutput>,
+    pub(crate) post_tool_use_payload: Option<PostToolUsePayload>,
 }
 
 impl AnyToolResult {
@@ -153,6 +155,8 @@ pub(crate) struct PreToolUsePayload {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PostToolUsePayload {
     pub(crate) tool_name: String,
+    /// The originating tool-use id exposed at `tool_use_id`.
+    pub(crate) tool_use_id: String,
     pub(crate) command: String,
     pub(crate) tool_response: Value,
 }
@@ -202,14 +206,7 @@ trait AnyToolHandler: Send + Sync {
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload>;
 
-    fn post_tool_use_payload(
-        &self,
-        invocation: &ToolInvocation,
-        result: &dyn ToolOutput,
-    ) -> Option<PostToolUsePayload>;
-
     fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>>;
-
     fn handle_any<'a>(
         &'a self,
         invocation: ToolInvocation,
@@ -232,18 +229,9 @@ where
         ToolHandler::pre_tool_use_payload(self, invocation)
     }
 
-    fn post_tool_use_payload(
-        &self,
-        invocation: &ToolInvocation,
-        result: &dyn ToolOutput,
-    ) -> Option<PostToolUsePayload> {
-        ToolHandler::post_tool_use_payload(self, invocation, result)
-    }
-
     fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
         ToolHandler::create_diff_consumer(self)
     }
-
     fn handle_any<'a>(
         &'a self,
         invocation: ToolInvocation,
@@ -252,10 +240,13 @@ where
             let call_id = invocation.call_id.clone();
             let payload = invocation.payload.clone();
             let output = self.handle(invocation).await?;
+            let post_tool_use_payload =
+                ToolHandler::post_tool_use_payload(self, &call_id, &payload, &output);
             Ok(AnyToolResult {
                 call_id,
                 payload,
                 result: Box::new(output),
+                post_tool_use_payload,
             })
         })
     }
@@ -450,9 +441,7 @@ impl ToolRegistry {
             let guard = response_cell.lock().await;
             guard
                 .as_ref()
-                .and_then(|result| {
-                    handler.post_tool_use_payload(&invocation, result.result.as_ref())
-                })
+                .and_then(|result| result.post_tool_use_payload.clone())
                 .filter(post_tool_use_hooks_enabled)
         } else {
             None
@@ -463,7 +452,7 @@ impl ToolRegistry {
                     &invocation.session,
                     &invocation.turn,
                     post_tool_use_payload.tool_name.clone(),
-                    invocation.call_id.clone(),
+                    post_tool_use_payload.tool_use_id,
                     post_tool_use_payload.command,
                     post_tool_use_payload.tool_response,
                 )

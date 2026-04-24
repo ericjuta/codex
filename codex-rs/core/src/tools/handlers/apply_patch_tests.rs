@@ -13,6 +13,86 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
 
+fn sample_patch() -> &'static str {
+    r#"*** Begin Patch
+*** Add File: hello.txt
++hello
+*** End Patch"#
+}
+
+async fn invocation_for_payload(payload: ToolPayload) -> ToolInvocation {
+    let (session, turn) = make_session_and_context().await;
+    ToolInvocation {
+        session: session.into(),
+        turn: turn.into(),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+        call_id: "call-apply-patch".to_string(),
+        tool_name: codex_tools::ToolName::plain("apply_patch"),
+        payload,
+    }
+}
+
+#[tokio::test]
+async fn pre_tool_use_payload_uses_json_patch_input() {
+    let patch = sample_patch();
+    let payload = ToolPayload::Function {
+        arguments: json!({ "input": patch }).to_string(),
+    };
+    let invocation = invocation_for_payload(payload).await;
+    let handler = ApplyPatchHandler;
+
+    assert_eq!(
+        handler.pre_tool_use_payload(&invocation),
+        Some(PreToolUsePayload {
+            tool_name: "Write".to_string(),
+            command: patch.to_string(),
+            agentmemory_input: Some(json!({ "paths": ["hello.txt"] })),
+            agentmemory_capability: Some(AgentmemoryToolCapability::Patch),
+        })
+    );
+}
+
+#[tokio::test]
+async fn pre_tool_use_payload_uses_freeform_patch_input() {
+    let patch = sample_patch();
+    let payload = ToolPayload::Custom {
+        input: patch.to_string(),
+    };
+    let invocation = invocation_for_payload(payload).await;
+    let handler = ApplyPatchHandler;
+
+    assert_eq!(
+        handler.pre_tool_use_payload(&invocation),
+        Some(PreToolUsePayload {
+            tool_name: "Write".to_string(),
+            command: patch.to_string(),
+            agentmemory_input: Some(json!({ "paths": ["hello.txt"] })),
+            agentmemory_capability: Some(AgentmemoryToolCapability::Patch),
+        })
+    );
+}
+
+#[tokio::test]
+async fn post_tool_use_payload_uses_patch_input_and_tool_output() {
+    let patch = sample_patch();
+    let payload = ToolPayload::Custom {
+        input: patch.to_string(),
+    };
+    let invocation = invocation_for_payload(payload).await;
+    let output = ApplyPatchToolOutput::from_text("Success. Updated files.".to_string());
+    let handler = ApplyPatchHandler;
+
+    assert_eq!(
+        handler.post_tool_use_payload(&invocation, &output),
+        Some(PostToolUsePayload {
+            tool_name: "Write".to_string(),
+            tool_use_id: "call-apply-patch".to_string(),
+            command: patch.to_string(),
+            tool_response: json!("Success. Updated files."),
+        })
+    );
+}
+
 #[test]
 fn diff_consumer_does_not_stream_json_tool_call_arguments() {
     let mut consumer = ApplyPatchArgumentDiffConsumer::default();

@@ -82,7 +82,7 @@ impl ToolHandler for ListDirHandler {
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
-        result: &dyn ToolOutput,
+        result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
         let ToolPayload::Function { arguments } = &invocation.payload else {
             return None;
@@ -92,6 +92,7 @@ impl ToolHandler for ListDirHandler {
             result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
             tool_name: "Glob".to_string(),
+            tool_use_id: invocation.call_id.clone(),
             command: serde_json::to_string(&serde_json::json!({
                 "dir_path": args.dir_path,
                 "offset": args.offset,
