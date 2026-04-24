@@ -239,9 +239,10 @@ where
         Box::pin(async move {
             let call_id = invocation.call_id.clone();
             let payload = invocation.payload.clone();
+            let post_tool_invocation = invocation.clone();
             let output = self.handle(invocation).await?;
             let post_tool_use_payload =
-                ToolHandler::post_tool_use_payload(self, &call_id, &payload, &output);
+                ToolHandler::post_tool_use_payload(self, &post_tool_invocation, &output);
             Ok(AnyToolResult {
                 call_id,
                 payload,

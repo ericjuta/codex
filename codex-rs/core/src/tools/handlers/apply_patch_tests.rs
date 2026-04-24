@@ -9,6 +9,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::Mutex;

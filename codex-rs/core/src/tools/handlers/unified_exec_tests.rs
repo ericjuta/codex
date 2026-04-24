@@ -424,18 +424,19 @@ async fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separ
         hook_command: Some("sleep 1; echo beta".to_string()),
     };
 
-    let (session, turn) = make_session_and_context().await;
+    let (session_b, turn_b) = make_session_and_context().await;
     let invocation_b = ToolInvocation {
-        session: session.clone().into(),
-        turn: turn.clone().into(),
+        session: session_b.into(),
+        turn: turn_b.into(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
         call_id: "write-call-b".to_string(),
         tool_name: codex_tools::ToolName::plain("exec_command"),
         payload: payload.clone(),
     };
+    let (session_a, turn_a) = make_session_and_context().await;
     let invocation_a = ToolInvocation {
-        session: session.into(),
-        turn: turn.into(),
+        session: session_a.into(),
+        turn: turn_a.into(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
         call_id: "write-call-a".to_string(),
         tool_name: codex_tools::ToolName::plain("exec_command"),
