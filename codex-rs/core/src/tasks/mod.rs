@@ -19,6 +19,7 @@ use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
 
+use crate::config::Config;
 use crate::contextual_user_message::TURN_ABORTED_CLOSE_TAG;
 use crate::contextual_user_message::TURN_ABORTED_OPEN_TAG;
 use crate::hook_runtime::PendingInputHookDisposition;
@@ -65,15 +66,45 @@ const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 pub(crate) const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
 pub(crate) const TURN_ABORTED_INTERRUPTED_DEVELOPER_GUIDANCE: &str = "The previous turn was interrupted on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InterruptedTurnHistoryMarker {
+    Disabled,
+    ContextualUser,
+    Developer,
+}
+
+impl InterruptedTurnHistoryMarker {
+    pub(crate) fn from_config(config: &Config) -> Self {
+        if !config.agent_interrupt_message_enabled {
+            return Self::Disabled;
+        }
+        if config.features.enabled(Feature::MultiAgentV2) {
+            Self::Developer
+        } else {
+            Self::ContextualUser
+        }
+    }
+}
+
 /// Shared model-visible marker used by both the real interrupt path and
 /// interrupted fork snapshots.
-pub(crate) fn interrupted_turn_history_marker(multi_agent_v2_enabled: bool) -> ResponseItem {
-    let (role, guidance) = if multi_agent_v2_enabled {
-        ("developer", TURN_ABORTED_INTERRUPTED_DEVELOPER_GUIDANCE)
-    } else {
-        ("user", TURN_ABORTED_INTERRUPTED_GUIDANCE)
-    };
+pub(crate) fn interrupted_turn_history_marker(
+    marker: InterruptedTurnHistoryMarker,
+) -> Option<ResponseItem> {
+    match marker {
+        InterruptedTurnHistoryMarker::Disabled => None,
+        InterruptedTurnHistoryMarker::ContextualUser => Some(interrupted_turn_message(
+            "user",
+            TURN_ABORTED_INTERRUPTED_GUIDANCE,
+        )),
+        InterruptedTurnHistoryMarker::Developer => Some(interrupted_turn_message(
+            "developer",
+            TURN_ABORTED_INTERRUPTED_DEVELOPER_GUIDANCE,
+        )),
+    }
+}
 
+fn interrupted_turn_message(role: &str, guidance: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
         role: role.to_string(),
@@ -641,15 +672,20 @@ impl Session {
         if reason == TurnAbortReason::Interrupted {
             self.cleanup_after_interrupt(&task.turn_context).await;
 
-            let marker = interrupted_turn_history_marker(self.enabled(Feature::MultiAgentV2));
-            self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
-                .await;
-            self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
-                .await;
-            // Ensure the marker is durably visible before emitting TurnAborted: some clients
-            // synchronously re-read the rollout on receipt of the abort event.
-            if let Err(err) = self.flush_rollout().await {
-                warn!("failed to flush interrupted-turn marker before emitting TurnAborted: {err}");
+            if let Some(marker) = interrupted_turn_history_marker(
+                InterruptedTurnHistoryMarker::from_config(task.turn_context.config.as_ref()),
+            ) {
+                self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
+                    .await;
+                self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
+                    .await;
+                // Ensure the marker is durably visible before emitting TurnAborted: some clients
+                // synchronously re-read the rollout on receipt of the abort event.
+                if let Err(err) = self.flush_rollout().await {
+                    warn!(
+                        "failed to flush interrupted-turn marker before emitting TurnAborted: {err}"
+                    );
+                }
             }
         }
 
