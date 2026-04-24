@@ -9,6 +9,8 @@ use crate::session_prefix::format_subagent_notification_message;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
+use crate::tasks::TURN_ABORTED_INTERRUPTED_DEVELOPER_GUIDANCE;
+use crate::tasks::TURN_ABORTED_INTERRUPTED_GUIDANCE;
 use crate::tools::context::ToolOutput;
 use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
@@ -1564,6 +1566,52 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
     }));
 
     wait_for_turn_aborted(&thread, &interrupted_turn_id, TurnAbortReason::Interrupted).await;
+    let history_items = thread
+        .codex
+        .session
+        .clone_history()
+        .await
+        .raw_items()
+        .to_vec();
+    assert!(
+        history_items.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { role, content, .. }
+                if role == "developer"
+                    && content.iter().any(|content_item| matches!(
+                        content_item,
+                        ContentItem::InputText { text }
+                            if text.contains(TURN_ABORTED_INTERRUPTED_DEVELOPER_GUIDANCE)
+                    ))
+        )),
+        "v2 interrupted-turn marker should be recorded as a developer input message"
+    );
+    assert!(
+        !history_items.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { role, content, .. }
+                if role == "user"
+                    && content.iter().any(|content_item| matches!(
+                        content_item,
+                        ContentItem::InputText { text } | ContentItem::OutputText { text }
+                            if text.contains(TURN_ABORTED_INTERRUPTED_GUIDANCE)
+                    ))
+        )),
+        "v2 interrupted-turn marker should not be recorded as a user message"
+    );
+    assert!(
+        !history_items.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { role, content, .. }
+                if role == "assistant"
+                    && content.iter().any(|content_item| matches!(
+                        content_item,
+                        ContentItem::InputText { text } | ContentItem::OutputText { text }
+                            if text.contains(TURN_ABORTED_INTERRUPTED_DEVELOPER_GUIDANCE)
+                    ))
+        )),
+        "v2 interrupted-turn marker should not be recorded as an assistant message"
+    );
     wait_for_redirected_envelope_in_history(
         &thread,
         &InterAgentCommunication::new(

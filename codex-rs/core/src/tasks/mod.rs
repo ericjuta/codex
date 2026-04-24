@@ -62,18 +62,23 @@ pub(crate) use user_shell::UserShellCommandTask;
 pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
-const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
+pub(crate) const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
+pub(crate) const TURN_ABORTED_INTERRUPTED_DEVELOPER_GUIDANCE: &str = "The previous turn was interrupted on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
 
 /// Shared model-visible marker used by both the real interrupt path and
 /// interrupted fork snapshots.
-pub(crate) fn interrupted_turn_history_marker() -> ResponseItem {
+pub(crate) fn interrupted_turn_history_marker(multi_agent_v2_enabled: bool) -> ResponseItem {
+    let (role, guidance) = if multi_agent_v2_enabled {
+        ("developer", TURN_ABORTED_INTERRUPTED_DEVELOPER_GUIDANCE)
+    } else {
+        ("user", TURN_ABORTED_INTERRUPTED_GUIDANCE)
+    };
+
     ResponseItem::Message {
         id: None,
-        role: "user".to_string(),
+        role: role.to_string(),
         content: vec![ContentItem::InputText {
-            text: format!(
-                "{TURN_ABORTED_OPEN_TAG}\n{TURN_ABORTED_INTERRUPTED_GUIDANCE}\n{TURN_ABORTED_CLOSE_TAG}"
-            ),
+            text: format!("{TURN_ABORTED_OPEN_TAG}\n{guidance}\n{TURN_ABORTED_CLOSE_TAG}"),
         }],
         end_turn: None,
         phase: None,
@@ -636,7 +641,7 @@ impl Session {
         if reason == TurnAbortReason::Interrupted {
             self.cleanup_after_interrupt(&task.turn_context).await;
 
-            let marker = interrupted_turn_history_marker();
+            let marker = interrupted_turn_history_marker(self.enabled(Feature::MultiAgentV2));
             self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
                 .await;
             self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
