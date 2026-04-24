@@ -46,6 +46,8 @@ const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
+const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
 #[derive(Clone)]
 struct ModelsRequestTelemetry {
     auth_mode: Option<String>,
@@ -217,8 +219,8 @@ impl ModelsManager {
         collaboration_modes_config: CollaborationModesConfig,
         provider_info: ModelProviderInfo,
     ) -> Self {
+        let cache_path = codex_home.join(provider_cache_file_name(&provider_info));
         let model_provider = create_model_provider(provider_info, Some(auth_manager));
-        let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         let catalog_mode = if model_catalog.is_some() {
             CatalogMode::Custom
@@ -616,6 +618,33 @@ impl ModelsManager {
         };
         Self::construct_model_info_from_candidates(model, candidates, config)
     }
+}
+
+fn provider_cache_file_name(provider: &ModelProviderInfo) -> String {
+    if provider.is_openai() && provider.base_url.is_none() && !provider.has_command_auth() {
+        return MODEL_CACHE_FILE.to_string();
+    }
+
+    let base_url = provider.base_url.as_deref().unwrap_or_default();
+    let auth_marker = if provider.has_command_auth() {
+        "command-auth"
+    } else {
+        "default-auth"
+    };
+    let cache_key = format!(
+        "{}|{:?}|{}|{auth_marker}",
+        provider.name, provider.wire_api, base_url
+    );
+    format!("models_cache_{:016x}.json", stable_cache_hash(&cache_key))
+}
+
+fn stable_cache_hash(value: &str) -> u64 {
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
 }
 
 fn provider_uses_codex_login_auth(provider: &ModelProviderInfo) -> bool {
