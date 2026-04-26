@@ -55,7 +55,18 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                 }
 
                 if status == http::StatusCode::BAD_REQUEST {
-                    if body_text
+                    let is_context_window_error = serde_json::from_str::<Value>(&body_text)
+                        .ok()
+                        .is_some_and(|value| {
+                            value
+                                .get("error")
+                                .and_then(|error| error.get("code"))
+                                .and_then(serde_json::Value::as_str)
+                                == Some("context_length_exceeded")
+                        });
+                    if is_context_window_error {
+                        CodexErr::ContextWindowExceeded
+                    } else if body_text
                         .contains("The image data you provided does not represent a valid image")
                     {
                         CodexErr::InvalidImageRequest()

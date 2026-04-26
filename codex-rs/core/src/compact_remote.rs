@@ -26,7 +26,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
-use futures::TryFutureExt;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
@@ -119,18 +118,106 @@ async fn run_remote_compact_task_inner_impl(
         .await;
     let mut history = sess.clone_history().await;
     let base_instructions = sess.get_base_instructions().await;
-    let deleted_items = trim_function_call_history_to_fit_context_window(
-        &mut history,
-        turn_context.as_ref(),
-        &base_instructions,
-    );
-    if deleted_items > 0 {
-        info!(
-            turn_id = %turn_context.sub_id,
-            deleted_items,
-            "trimmed history items before remote compaction"
+    let mut truncated_count = 0usize;
+    let mut new_history = loop {
+        let deleted_items = trim_function_call_history_to_fit_context_window(
+            &mut history,
+            turn_context.as_ref(),
+            &base_instructions,
         );
+        truncated_count += deleted_items;
+        if deleted_items > 0 {
+            info!(
+                turn_id = %turn_context.sub_id,
+                deleted_items,
+                "trimmed history items before remote compaction"
+            );
+        }
+
+        let prompt_input = history
+            .clone()
+            .for_prompt(&turn_context.model_info.input_modalities);
+        let prompt_input_len = prompt_input.len();
+        let tool_router = built_tools(
+            sess.as_ref(),
+            turn_context.as_ref(),
+            &prompt_input,
+            &HashSet::new(),
+            /*skills_outcome*/ None,
+            &CancellationToken::new(),
+        )
+        .await?;
+        let prompt = Prompt {
+            input: prompt_input,
+            tools: tool_router.model_visible_specs(),
+            parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
+            base_instructions: base_instructions.clone(),
+            personality: turn_context.personality,
+            output_schema: None,
+        };
+
+        let result = sess
+            .services
+            .model_client
+            .compact_conversation_history(
+                &prompt,
+                &turn_context.model_info,
+                turn_context.reasoning_effort,
+                turn_context.reasoning_summary,
+                &turn_context.session_telemetry,
+            )
+            .await;
+
+        match result {
+            Ok(new_history) => break new_history,
+            Err(err) => {
+                if matches!(err, CodexErr::ContextWindowExceeded) && prompt_input_len > 1 {
+                    let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
+                    let compact_request_log_data = build_compact_request_log_data(
+                        &prompt.input,
+                        &prompt.base_instructions.text,
+                    );
+                    log_remote_compact_failure(
+                        turn_context,
+                        &compact_request_log_data,
+                        total_usage_breakdown,
+                        &err,
+                    );
+                    error!(
+                        "Context window exceeded while remote compacting; removing oldest history item. Error: {err}"
+                    );
+                    history.remove_first_item();
+                    truncated_count += 1;
+                    continue;
+                }
+
+                if matches!(err, CodexErr::ContextWindowExceeded) {
+                    sess.set_total_tokens_full(turn_context.as_ref()).await;
+                }
+
+                let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
+                let compact_request_log_data =
+                    build_compact_request_log_data(&prompt.input, &prompt.base_instructions.text);
+                log_remote_compact_failure(
+                    turn_context,
+                    &compact_request_log_data,
+                    total_usage_breakdown,
+                    &err,
+                );
+                return Err(err);
+            }
+        }
+    };
+    if truncated_count > 0 {
+        sess.notify_background_event(
+            turn_context.as_ref(),
+            format!(
+                "Trimmed {truncated_count} older thread item(s) before remote compacting so the prompt fits the model context window."
+            ),
+        )
+        .await;
     }
+
     // Required to keep `/undo` available after compaction
     let ghost_snapshots: Vec<ResponseItem> = history
         .raw_items()
@@ -138,49 +225,6 @@ async fn run_remote_compact_task_inner_impl(
         .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
         .cloned()
         .collect();
-
-    let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
-    let tool_router = built_tools(
-        sess.as_ref(),
-        turn_context.as_ref(),
-        &prompt_input,
-        &HashSet::new(),
-        /*skills_outcome*/ None,
-        &CancellationToken::new(),
-    )
-    .await?;
-    let prompt = Prompt {
-        input: prompt_input,
-        tools: tool_router.model_visible_specs(),
-        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
-        base_instructions,
-        personality: turn_context.personality,
-        output_schema: None,
-    };
-
-    let mut new_history = sess
-        .services
-        .model_client
-        .compact_conversation_history(
-            &prompt,
-            &turn_context.model_info,
-            turn_context.reasoning_effort,
-            turn_context.reasoning_summary,
-            &turn_context.session_telemetry,
-        )
-        .or_else(|err| async {
-            let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
-            let compact_request_log_data =
-                build_compact_request_log_data(&prompt.input, &prompt.base_instructions.text);
-            log_remote_compact_failure(
-                turn_context,
-                &compact_request_log_data,
-                total_usage_breakdown,
-                &err,
-            );
-            Err(err)
-        })
-        .await?;
     new_history = process_compacted_history(
         sess.as_ref(),
         turn_context.as_ref(),

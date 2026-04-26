@@ -2266,8 +2266,6 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-// TODO(ccunningham): Update once remote pre-turn compaction context-overflow handling includes
-// incoming user input and emits richer oversized-input messaging.
 async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceeded() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2290,20 +2288,30 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
     )
     .await;
 
-    let compact_mock = responses::mount_compact_response_once(
+    let compact_mock = responses::mount_compact_response_sequence(
         harness.server(),
-        ResponseTemplate::new(400).set_body_json(serde_json::json!({
-            "error": {
-                "code": "context_length_exceeded",
-                "message": "Your input exceeds the context window of this model. Please adjust your input and try again."
-            }
-        })),
+        vec![
+            ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": {
+                    "code": "context_length_exceeded",
+                    "message": "Your input exceeds the context window of this model. Please adjust your input and try again."
+                }
+            })),
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(serde_json::json!({
+                    "output": [{
+                        "type": "compaction",
+                        "encrypted_content": "REMOTE_RETRY_SUMMARY"
+                    }]
+                })),
+        ],
     )
     .await;
     let post_compact_turn_mock = responses::mount_sse_once(
         harness.server(),
         responses::sse(vec![
-            responses::ev_assistant_message("m2", "REMOTE_POST_COMPACT_SHOULD_NOT_RUN"),
+            responses::ev_assistant_message("m2", "REMOTE_POST_COMPACT_AFTER_RETRY"),
             responses::ev_completed_with_tokens("r2", /*total_tokens*/ 80),
         ]),
     )
@@ -2331,39 +2339,38 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
             responsesapi_client_metadata: None,
         })
         .await?;
-    let error_message = wait_for_event_match(&codex, |event| match event {
-        EventMsg::Error(err) => Some(err.message.clone()),
-        _ => None,
-    })
-    .await;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    assert_eq!(compact_mock.requests().len(), 1);
+    assert_eq!(compact_mock.requests().len(), 2);
     let requests = responses_mock.requests();
     assert_eq!(
         requests.len(),
         1,
-        "expected no post-compaction follow-up turn request after compact failure"
+        "expected only the first user turn on the initial response mock"
     );
     assert!(
-        post_compact_turn_mock.requests().is_empty(),
-        "expected turn to stop after compaction failure"
+        !post_compact_turn_mock.requests().is_empty(),
+        "expected turn to continue after retrying remote compaction"
     );
 
-    let include_attempt_request = compact_mock.single_request();
+    let compact_requests = compact_mock.requests();
+    let post_compact_request = post_compact_turn_mock.single_request();
     insta::assert_snapshot!(
         "remote_pre_turn_compaction_context_window_exceeded_shapes",
         format_labeled_requests_snapshot(
-            "Remote pre-turn auto-compaction context-window failure: compaction request excludes the incoming user message and the turn errors.",
-            &[(
-                "Remote Compaction Request (Incoming User Excluded)",
-                &include_attempt_request
-            ),]
+            "Remote pre-turn auto-compaction context-window retry: the first compact request is too large, the retry trims older history, and the turn continues.",
+            &[
+                (
+                    "Remote Compaction Request (Too Large)",
+                    &compact_requests[0]
+                ),
+                ("Remote Compaction Request (Retry)", &compact_requests[1]),
+                (
+                    "Remote Post-Compaction History Layout",
+                    &post_compact_request
+                ),
+            ]
         )
-    );
-    assert!(
-        error_message.to_lowercase().contains("context window"),
-        "expected context window failure to surface, got {error_message}"
     );
 
     Ok(())
