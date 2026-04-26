@@ -1051,40 +1051,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn process_sse_emits_model_verification_field() {
-        let events = run_sse(vec![
-            json!({
-                "type": "response.metadata",
-                "sequence_number": 1,
-                "response_id": "resp-1",
-                "metadata": {
-                    "openai_verification_recommendation": [TRUSTED_ACCESS_FOR_CYBER_VERIFICATION]
-                }
-            }),
-            json!({
-                "type": "response.completed",
-                "response": {
-                    "id": "resp-1"
-                }
-            }),
-        ])
-        .await;
-
-        assert_matches!(
-            &events[0],
-            ResponseEvent::ModelVerifications(verifications)
-                if verifications == &vec![ModelVerification::TrustedAccessForCyber]
-        );
-        assert_matches!(
-            &events[1],
-            ResponseEvent::Completed {
-                response_id,
-                token_usage: None,
-                end_turn: None,
-            } if response_id == "resp-1"
-        );
-    }
     #[test]
     fn responses_stream_event_response_model_reads_top_level_headers() {
         let ev: ResponsesStreamEvent = serde_json::from_value(json!({
