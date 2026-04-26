@@ -121,6 +121,8 @@ struct ResponseCompleted {
     id: String,
     #[serde(default)]
     usage: Option<ResponseCompletedUsage>,
+    #[serde(default)]
+    end_turn: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -334,6 +336,7 @@ pub fn process_responses_event(
                         return Ok(Some(ResponseEvent::Completed {
                             response_id: resp.id,
                             token_usage: resp.usage.map(Into::into),
+                            end_turn: resp.end_turn,
                         }));
                     }
                     Err(err) => {
@@ -633,9 +636,11 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                end_turn,
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
+                assert!(end_turn.is_none());
             }
             other => panic!("unexpected third event: {other:?}"),
         }
@@ -772,9 +777,11 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                end_turn,
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
+                assert!(end_turn.is_none());
             }
             other => panic!("unexpected event: {other:?}"),
         }
@@ -1001,7 +1008,8 @@ mod tests {
             &events[1],
             ResponseEvent::Completed {
                 response_id,
-                token_usage: None
+                token_usage: None,
+                end_turn: None,
             } if response_id == "resp-1"
         );
     }
@@ -1037,11 +1045,46 @@ mod tests {
             &events[2],
             ResponseEvent::Completed {
                 response_id,
-                token_usage: None
+                token_usage: None,
+                end_turn: None,
             } if response_id == "resp-1"
         );
     }
 
+    #[tokio::test]
+    async fn process_sse_emits_model_verification_field() {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.metadata",
+                "sequence_number": 1,
+                "response_id": "resp-1",
+                "metadata": {
+                    "openai_verification_recommendation": [TRUSTED_ACCESS_FOR_CYBER_VERIFICATION]
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp-1"
+                }
+            }),
+        ])
+        .await;
+
+        assert_matches!(
+            &events[0],
+            ResponseEvent::ModelVerifications(verifications)
+                if verifications == &vec![ModelVerification::TrustedAccessForCyber]
+        );
+        assert_matches!(
+            &events[1],
+            ResponseEvent::Completed {
+                response_id,
+                token_usage: None,
+                end_turn: None,
+            } if response_id == "resp-1"
+        );
+    }
     #[test]
     fn responses_stream_event_response_model_reads_top_level_headers() {
         let ev: ResponsesStreamEvent = serde_json::from_value(json!({

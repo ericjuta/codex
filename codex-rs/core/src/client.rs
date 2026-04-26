@@ -1672,6 +1672,7 @@ where
                 Ok(ResponseEvent::Completed {
                     response_id,
                     token_usage,
+                    end_turn,
                 }) => {
                     if let Some(usage) = &token_usage {
                         session_telemetry.sse_event_completed(
@@ -1692,6 +1693,7 @@ where
                         .send(Ok(ResponseEvent::Completed {
                             response_id,
                             token_usage,
+                            end_turn,
                         }))
                         .await
                         .is_err()
