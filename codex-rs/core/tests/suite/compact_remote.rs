@@ -2377,6 +2377,94 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_auto_compacts_and_retries_when_sampling_exceeds_context_window() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(10_000);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "REMOTE_FIRST_REPLY"),
+                responses::ev_completed_with_tokens("r1", /*total_tokens*/ 100),
+            ]),
+            responses::sse_failed(
+                "resp-context-full",
+                "context_length_exceeded",
+                "Your input exceeds the context window of this model. Please adjust your input and try again.",
+            ),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "REMOTE_RETRY_REPLY"),
+                responses::ev_completed_with_tokens("r2", /*total_tokens*/ 100),
+            ]),
+        ],
+    )
+    .await;
+    let compact_mock = responses::mount_compact_user_history_with_summary_once(
+        harness.server(),
+        &summary_with_prefix("REMOTE_CONTEXT_RETRY_SUMMARY"),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(
+        compact_mock.requests().len(),
+        1,
+        "expected context-window sampling failure to trigger one remote compact"
+    );
+
+    let response_requests = responses_mock.requests();
+    assert_eq!(
+        response_requests.len(),
+        3,
+        "expected first turn, failed second turn, and retried second turn"
+    );
+    let retry_body = response_requests[2].body_json().to_string();
+    assert!(
+        retry_body.contains("REMOTE_CONTEXT_RETRY_SUMMARY"),
+        "retry should use compacted history: {retry_body}"
+    );
+    assert!(
+        retry_body.contains("USER_TWO"),
+        "retry should preserve the current user turn: {retry_body}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

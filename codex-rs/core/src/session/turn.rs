@@ -397,6 +397,7 @@ pub(crate) async fn run_turn(
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
     let mut can_drain_pending_input = input.is_empty();
     let mut resume_handoff_context_items: Option<Vec<ResponseItem>> = None;
+    let mut context_window_compaction_retry_used = false;
 
     loop {
         if run_pending_session_start_hooks(&sess, &turn_context).await {
@@ -661,6 +662,23 @@ pub(crate) async fn run_turn(
             Err(CodexErr::TurnAborted) => {
                 // Aborted turn is reported via a different event.
                 break;
+            }
+            Err(CodexErr::ContextWindowExceeded) if !context_window_compaction_retry_used => {
+                context_window_compaction_retry_used = true;
+                if run_auto_compact(
+                    &sess,
+                    &turn_context,
+                    InitialContextInjection::BeforeLastUserMessage,
+                    CompactionReason::ContextLimit,
+                    CompactionPhase::MidTurn,
+                )
+                .await
+                .is_err()
+                {
+                    return None;
+                }
+                client_session.reset_websocket_session();
+                continue;
             }
             Err(CodexErr::InvalidImageRequest()) => {
                 {
