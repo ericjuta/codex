@@ -67,10 +67,6 @@ pub(crate) fn action_summary(action: &GuardianAssessmentAction) -> String {
             let label = connector_name.as_deref().unwrap_or(server.as_str());
             format!("MCP {tool_name} on {label}")
         }
-        GuardianAssessmentAction::RequestPermissions { reason, .. } => reason
-            .as_deref()
-            .map(|reason| format!("permission request: {reason}"))
-            .unwrap_or_else(|| "permission request".to_string()),
     }
 }
 
