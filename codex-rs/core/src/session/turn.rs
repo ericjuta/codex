@@ -115,6 +115,8 @@ use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
 
+const MAX_CONTEXT_WINDOW_COMPACTION_RETRIES_PER_TURN: usize = 3;
+
 /// Takes a user message as input and runs a loop where, at each sampling request, the model
 /// replies with either:
 ///
@@ -397,7 +399,7 @@ pub(crate) async fn run_turn(
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
     let mut can_drain_pending_input = input.is_empty();
     let mut resume_handoff_context_items: Option<Vec<ResponseItem>> = None;
-    let mut context_window_compaction_retry_used = false;
+    let mut context_window_compaction_retries = 0usize;
 
     loop {
         if run_pending_session_start_hooks(&sess, &turn_context).await {
@@ -663,8 +665,15 @@ pub(crate) async fn run_turn(
                 // Aborted turn is reported via a different event.
                 break;
             }
-            Err(CodexErr::ContextWindowExceeded) if !context_window_compaction_retry_used => {
-                context_window_compaction_retry_used = true;
+            Err(CodexErr::ContextWindowExceeded)
+                if context_window_compaction_retries
+                    < MAX_CONTEXT_WINDOW_COMPACTION_RETRIES_PER_TURN =>
+            {
+                let should_drop_resume_handoff_context = context_window_compaction_retries > 0
+                    && resume_handoff_context_items
+                        .as_ref()
+                        .is_some_and(|items| !items.is_empty());
+                context_window_compaction_retries += 1;
                 if run_auto_compact(
                     &sess,
                     &turn_context,
@@ -676,6 +685,9 @@ pub(crate) async fn run_turn(
                 .is_err()
                 {
                     return None;
+                }
+                if should_drop_resume_handoff_context {
+                    resume_handoff_context_items = Some(Vec::new());
                 }
                 client_session.reset_websocket_session();
                 continue;
