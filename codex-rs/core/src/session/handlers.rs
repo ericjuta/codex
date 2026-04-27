@@ -1452,6 +1452,46 @@ pub(super) async fn submission_loop(
     debug!("Agent loop exited");
 }
 
+async fn approve_guardian_denied_action(sess: &Arc<Session>, event: GuardianAssessmentEvent) {
+    if event.status != GuardianAssessmentStatus::Denied {
+        warn!(
+            review_id = event.id.as_str(),
+            "ignoring approval for non-denied Guardian assessment"
+        );
+        return;
+    }
+
+    let approved_action = serde_json::json!({
+        "action": &event.action,
+        "outcome": "allowed",
+    });
+    let approved_action_json = match serde_json::to_string_pretty(&approved_action) {
+        Ok(approved_action_json) => approved_action_json,
+        Err(error) => {
+            warn!(%error, review_id = event.id.as_str(), "failed to serialize approved Guardian action");
+            return;
+        }
+    };
+    let approval_prefix = crate::guardian::AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX;
+    let text = format!(
+        r#"{approval_prefix}
+
+Treat this as approval to perform that exact action in the same context in which it was originally requested.
+Do not assume this also authorizes similar operations with different payloads.
+
+Approved action:
+{approved_action_json}"#,
+    );
+    let items = vec![ResponseInputItem::Message {
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText { text }],
+    }];
+
+    if let Err(items) = sess.inject_response_items(items).await {
+        sess.queue_response_items_for_next_turn(items).await;
+    }
+}
+
 pub(super) fn submission_dispatch_span(sub: &Submission) -> tracing::Span {
     let op_name = sub.op.kind();
     let span_name = format!("op.dispatch.{op_name}");
