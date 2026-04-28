@@ -7,7 +7,6 @@ use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ResponseItem;
-use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
@@ -302,7 +301,6 @@ async fn model_visible_specs_filter_deferred_dynamic_tools() -> anyhow::Result<(
     let visible_tool = "visible_dynamic_tool";
     let dynamic_tools = vec![
         DynamicToolSpec {
-            namespace: Some("codex_app".to_string()),
             name: hidden_tool.to_string(),
             description: "Hidden until discovered.".to_string(),
             input_schema: json!({
@@ -313,7 +311,6 @@ async fn model_visible_specs_filter_deferred_dynamic_tools() -> anyhow::Result<(
             defer_loading: true,
         },
         DynamicToolSpec {
-            namespace: Some("codex_app".to_string()),
             name: visible_tool.to_string(),
             description: "Visible immediately.".to_string(),
             input_schema: json!({
@@ -337,43 +334,37 @@ async fn model_visible_specs_filter_deferred_dynamic_tools() -> anyhow::Result<(
         },
     );
 
-    assert!(
-        router
-            .find_spec(&ToolName::namespaced("codex_app", hidden_tool))
-            .is_some()
-    );
+    assert!(router.find_spec(&ToolName::plain(hidden_tool)).is_some());
     assert_eq!(
-        namespace_function_names(&router.specs(), "codex_app"),
+        test_dynamic_tool_names(&router.specs(), hidden_tool, visible_tool),
         vec![hidden_tool.to_string(), visible_tool.to_string()]
     );
     assert_eq!(
-        namespace_function_names(&router.model_visible_specs(), "codex_app"),
+        test_dynamic_tool_names(&router.model_visible_specs(), hidden_tool, visible_tool),
         vec![visible_tool.to_string()]
     );
 
     Ok(())
 }
 
-fn namespace_function_names(specs: &[ToolSpec], namespace_name: &str) -> Vec<String> {
+fn test_dynamic_tool_names(
+    specs: &[ToolSpec],
+    hidden_tool: &str,
+    visible_tool: &str,
+) -> Vec<String> {
     specs
         .iter()
-        .find_map(|spec| match spec {
-            ToolSpec::Namespace(namespace) if namespace.name == namespace_name => Some(
-                namespace
-                    .tools
-                    .iter()
-                    .map(|tool| match tool {
-                        ResponsesApiNamespaceTool::Function(tool) => tool.name.clone(),
-                    })
-                    .collect(),
-            ),
-            ToolSpec::Function(_)
-            | ToolSpec::Freeform(_)
+        .filter_map(|spec| match spec {
+            ToolSpec::Function(tool) if tool.name == hidden_tool || tool.name == visible_tool => {
+                Some(tool.name.clone())
+            }
+            ToolSpec::Freeform(_)
+            | ToolSpec::Function(_)
             | ToolSpec::ToolSearch { .. }
             | ToolSpec::LocalShell {}
             | ToolSpec::ImageGeneration { .. }
             | ToolSpec::WebSearch { .. }
             | ToolSpec::Namespace(_) => None,
         })
-        .unwrap_or_default()
+        .collect()
 }

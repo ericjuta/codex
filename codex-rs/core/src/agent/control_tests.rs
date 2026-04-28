@@ -638,6 +638,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                     content: vec![ContentItem::InputText {
                         text: "Parent root guidance.".to_string(),
                     }],
+                    end_turn: None,
                     phase: None,
                 },
                 ResponseItem::Message {
@@ -646,6 +647,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                     content: vec![ContentItem::InputText {
                         text: "Parent subagent guidance.".to_string(),
                     }],
+                    end_turn: None,
                     phase: None,
                 },
                 assistant_message("parent commentary", Some(MessagePhase::Commentary)),

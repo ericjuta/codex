@@ -66,29 +66,20 @@ fn assert_tools_payload_does_not_defer(body: &Value) {
     }
 }
 
-fn namespace_child_tool_names(body: &Value, namespace: &str) -> Vec<String> {
+fn function_tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
         .and_then(Value::as_array)
-        .and_then(|tools| {
-            tools.iter().find_map(|tool| {
-                if tool.get("type").and_then(Value::as_str) == Some("namespace")
-                    && tool.get("name").and_then(Value::as_str) == Some(namespace)
-                {
-                    tool.get("tools").and_then(Value::as_array).map(|children| {
-                        children
-                            .iter()
-                            .filter_map(|child| {
-                                child
-                                    .get("name")
-                                    .and_then(Value::as_str)
-                                    .map(str::to_string)
-                            })
-                            .collect()
-                    })
-                } else {
-                    None
-                }
-            })
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| {
+                    if tool.get("type").and_then(Value::as_str) == Some("function") {
+                        tool.get("name").and_then(Value::as_str).map(str::to_string)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
         })
         .unwrap_or_default()
 }
@@ -421,14 +412,12 @@ async fn remote_compact_filters_deferred_dynamic_tools() -> Result<()> {
     });
     let dynamic_tools = vec![
         DynamicToolSpec {
-            namespace: Some("codex_app".to_string()),
             name: hidden_tool.to_string(),
             description: "Hidden until discovered.".to_string(),
             input_schema: input_schema.clone(),
             defer_loading: true,
         },
         DynamicToolSpec {
-            namespace: Some("codex_app".to_string()),
             name: visible_tool.to_string(),
             description: "Visible immediately.".to_string(),
             input_schema,
@@ -465,7 +454,6 @@ async fn remote_compact_filters_deferred_dynamic_tools() -> Result<()> {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello remote compact".into(),
                 text_elements: Vec::new(),
@@ -488,11 +476,17 @@ async fn remote_compact_filters_deferred_dynamic_tools() -> Result<()> {
     assert_tools_payload_does_not_defer(&first_response_body);
     assert_tools_payload_does_not_defer(&compact_body);
     assert_eq!(
-        namespace_child_tool_names(&first_response_body, "codex_app"),
+        function_tool_names(&first_response_body)
+            .into_iter()
+            .filter(|name| name == hidden_tool || name == visible_tool)
+            .collect::<Vec<_>>(),
         vec![visible_tool.to_string()]
     );
     assert_eq!(
-        namespace_child_tool_names(&compact_body, "codex_app"),
+        function_tool_names(&compact_body)
+            .into_iter()
+            .filter(|name| name == hidden_tool || name == visible_tool)
+            .collect::<Vec<_>>(),
         vec![visible_tool.to_string()]
     );
 
