@@ -73,7 +73,7 @@ impl ToolRouter {
         let deferred_dynamic_tools = dynamic_tools
             .iter()
             .filter(|tool| tool.defer_loading)
-            .map(|tool| ToolName::new(tool.namespace.clone(), tool.name.clone()))
+            .map(|tool| ToolName::plain(tool.name.as_str()))
             .collect::<HashSet<_>>();
         let model_visible_specs = specs
             .iter()
