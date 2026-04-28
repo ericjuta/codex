@@ -1,20 +1,20 @@
 # Upstream Maintenance Candidates
 
-Snapshot date: 2026-04-27
+Snapshot date: 2026-04-28
 
 Branch: `scratch/upstream-worthwhile-20260427`
 
-Local head: `b0f5f1733a`
+Local head: `a6bc341557`
 
-Upstream compared: `openai/main` at `0bd25ab374`
+Upstream compared: `openai/main` at `fa127be25f`
 
-Divergence at snapshot: local branch is 56 commits ahead and 265 commits
+Divergence at snapshot: local branch is 57 commits ahead and 303 commits
 behind `openai/main`.
 
 This branch remains a selective upstream-pick branch. Do not do a full rebase
 only to pick up maintenance fixes; the upstream delta still includes broad
-permission/profile, thread-store, CI, and UI refactor work that should stay in
-dedicated lanes.
+permission/profile, memory-split, config-loader, MCP split, app-server handler,
+and UI refactor work that should stay in dedicated lanes.
 
 ## Already Absorbed
 
@@ -30,47 +30,31 @@ absorbed OpenAI upstream picks include:
 - `6c51bf0c7c` Hide rewind preview when no user message exists (#19510)
 - `8033b6a449` Add /auto-review-denials retry approval flow (#19058)
 - `11e5af53c4` Add plumbing to approve stored Auto-Review denials (#18955)
+- `0bd25ab374` Delay approval prompts while typing (#19513)
 
 ## Next Recommended Picks
 
-1. `0bd25ab374` Delay approval prompts while typing (#19513)
-   - Value: prevents typed-ahead composer input such as `y` or `a` from
-     being consumed as approval shortcuts when an approval modal appears while
-     the user is still typing.
-   - Scope: `codex-rs/tui/src/bottom_pane/approval_overlay.rs` and
-     `codex-rs/tui/src/bottom_pane/mod.rs`.
-   - Dry-run result: clean 3-way apply.
+1. `92fb848065` Allow large remote app-server resume responses (#19920)
+   - Value: raises the remote app-server client receive path so large resume
+     and thread payloads do not fail before the caller can process them.
+   - Scope: `codex-rs/app-server-client/src/lib.rs` and
+     `codex-rs/app-server-client/src/remote.rs`.
+   - Applicability: local app-server client code does not appear to have this
+     receive-size handling yet.
    - Recommendation: take first.
 
-2. `277186ec85` Cap original-detail image token estimates (#19865)
-   - Value: clamps original-detail image patch estimates to the current 10k
-     patch budget so large images cannot inflate local context accounting
-     without bound.
-   - Scope: `codex-rs/core/src/context_manager/history.rs` and
-     `codex-rs/core/src/context_manager/history_tests.rs`.
-   - Dry-run result: clean 3-way apply.
-   - Recommendation: take second; run focused core context-manager tests.
+2. `fd36838cf3` Add MultiAgentV2 root and subagent context hints (#19805)
+   - Value: improves root and subagent prompt context for multi-agent v2, which
+     this branch already carries and configures.
+   - Scope: `codex-rs/core/src/agent/control.rs`,
+     `codex-rs/core/src/session/mod.rs`, `codex-rs/core/src/session/multi_agents.rs`,
+     config schema, feature config, and tests.
+   - Applicability: local branch has multi-agent v2 config and usage-hint
+     support but not the upstream root/subagent context hint layer.
+   - Recommendation: take second if the branch remains focused on multi-agent
+     quality.
 
-3. `1f304dd1f2` Allow agents.max_threads to work with multi_agent_v2 (#19733)
-   - Value: keeps the existing `agents.max_threads` setting effective after
-     the branch absorbed the upstream `multi_agent_v2` feature-config move.
-   - Scope: `codex-rs/core/src/config/mod.rs`.
-   - Dry-run result: 3-way apply reports a small conflict in
-     `codex-rs/core/src/config/mod.rs`.
-   - Recommendation: manually port after the two clean picks; run focused
-     config tests.
-
-4. `850f035b8c` Fix filtered thread-list resume regression in TUI (#19591)
-   - Value: avoids unnecessary full JSONL rollout reads for filtered TUI resume
-     listings while preserving the correctness-preserving filesystem-backed
-     read-repair path.
-   - Scope: `codex-rs/rollout/src/recorder.rs`.
-   - Dry-run result: 3-way apply reports a one-file conflict in
-     `codex-rs/rollout/src/recorder.rs`.
-   - Recommendation: manually port if resume/thread-list latency is in scope;
-     run `cargo test -p codex-rollout list_threads`.
-
-5. `85c1500569` Filter dynamic deferred tools from model_visible_specs
+3. `85c1500569` Filter dynamic deferred tools from model_visible_specs
    (#19771)
    - Value: prevents dynamic deferred tools from leaking into
      `ToolRouter::model_visible_specs`, including compaction request payloads
@@ -78,10 +62,48 @@ absorbed OpenAI upstream picks include:
    - Scope: `codex-rs/core/src/session/turn.rs`,
      `codex-rs/core/src/tools/router.rs`, router tests, and compact/search
      integration tests.
-   - Dry-run result: most files apply, but
-     `codex-rs/core/src/session/turn.rs` needs manual reconciliation.
-   - Recommendation: worthwhile but core-riskier; take only with enough time
-     for focused core tests and compact/search coverage.
+   - Applicability: local branch has adjacent dynamic/deferred tool plumbing,
+     so expect manual reconciliation in core.
+   - Recommendation: high-value but core-riskier; take with focused core
+     compact/search coverage.
+
+4. `5ba908d179` Avoid persisting ShutdownComplete after thread shutdown
+   (#19630)
+   - Value: avoids writing a shutdown-complete event after the thread is already
+     shut down.
+   - Scope: `codex-rs/core/src/session/handlers.rs` and
+     `codex-rs/core/src/session/tests.rs`.
+   - Applicability: local code still has the relevant `ShutdownComplete`
+     handling path.
+   - Recommendation: small correctness pick; take after the higher-value
+     app-server and multi-agent picks.
+
+5. `2307aa8d98` Allow /statusline and /title slash commands during active
+   turns (#19917)
+   - Value: lets users adjust status-line and terminal-title surfaces without
+     waiting for an active turn to finish.
+   - Scope: `codex-rs/tui/src/slash_command.rs`.
+   - Applicability: local TUI has these slash commands and active-turn command
+     gating.
+   - Recommendation: small TUI ergonomics pick.
+
+6. `52c06b8759` Preserve TUI markdown list spacing after code blocks (#19706)
+   - Value: preserves readable markdown list spacing after fenced code blocks.
+   - Scope: `codex-rs/tui/src/markdown_render.rs`,
+     `codex-rs/tui/src/markdown_render_tests.rs`, and snapshots.
+   - Applicability: standalone TUI rendering fix.
+   - Recommendation: low-risk UI polish if TUI snapshots are already in scope.
+
+7. `277186ec85` Cap original-detail image token estimates (#19865)
+   - Value: clamps original-detail image patch estimates to the current 10k
+     patch budget so large images cannot inflate local context accounting
+     without bound.
+   - Scope: `codex-rs/core/src/context_manager/history.rs` and
+     `codex-rs/core/src/context_manager/history_tests.rs`.
+   - Applicability: local branch already has inline image-data-url estimate
+     hardening; verify whether this exact cap is already covered before
+     cherry-picking.
+   - Recommendation: patch-equivalence check first, then take only if missing.
 
 ## Defer For Dedicated Lanes
 
@@ -101,6 +123,28 @@ absorbed OpenAI upstream picks include:
   - Broad cross-crate policy migration. Too wide for the current maintenance
     branch.
 
+- Memory split series around #18982, #19818, #19860, and #19967
+  - Useful direction, but it moves large memory/runtime surfaces out of
+    `codex-core`. Too wide for this maintenance branch and likely to overlap
+    local memory/runtime work.
+
+- `9c3abcd46c` Move config loading into codex-config (#19487)
+  - Good crate-boundary cleanup, but about 70 files and high overlap with
+    config-policy work. Needs a dedicated config lane.
+
+- `0bda8161a2` Split MCP connection modules (#19725)
+  - Good architecture, but moves thousands of lines across MCP modules. Needs a
+    dedicated MCP lane.
+
+- App-server handler streamlining series around #19490 through #19498
+  - Valuable cleanup, but broad request-handler churn. Take only in an
+    app-server-focused branch.
+
+- Remote plugin install/uninstall bundle caching around #19456 and #19914
+  - Product value depends on active remote-plugin work. The bundle-cache commit
+    also changes dependencies and Bazel lock state, so it is not a cheap
+    maintenance pick.
+
 - `4e30281a13` Guard npm update readiness (#19389)
   - Lower priority here and does not apply cleanly because this fork removed
     the relevant GitHub workflow file.
@@ -115,13 +159,12 @@ absorbed OpenAI upstream picks include:
 
 ## Current Takeaway
 
-Take the two clean picks first:
+Do not full rebase. Current upstream is 303 commits ahead and includes several
+large architectural lanes. The best next selective-pick order is:
 
-1. `0bd25ab374` approval prompt delay.
-2. `277186ec85` original-detail image token cap.
-
-Then decide whether to spend a manual-port pass on:
-
-1. `1f304dd1f2` `agents.max_threads` with `multi_agent_v2`.
-2. `850f035b8c` filtered resume listing repair.
+1. `92fb848065` large remote app-server resume responses.
+2. `fd36838cf3` multi-agent v2 root/subagent context hints.
 3. `85c1500569` dynamic deferred tool filtering.
+4. `5ba908d179` shutdown-complete persistence guard.
+5. `2307aa8d98`, `52c06b8759`, and maybe `277186ec85` as small TUI/core
+   polish once patch-equivalence is checked.
