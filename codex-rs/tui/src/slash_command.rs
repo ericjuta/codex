@@ -274,6 +274,8 @@ impl SlashCommand {
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Plugins
+            | SlashCommand::Title
+            | SlashCommand::Statusline
             | SlashCommand::AutoReview
             | SlashCommand::Feedback
             | SlashCommand::Quit
@@ -285,9 +287,7 @@ impl SlashCommand {
             SlashCommand::Settings => true,
             SlashCommand::Collab => true,
             SlashCommand::Agent | SlashCommand::MultiAgents => true,
-            SlashCommand::Statusline => false,
             SlashCommand::Theme => false,
-            SlashCommand::Title => false,
         }
     }
 
@@ -324,6 +324,11 @@ mod tests {
     #[test]
     fn clean_alias_parses_to_stop_command() {
         assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
+    }
+
+    fn certain_commands_are_available_during_task() {
+        assert!(SlashCommand::Title.available_during_task());
+        assert!(SlashCommand::Statusline.available_during_task());
     }
 
     #[test]
