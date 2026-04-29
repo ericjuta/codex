@@ -50,6 +50,9 @@ use codex_config::types::McpServerTransportConfig;
 use codex_mcp::qualified_mcp_tool_name_prefix;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
+use codex_protocol::items::MemoryOperationKind;
+use codex_protocol::items::MemoryOperationScope;
+use codex_protocol::items::MemoryOperationStatus;
 #[cfg(test)]
 use codex_protocol::mcp::Resource;
 #[cfg(test)]
@@ -66,6 +69,8 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::MemoryOperationEvent;
+use codex_protocol::protocol::MemoryOperationSource;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
@@ -2412,6 +2417,755 @@ pub(crate) fn new_mcp_inventory_loading(animations_enabled: bool) -> McpInventor
     McpInventoryLoadingCell::new(animations_enabled)
 }
 
+const MEMORY_PREVIEW_MAX_GRAPHEMES: usize = 1_200;
+
+#[derive(Debug)]
+pub(crate) struct MemoryHistoryCell {
+    source: MemoryOperationSource,
+    operation: MemoryOperationKind,
+    status: MemoryOperationStatus,
+    scope: MemoryOperationScope,
+    query: Option<String>,
+    summary: String,
+    detail: Option<String>,
+    context_injected: bool,
+}
+
+impl MemoryHistoryCell {
+    fn new(
+        source: MemoryOperationSource,
+        operation: MemoryOperationKind,
+        status: MemoryOperationStatus,
+        scope: MemoryOperationScope,
+        query: Option<String>,
+        summary: String,
+        detail: Option<String>,
+    ) -> Self {
+        Self {
+            source,
+            operation,
+            status,
+            scope,
+            query,
+            summary,
+            detail: detail
+                .map(|detail| detail.trim().to_string())
+                .filter(|detail| !detail.is_empty()),
+            context_injected: false,
+        }
+    }
+
+    fn title(&self) -> &'static str {
+        match self.operation {
+            MemoryOperationKind::Recall => "Memory Recall",
+            MemoryOperationKind::Remember => "Memory Remember",
+            MemoryOperationKind::Update => "Memory Update",
+            MemoryOperationKind::Drop => "Memory Drop",
+            MemoryOperationKind::Lessons => "Memory Lessons",
+            MemoryOperationKind::Crystals => "Memory Crystals",
+            MemoryOperationKind::Crystallize => "Memory Crystallize",
+            MemoryOperationKind::AutoCrystallize => "Memory Auto-Crystallize",
+            MemoryOperationKind::Insights => "Memory Insights",
+            MemoryOperationKind::Reflect => "Memory Reflect",
+            MemoryOperationKind::Actions => "Memory Actions",
+            MemoryOperationKind::ActionCreate => "Memory Action Create",
+            MemoryOperationKind::ActionUpdate => "Memory Action Update",
+            MemoryOperationKind::Missions => "Memory Missions",
+            MemoryOperationKind::Handoffs => "Memory Handoffs",
+            MemoryOperationKind::HandoffGenerate => "Memory Handoff Generate",
+            MemoryOperationKind::BranchOverlays => "Memory Branch Overlays",
+            MemoryOperationKind::Guardrails => "Memory Guardrails",
+            MemoryOperationKind::Decisions => "Memory Decisions",
+            MemoryOperationKind::Dossiers => "Memory Dossiers",
+            MemoryOperationKind::RoutineCandidates => "Memory Routine Candidates",
+            MemoryOperationKind::Frontier => "Memory Frontier",
+            MemoryOperationKind::Next => "Memory Next",
+        }
+    }
+
+    fn state_span(&self) -> Span<'static> {
+        match self.status {
+            MemoryOperationStatus::Pending => "Pending".cyan().bold(),
+            MemoryOperationStatus::Ready => "Ready".green().bold(),
+            MemoryOperationStatus::Empty => "Empty".magenta().bold(),
+            MemoryOperationStatus::Skipped => "Skipped".bold().dim(),
+            MemoryOperationStatus::Error => "Error".red().bold(),
+        }
+    }
+
+    fn preview_detail(&self) -> Option<String> {
+        self.detail
+            .as_deref()
+            .map(|detail| truncate_text(detail, MEMORY_PREVIEW_MAX_GRAPHEMES))
+    }
+
+    fn detail_json(&self) -> Option<serde_json::Value> {
+        self.detail
+            .as_deref()
+            .and_then(|detail| serde_json::from_str(detail).ok())
+    }
+
+    fn structured_detail_lines(&self, wrap_width: usize) -> Option<Vec<Line<'static>>> {
+        let detail = self.detail_json()?;
+        let mut lines: Vec<Line<'static>> = Vec::new();
+
+        let push_labeled = |lines: &mut Vec<Line<'static>>, label: &str, value: String| {
+            if value.trim().is_empty() {
+                return;
+            }
+            let line = Line::from(vec![format!("  {label}: ").dim(), value.into()]);
+            let wrapped = adaptive_wrap_line(&line, RtOptions::new(wrap_width));
+            push_owned_lines(&wrapped, lines);
+        };
+
+        let push_more = |lines: &mut Vec<Line<'static>>, count: usize| {
+            if count > 0 {
+                lines.push(Line::from(vec![
+                    "  More: ".dim(),
+                    format!("+{count} more").dim(),
+                ]));
+            }
+        };
+
+        let push_array_values = |lines: &mut Vec<Line<'static>>,
+                                 label: &str,
+                                 values: Option<&Vec<serde_json::Value>>,
+                                 limit: usize| {
+            let Some(values) = values else {
+                return;
+            };
+            for value in values
+                .iter()
+                .take(limit)
+                .filter_map(serde_json::Value::as_str)
+            {
+                push_labeled(lines, label, value.to_string());
+            }
+        };
+
+        match self.operation {
+            MemoryOperationKind::Recall => {
+                if let Some(items) = detail
+                    .get("retrieval_items")
+                    .and_then(serde_json::Value::as_array)
+                {
+                    let shown = items.len().min(2);
+                    for item in items.iter().take(2) {
+                        let source_type = item
+                            .get("source_type")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("unknown");
+                        let title = item
+                            .get("title")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("Untitled memory");
+                        push_labeled(&mut lines, "Retrieved", format!("[{source_type}] {title}"));
+                        if let Some(why) = item.get("why").and_then(serde_json::Value::as_str) {
+                            push_labeled(&mut lines, "Why", why.to_string());
+                        }
+                        if let Some(freshness) =
+                            item.get("freshness").and_then(serde_json::Value::as_str)
+                        {
+                            push_labeled(&mut lines, "Freshness", freshness.to_string());
+                        }
+                        if let Some(confidence) =
+                            item.get("confidence").and_then(serde_json::Value::as_f64)
+                        {
+                            push_labeled(&mut lines, "Confidence", format!("{confidence:.2}"));
+                        }
+                        push_array_values(
+                            &mut lines,
+                            "File",
+                            item.get("relevant_files")
+                                .and_then(serde_json::Value::as_array),
+                            2,
+                        );
+                        push_array_values(
+                            &mut lines,
+                            "Concept",
+                            item.get("concepts").and_then(serde_json::Value::as_array),
+                            2,
+                        );
+                        if let Some(blocker) =
+                            item.get("blocker").and_then(serde_json::Value::as_str)
+                        {
+                            push_labeled(&mut lines, "Blocker", blocker.to_string());
+                        }
+                        if let Some(next_step) = item
+                            .get("recommended_next_step")
+                            .and_then(serde_json::Value::as_str)
+                        {
+                            push_labeled(&mut lines, "Next step", next_step.to_string());
+                        }
+                    }
+                    push_more(&mut lines, items.len().saturating_sub(shown));
+                }
+                if let Some(retrieval_trace) = detail.get("retrieval_trace") {
+                    if let Some(selected_count) = retrieval_trace
+                        .get("selected_count")
+                        .and_then(serde_json::Value::as_u64)
+                    {
+                        push_labeled(
+                            &mut lines,
+                            "Selected",
+                            format!("{selected_count} candidates"),
+                        );
+                    }
+                    if let Some(skipped_count) = retrieval_trace
+                        .get("skipped_count")
+                        .and_then(serde_json::Value::as_u64)
+                    {
+                        push_labeled(&mut lines, "Skipped", format!("{skipped_count} candidates"));
+                    }
+                    push_array_values(
+                        &mut lines,
+                        "Query term",
+                        retrieval_trace
+                            .get("query_terms")
+                            .and_then(serde_json::Value::as_array),
+                        3,
+                    );
+                }
+                if lines.is_empty() {
+                    return None;
+                }
+            }
+            MemoryOperationKind::Handoffs | MemoryOperationKind::HandoffGenerate => {
+                let packets = detail
+                    .get("handoffPackets")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|packets| packets.iter().collect::<Vec<_>>())
+                    .or_else(|| detail.get("handoffPacket").map(|packet| vec![packet]))?;
+                let shown = packets.len().min(2);
+                for packet in packets.iter().take(2) {
+                    let summary = packet
+                        .get("summary")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("Untitled handoff packet");
+                    push_labeled(&mut lines, "Packet", summary.to_string());
+                    let scope_type = packet
+                        .get("scopeType")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown");
+                    let scope_id = packet
+                        .get("scopeId")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("-");
+                    push_labeled(&mut lines, "Scope", format!("{scope_type} {scope_id}"));
+                    if let Some(next_step) = packet
+                        .get("recommendedNextStep")
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        push_labeled(&mut lines, "Next step", next_step.to_string());
+                    }
+                    push_array_values(
+                        &mut lines,
+                        "Blocker",
+                        packet.get("blockers").and_then(serde_json::Value::as_array),
+                        2,
+                    );
+                }
+                push_more(&mut lines, packets.len().saturating_sub(shown));
+            }
+            MemoryOperationKind::Guardrails => {
+                let guardrails = detail
+                    .get("guardrails")
+                    .and_then(serde_json::Value::as_array)?;
+                let shown = guardrails.len().min(2);
+                for guardrail in guardrails.iter().take(2) {
+                    let risk = guardrail
+                        .get("riskLevel")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown");
+                    let explanation = guardrail
+                        .get("explanation")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("Untitled guardrail");
+                    push_labeled(&mut lines, "Risk", risk.to_string());
+                    push_labeled(&mut lines, "Guardrail", explanation.to_string());
+                    let scope_type = guardrail
+                        .get("scopeType")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown");
+                    let scope_id = guardrail
+                        .get("scopeId")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("-");
+                    push_labeled(&mut lines, "Scope", format!("{scope_type} {scope_id}"));
+                    push_array_values(
+                        &mut lines,
+                        "Trigger",
+                        guardrail
+                            .get("triggerConditions")
+                            .and_then(serde_json::Value::as_array),
+                        2,
+                    );
+                }
+                push_more(&mut lines, guardrails.len().saturating_sub(shown));
+            }
+            MemoryOperationKind::Decisions => {
+                let decisions = detail
+                    .get("decisions")
+                    .and_then(serde_json::Value::as_array)?;
+                let shown = decisions.len().min(2);
+                for decision in decisions.iter().take(2) {
+                    let title = decision
+                        .get("title")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("Untitled decision");
+                    let chosen = decision
+                        .get("decision")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("-");
+                    push_labeled(&mut lines, "Title", title.to_string());
+                    push_labeled(&mut lines, "Chosen", chosen.to_string());
+                    push_array_values(
+                        &mut lines,
+                        "Revisit",
+                        decision
+                            .get("reconsiderWhen")
+                            .and_then(serde_json::Value::as_array),
+                        2,
+                    );
+                }
+                push_more(&mut lines, decisions.len().saturating_sub(shown));
+            }
+            MemoryOperationKind::Dossiers => {
+                let dossiers = detail
+                    .get("dossiers")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|dossiers| dossiers.iter().collect::<Vec<_>>())
+                    .or_else(|| detail.get("dossier").map(|dossier| vec![dossier]))?;
+                let shown = dossiers.len().min(2);
+                for dossier in dossiers.iter().take(2) {
+                    let file_path = dossier
+                        .get("filePath")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown");
+                    push_labeled(&mut lines, "File", file_path.to_string());
+                    if let Some(summary) =
+                        dossier.get("summary").and_then(serde_json::Value::as_str)
+                    {
+                        push_labeled(&mut lines, "Summary", summary.to_string());
+                    }
+                    push_array_values(
+                        &mut lines,
+                        "Active risk",
+                        dossier
+                            .get("activeRisks")
+                            .and_then(serde_json::Value::as_array),
+                        2,
+                    );
+                }
+                push_more(&mut lines, dossiers.len().saturating_sub(shown));
+            }
+            MemoryOperationKind::RoutineCandidates => {
+                let candidates = detail
+                    .get("routineCandidates")
+                    .and_then(serde_json::Value::as_array)?;
+                let shown = candidates.len().min(2);
+                for candidate in candidates.iter().take(2) {
+                    let name = candidate
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("Untitled routine");
+                    push_labeled(&mut lines, "Routine", name.to_string());
+                    if let Some(evidence_count) = candidate
+                        .get("evidenceCount")
+                        .and_then(serde_json::Value::as_u64)
+                    {
+                        push_labeled(
+                            &mut lines,
+                            "Evidence",
+                            format!("{evidence_count} supporting runs"),
+                        );
+                    }
+                    push_array_values(
+                        &mut lines,
+                        "Step",
+                        candidate
+                            .get("stepTitles")
+                            .and_then(serde_json::Value::as_array),
+                        3,
+                    );
+                }
+                push_more(&mut lines, candidates.len().saturating_sub(shown));
+            }
+            MemoryOperationKind::BranchOverlays => {
+                let overlays = detail
+                    .get("overlays")
+                    .and_then(serde_json::Value::as_array)?;
+                let shown = overlays.len().min(2);
+                for overlay in overlays.iter().take(2) {
+                    let branch = overlay
+                        .get("branch")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown");
+                    let summary = overlay
+                        .get("summary")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("Untitled overlay");
+                    push_labeled(&mut lines, "Overlay", format!("[{branch}] {summary}"));
+                    let target_type = overlay
+                        .get("targetType")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown");
+                    let target_id = overlay
+                        .get("targetId")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("-");
+                    push_labeled(&mut lines, "Target", format!("{target_type} {target_id}"));
+                }
+                push_more(&mut lines, overlays.len().saturating_sub(shown));
+            }
+            _ => return None,
+        }
+
+        (!lines.is_empty()).then_some(lines)
+    }
+
+    pub(crate) fn is_human_pending_submission(
+        &self,
+        operation: MemoryOperationKind,
+        query: Option<&str>,
+    ) -> bool {
+        self.source == MemoryOperationSource::Human
+            && self.status == MemoryOperationStatus::Pending
+            && self.operation == operation
+            && self.query.as_deref().map(str::trim) == query.map(str::trim)
+    }
+
+    pub(crate) fn apply_event(&mut self, event: MemoryOperationEvent) {
+        self.source = event.source;
+        self.operation = event.operation;
+        self.status = event.status;
+        self.scope = event.scope;
+        self.query = event.query;
+        self.summary = event.summary;
+        self.detail = event
+            .detail
+            .map(|detail| detail.trim().to_string())
+            .filter(|detail| !detail.is_empty());
+        self.context_injected = event.context_injected;
+    }
+}
+
+impl HistoryCell for MemoryHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let wrap_width = width.max(1) as usize;
+        let mut lines = vec![
+            vec![
+                "🧠 ".into(),
+                self.title().bold(),
+                " ".into(),
+                self.state_span(),
+            ]
+            .into(),
+        ];
+
+        if let Some(query) = &self.query {
+            let query_line = Line::from(vec!["  Query: ".dim(), query.clone().into()]);
+            let wrapped = adaptive_wrap_line(&query_line, RtOptions::new(wrap_width));
+            push_owned_lines(&wrapped, &mut lines);
+        }
+
+        if self.operation == MemoryOperationKind::Recall
+            && self.status != MemoryOperationStatus::Pending
+        {
+            let injected = if self.context_injected { "yes" } else { "no" };
+            lines.push(Line::from(vec!["  Injected: ".dim(), injected.into()]));
+        }
+
+        if self.status != MemoryOperationStatus::Pending {
+            let scope = match self.scope {
+                MemoryOperationScope::None => "none",
+                MemoryOperationScope::Turn => "turn",
+                MemoryOperationScope::Thread => "thread",
+            };
+            lines.push(Line::from(vec!["  Scope: ".dim(), scope.into()]));
+        }
+
+        match self.source {
+            MemoryOperationSource::Human => {}
+            MemoryOperationSource::Assistant => {
+                lines.push(Line::from(vec!["  Source: ".dim(), "assistant tool".dim()]));
+            }
+            MemoryOperationSource::Automatic => {
+                lines.push(Line::from(vec!["  Source: ".dim(), "automatic".dim()]));
+            }
+        }
+
+        let summary_line = Line::from(vec!["  ".into(), self.summary.clone().into()]);
+        let wrapped_summary = adaptive_wrap_line(&summary_line, RtOptions::new(wrap_width));
+        push_owned_lines(&wrapped_summary, &mut lines);
+
+        if let Some(structured_detail) = self.structured_detail_lines(wrap_width) {
+            lines.extend(structured_detail);
+        } else if let Some(detail) = self.preview_detail() {
+            lines.push(Line::from(vec!["  Preview:".dim()]));
+            let detail_line = Line::from(detail);
+            let wrapped_detail = adaptive_wrap_line(
+                &detail_line,
+                RtOptions::new(wrap_width)
+                    .initial_indent(Line::from("    "))
+                    .subsequent_indent(Line::from("    ")),
+            );
+            push_owned_lines(&wrapped_detail, &mut lines);
+        }
+
+        lines
+    }
+}
+
+fn new_memory_submission(
+    operation: MemoryOperationKind,
+    query: Option<String>,
+    summary: String,
+    detail: Option<String>,
+) -> MemoryHistoryCell {
+    MemoryHistoryCell::new(
+        MemoryOperationSource::Human,
+        operation,
+        MemoryOperationStatus::Pending,
+        MemoryOperationScope::None,
+        query,
+        summary,
+        detail,
+    )
+}
+
+pub(crate) fn new_memory_recall_submission(query: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Recall,
+        query,
+        "Recalling memory context for the current thread.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_remember_submission(content: String) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Remember,
+        None,
+        "Saving durable memory.".to_string(),
+        Some(content),
+    )
+}
+
+pub(crate) fn new_memory_update_submission() -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Update,
+        None,
+        "Requesting a memory refresh.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_drop_submission() -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Drop,
+        None,
+        "Dropping stored memories for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_lessons_submission(query: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Lessons,
+        query,
+        "Reviewing lessons for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_crystals_submission() -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Crystals,
+        None,
+        "Reviewing crystals for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_crystallize_submission(action_ids: Vec<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Crystallize,
+        None,
+        "Creating a crystal from explicit action ids.".to_string(),
+        Some(action_ids.join(", ")),
+    )
+}
+
+pub(crate) fn new_memory_auto_crystallize_submission(
+    older_than_days: Option<u32>,
+) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::AutoCrystallize,
+        older_than_days.map(|value| value.to_string()),
+        "Auto-crystallizing eligible action groups.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_insights_submission(query: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Insights,
+        query,
+        "Reviewing insights for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_reflect_submission(max_clusters: Option<u32>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Reflect,
+        max_clusters.map(|value| value.to_string()),
+        "Generating reflected insights for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_actions_submission(status: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Actions,
+        status,
+        "Reviewing action work items for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_missions_submission(query: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Missions,
+        query,
+        "Reviewing missions for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_branch_overlays_submission(query: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::BranchOverlays,
+        query,
+        "Reviewing branch overlays for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_guardrails_submission(query: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Guardrails,
+        query,
+        "Reviewing guardrails for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_decisions_submission(query: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Decisions,
+        query,
+        "Reviewing decision memory for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_dossiers_submission(query: Option<String>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Dossiers,
+        query,
+        "Reviewing component dossiers for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_routine_candidates_submission() -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::RoutineCandidates,
+        None,
+        "Reviewing routine compiler proposals for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_action_create_submission(title: String) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::ActionCreate,
+        None,
+        "Creating an action work item.".to_string(),
+        Some(title),
+    )
+}
+
+pub(crate) fn new_memory_action_update_submission(
+    action_id: String,
+    status: String,
+) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::ActionUpdate,
+        None,
+        "Updating an action work item.".to_string(),
+        Some(format!("{action_id} -> {status}")),
+    )
+}
+
+pub(crate) fn new_memory_handoffs_submission(
+    query: Option<String>,
+    detail: Option<String>,
+) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Handoffs,
+        query,
+        "Reviewing handoff packets for this workspace.".to_string(),
+        detail,
+    )
+}
+
+pub(crate) fn new_memory_handoff_generate_submission(
+    scope_type: Option<String>,
+    scope_id: Option<String>,
+) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::HandoffGenerate,
+        scope_type,
+        "Generating a fresh handoff packet.".to_string(),
+        scope_id,
+    )
+}
+
+pub(crate) fn new_memory_frontier_submission(limit: Option<u32>) -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Frontier,
+        limit.map(|value| value.to_string()),
+        "Reviewing frontier suggestions for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_next_submission() -> MemoryHistoryCell {
+    new_memory_submission(
+        MemoryOperationKind::Next,
+        None,
+        "Reviewing the next suggested action for this workspace.".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn new_memory_operation_event(event: MemoryOperationEvent) -> MemoryHistoryCell {
+    let mut cell = MemoryHistoryCell::new(
+        event.source,
+        event.operation,
+        event.status,
+        event.scope,
+        event.query,
+        event.summary,
+        event.detail,
+    );
+    cell.context_injected = event.context_injected;
+    cell
+}
+
 /// Renders a completed (or interrupted) request_user_input exchange in history.
 #[derive(Debug)]
 pub(crate) struct RequestUserInputResultCell {
@@ -3442,6 +4196,381 @@ mod tests {
         );
         let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn memory_recall_submission_snapshot() {
+        let cell = new_memory_recall_submission(Some("retrieval freshness".to_string()));
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+🧠 Memory Recall Pending
+  Query: retrieval freshness
+  Recalling memory context for the current thread.
+"###);
+    }
+
+    #[test]
+    fn memory_recall_result_snapshot() {
+        let cell = new_memory_operation_event(MemoryOperationEvent {
+            source: MemoryOperationSource::Human,
+            operation: MemoryOperationKind::Recall,
+            status: MemoryOperationStatus::Ready,
+            scope: MemoryOperationScope::Turn,
+            query: Some("retrieval freshness".to_string()),
+            summary: "Recalled memory context and injected it into the current thread.".to_string(),
+            detail: Some("<agentmemory-context>remember this</agentmemory-context>".to_string()),
+            context_injected: true,
+        });
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+🧠 Memory Recall Ready
+  Query: retrieval freshness
+  Injected: yes
+  Scope: turn
+  Recalled memory context and injected it into the current thread.
+  Preview:
+    <agentmemory-context>remember this</agentmemory-context>
+"###);
+    }
+
+    #[test]
+    fn memory_recall_automatic_structured_result_snapshot() {
+        let cell = new_memory_operation_event(MemoryOperationEvent {
+            source: MemoryOperationSource::Automatic,
+            operation: MemoryOperationKind::Recall,
+            status: MemoryOperationStatus::Ready,
+            scope: MemoryOperationScope::Turn,
+            query: Some("harbor regression".to_string()),
+            summary: "Auto-injected agentmemory context for this user turn.".to_string(),
+            detail: Some(
+                serde_json::to_string_pretty(&json!({
+                    "reason": "user turn",
+                    "endpoint": "context",
+                    "scope": "turn",
+                    "duplicate_suppressed": false,
+                    "fallback_used": false,
+                    "retrieval_attempted": true,
+                    "context_injected": true,
+                    "retrieval_items": [
+                        {
+                            "source_type": "handoff_packet",
+                            "source_id": "hdf_1",
+                            "title": "Resume harbor follow-up",
+                            "why": "Fresh same-session handoff matched the request",
+                            "freshness": "hot",
+                            "confidence": 0.82,
+                            "relevant_files": ["src/session.rs"],
+                            "concepts": ["resume", "harbor"],
+                            "blocker": "Need to verify the resume event",
+                            "recommended_next_step": "Run the resume-path regression test"
+                        }
+                    ],
+                    "retrieval_trace": {
+                        "selected_count": 1,
+                        "skipped_count": 1,
+                        "query_terms": ["harbor", "regression"]
+                    }
+                }))
+                .expect("recall detail should serialize"),
+            ),
+            context_injected: true,
+        });
+        let rendered = render_lines(&cell.display_lines(90)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+🧠 Memory Recall Ready
+  Query: harbor regression
+  Injected: yes
+  Scope: turn
+  Source: automatic
+  Auto-injected agentmemory context for this user turn.
+  Retrieved: [handoff_packet] Resume harbor follow-up
+  Why: Fresh same-session handoff matched the request
+  Freshness: hot
+  Confidence: 0.82
+  File: src/session.rs
+  Concept: resume
+  Concept: harbor
+  Blocker: Need to verify the resume event
+  Next step: Run the resume-path regression test
+  Selected: 1 candidates
+  Skipped: 1 candidates
+  Query term: harbor
+  Query term: regression
+"###);
+    }
+
+    #[test]
+    fn memory_recall_skipped_snapshot() {
+        let cell = new_memory_operation_event(MemoryOperationEvent {
+            source: MemoryOperationSource::Automatic,
+            operation: MemoryOperationKind::Recall,
+            status: MemoryOperationStatus::Skipped,
+            scope: MemoryOperationScope::None,
+            query: None,
+            summary: "Skipped duplicate memory injection for this turn.".to_string(),
+            detail: None,
+            context_injected: false,
+        });
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+🧠 Memory Recall Skipped
+  Injected: no
+  Scope: none
+  Source: automatic
+  Skipped duplicate memory injection for this turn.
+"###);
+    }
+
+    #[test]
+    fn memory_remember_submission_snapshot() {
+        let cell = new_memory_remember_submission("retain this note".to_string());
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+🧠 Memory Remember Pending
+  Saving durable memory.
+  Preview:
+    retain this note
+"###);
+    }
+
+    #[test]
+    fn memory_guardrails_result_snapshot() {
+        let cell = new_memory_operation_event(MemoryOperationEvent {
+            source: MemoryOperationSource::Human,
+            operation: MemoryOperationKind::Guardrails,
+            status: MemoryOperationStatus::Ready,
+            scope: MemoryOperationScope::None,
+            query: Some("endpoint counts".to_string()),
+            summary: "Reviewed 2 guardrails.".to_string(),
+            detail: Some(
+                serde_json::to_string_pretty(&json!({
+                    "success": true,
+                    "guardrails": [
+                        {
+                            "riskLevel": "high",
+                            "explanation": "Keep endpoint counts aligned",
+                            "scopeType": "file",
+                            "scopeId": "src/index.ts",
+                            "triggerConditions": ["when editing endpoint counts"]
+                        },
+                        {
+                            "riskLevel": "medium",
+                            "explanation": "Prefer 127.0.0.1 over localhost",
+                            "scopeType": "project",
+                            "scopeId": "/repo",
+                            "triggerConditions": ["when writing integration tests"]
+                        }
+                    ]
+                }))
+                .expect("guardrail response should serialize"),
+            ),
+            context_injected: false,
+        });
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+🧠 Memory Guardrails Ready
+  Query: endpoint counts
+  Scope: none
+  Reviewed 2 guardrails.
+  Risk: high
+  Guardrail: Keep endpoint counts aligned
+  Scope: file src/index.ts
+  Trigger: when editing endpoint counts
+  Risk: medium
+  Guardrail: Prefer 127.0.0.1 over localhost
+  Scope: project /repo
+  Trigger: when writing integration tests
+"###);
+    }
+
+    #[test]
+    fn memory_decisions_result_snapshot() {
+        let cell = new_memory_operation_event(MemoryOperationEvent {
+            source: MemoryOperationSource::Human,
+            operation: MemoryOperationKind::Decisions,
+            status: MemoryOperationStatus::Ready,
+            scope: MemoryOperationScope::None,
+            query: Some("resume flow".to_string()),
+            summary: "Reviewed 1 decisions.".to_string(),
+            detail: Some(
+                serde_json::to_string_pretty(&json!({
+                    "success": true,
+                    "decisions": [
+                        {
+                            "title": "Prefer packet-first resume",
+                            "decision": "Load the latest session handoff packet after resume",
+                            "reconsiderWhen": ["resume becomes too noisy"]
+                        }
+                    ]
+                }))
+                .expect("decision response should serialize"),
+            ),
+            context_injected: false,
+        });
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+🧠 Memory Decisions Ready
+  Query: resume flow
+  Scope: none
+  Reviewed 1 decisions.
+  Title: Prefer packet-first resume
+  Chosen: Load the latest session handoff packet after resume
+  Revisit: resume becomes too noisy
+"###);
+    }
+
+    #[test]
+    fn memory_dossiers_result_snapshot() {
+        let cell = new_memory_operation_event(MemoryOperationEvent {
+            source: MemoryOperationSource::Human,
+            operation: MemoryOperationKind::Dossiers,
+            status: MemoryOperationStatus::Ready,
+            scope: MemoryOperationScope::None,
+            query: Some("codex-rs/tui/src/history_cell.rs".to_string()),
+            summary: "Reviewed dossier for `codex-rs/tui/src/history_cell.rs`.".to_string(),
+            detail: Some(
+                serde_json::to_string_pretty(&json!({
+                    "success": true,
+                    "dossier": {
+                        "filePath": "codex-rs/tui/src/history_cell.rs",
+                        "summary": "Memory cells now render structured agentmemory payloads.",
+                        "activeRisks": ["avoid raw JSON previews for review surfaces"]
+                    }
+                }))
+                .expect("dossier response should serialize"),
+            ),
+            context_injected: false,
+        });
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+🧠 Memory Dossiers Ready
+  Query: codex-rs/tui/src/history_cell.rs
+  Scope: none
+  Reviewed dossier for `codex-rs/tui/src/history_cell.rs`.
+  File: codex-rs/tui/src/history_cell.rs
+  Summary: Memory cells now render structured agentmemory payloads.
+  Active risk: avoid raw JSON previews for review surfaces
+"###);
+    }
+
+    #[test]
+    fn memory_handoffs_result_snapshot() {
+        let cell = new_memory_operation_event(MemoryOperationEvent {
+            source: MemoryOperationSource::Human,
+            operation: MemoryOperationKind::Handoffs,
+            status: MemoryOperationStatus::Ready,
+            scope: MemoryOperationScope::None,
+            query: Some("session thr_123".to_string()),
+            summary: "Reviewed 1 `session` handoff packets for `thr_123`.".to_string(),
+            detail: Some(
+                serde_json::to_string_pretty(&json!({
+                    "success": true,
+                    "handoffPackets": [
+                        {
+                            "summary": "Resume the deferred memory polish work",
+                            "scopeType": "session",
+                            "scopeId": "thr_123",
+                            "recommendedNextStep": "Tighten the TUI rendering and resume flow",
+                            "blockers": ["finish snapshot coverage"]
+                        }
+                    ]
+                }))
+                .expect("handoff response should serialize"),
+            ),
+            context_injected: false,
+        });
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+🧠 Memory Handoffs Ready
+  Query: session thr_123
+  Scope: none
+  Reviewed 1 `session` handoff packets for `thr_123`.
+  Packet: Resume the deferred memory polish work
+  Scope: session thr_123
+  Next step: Tighten the TUI rendering and resume flow
+  Blocker: finish snapshot coverage
+"###);
+    }
+
+    #[test]
+    fn memory_handoffs_automatic_result_snapshot() {
+        let cell = new_memory_operation_event(MemoryOperationEvent {
+            source: MemoryOperationSource::Automatic,
+            operation: MemoryOperationKind::Handoffs,
+            status: MemoryOperationStatus::Ready,
+            scope: MemoryOperationScope::None,
+            query: Some("session thr_123".to_string()),
+            summary: "Reviewed 1 `session` handoff packets for `thr_123`.".to_string(),
+            detail: Some(
+                serde_json::to_string_pretty(&json!({
+                    "success": true,
+                    "handoffPackets": [
+                        {
+                            "summary": "Resume the deferred memory polish work",
+                            "scopeType": "session",
+                            "scopeId": "thr_123",
+                            "recommendedNextStep": "Verify replay and app-server rendering",
+                            "blockers": ["finish TUI snapshots"]
+                        }
+                    ]
+                }))
+                .expect("handoff response should serialize"),
+            ),
+            context_injected: false,
+        });
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+🧠 Memory Handoffs Ready
+  Query: session thr_123
+  Scope: none
+  Source: automatic
+  Reviewed 1 `session` handoff packets for `thr_123`.
+  Packet: Resume the deferred memory polish work
+  Scope: session thr_123
+  Next step: Verify replay and app-server rendering
+  Blocker: finish TUI snapshots
+"###);
+    }
+
+    #[test]
+    fn memory_routine_candidates_result_snapshot() {
+        let cell = new_memory_operation_event(MemoryOperationEvent {
+            source: MemoryOperationSource::Human,
+            operation: MemoryOperationKind::RoutineCandidates,
+            status: MemoryOperationStatus::Ready,
+            scope: MemoryOperationScope::None,
+            query: None,
+            summary: "Reviewed 1 routine candidates.".to_string(),
+            detail: Some(
+                serde_json::to_string_pretty(&json!({
+                    "success": true,
+                    "routineCandidates": [
+                        {
+                            "name": "Publish replay validation summary",
+                            "evidenceCount": 4,
+                            "stepTitles": [
+                                "Collect replay artifacts",
+                                "Summarize the deltas",
+                                "Post the validation note"
+                            ]
+                        }
+                    ]
+                }))
+                .expect("routine candidate response should serialize"),
+            ),
+            context_injected: false,
+        });
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+🧠 Memory Routine Candidates Ready
+  Scope: none
+  Reviewed 1 routine candidates.
+  Routine: Publish replay validation summary
+  Evidence: 4 supporting runs
+  Step: Collect replay artifacts
+  Step: Summarize the deltas
+  Step: Post the validation note
+"###);
     }
 
     #[tokio::test]

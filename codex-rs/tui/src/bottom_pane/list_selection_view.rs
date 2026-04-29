@@ -2045,6 +2045,63 @@ mod tests {
     }
 
     #[test]
+    fn disabled_current_rows_skip_default_selection_and_number_shortcuts() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                items: vec![
+                    SelectionItem {
+                        name: "Unavailable".to_string(),
+                        description: Some("Not available right now.".to_string()),
+                        is_current: true,
+                        is_disabled: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Alpha".to_string(),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Busy".to_string(),
+                        description: Some("Still disabled.".to_string()),
+                        disabled_reason: Some("Try again later.".to_string()),
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Beta".to_string(),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        );
+
+        assert_eq!(view.selected_actual_idx(), Some(1));
+
+        let rendered = render_lines_with_width(&view, /*width*/ 60);
+        assert!(
+            rendered.contains("› 1. Alpha"),
+            "expected first enabled row to be selected and numbered 1, got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("  2. Beta"),
+            "expected second enabled row to be numbered 2, got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("1. Unavailable") && !rendered.contains("3. Beta"),
+            "expected disabled rows to be skipped by numbering, got:\n{rendered}"
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+
+        assert_eq!(view.take_last_selected_index(), Some(3));
+    }
+
+    #[test]
     fn wraps_long_option_without_overflowing_columns() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);

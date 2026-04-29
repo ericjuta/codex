@@ -127,6 +127,56 @@ pub struct ImageGenerationItem {
     pub saved_path: Option<AbsolutePathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum MemoryOperationKind {
+    Recall,
+    Remember,
+    Update,
+    Drop,
+    Lessons,
+    Crystals,
+    Crystallize,
+    AutoCrystallize,
+    Insights,
+    Reflect,
+    Actions,
+    ActionCreate,
+    ActionUpdate,
+    Missions,
+    Handoffs,
+    HandoffGenerate,
+    BranchOverlays,
+    Guardrails,
+    Decisions,
+    Dossiers,
+    RoutineCandidates,
+    Frontier,
+    Next,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum MemoryOperationStatus {
+    Pending,
+    Ready,
+    Empty,
+    Skipped,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum MemoryOperationScope {
+    #[default]
+    None,
+    Turn,
+    Thread,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct ContextCompactionItem {
     pub id: String,

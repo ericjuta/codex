@@ -46,7 +46,14 @@ pub(crate) fn select_handlers_for_matcher_inputs(
             HookEventName::PreToolUse
             | HookEventName::PermissionRequest
             | HookEventName::PostToolUse
-            | HookEventName::SessionStart => {
+            | HookEventName::PostToolUseFailure
+            | HookEventName::PreCompact
+            | HookEventName::SessionStart
+            | HookEventName::SessionEnd
+            | HookEventName::SubagentStart
+            | HookEventName::SubagentStop
+            | HookEventName::Notification
+            | HookEventName::TaskCompleted => {
                 if matcher_inputs.is_empty() {
                     matches_matcher(handler.matcher.as_deref(), /*input*/ None)
                 } else {
@@ -128,10 +135,17 @@ pub(crate) fn completed_summary(
 
 fn scope_for_event(event_name: HookEventName) -> HookScope {
     match event_name {
-        HookEventName::SessionStart => HookScope::Thread,
+        HookEventName::SessionStart
+        | HookEventName::SessionEnd
+        | HookEventName::PreCompact
+        | HookEventName::TaskCompleted => HookScope::Thread,
         HookEventName::PreToolUse
         | HookEventName::PermissionRequest
         | HookEventName::PostToolUse
+        | HookEventName::PostToolUseFailure
+        | HookEventName::SubagentStart
+        | HookEventName::SubagentStop
+        | HookEventName::Notification
         | HookEventName::UserPromptSubmit
         | HookEventName::Stop => HookScope::Turn,
     }

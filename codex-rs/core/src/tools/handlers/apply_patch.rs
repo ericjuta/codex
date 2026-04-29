@@ -292,6 +292,18 @@ async fn effective_patch_permissions(
     )
 }
 
+fn patch_input_from_payload(payload: &ToolPayload) -> Option<String> {
+    match payload {
+        ToolPayload::Function { arguments } => parse_arguments::<ApplyPatchToolArgs>(arguments)
+            .ok()
+            .map(|args| args.input),
+        ToolPayload::Custom { input } => Some(input.clone()),
+        ToolPayload::LocalShell { .. }
+        | ToolPayload::ToolSearch { .. }
+        | ToolPayload::Mcp { .. } => None,
+    }
+}
+
 impl ToolHandler for ApplyPatchHandler {
     type Output = ApplyPatchToolOutput;
 
@@ -350,11 +362,13 @@ impl ToolHandler for ApplyPatchHandler {
         } = invocation;
 
         let patch_input = match payload {
-            ToolPayload::Function { arguments } => {
-                let args: ApplyPatchToolArgs = parse_arguments(&arguments)?;
-                args.input
+            ToolPayload::Function { .. } | ToolPayload::Custom { .. } => {
+                patch_input_from_payload(&payload).ok_or_else(|| {
+                    FunctionCallError::RespondToModel(
+                        "apply_patch handler received invalid patch input".to_string(),
+                    )
+                })?
             }
-            ToolPayload::Custom { input } => input,
             _ => {
                 return Err(FunctionCallError::RespondToModel(
                     "apply_patch handler received unsupported payload".to_string(),

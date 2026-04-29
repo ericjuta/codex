@@ -199,6 +199,40 @@ async fn zero_byte_limit_disables_discovery() {
     assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
 }
 
+#[tokio::test]
+async fn js_repl_instructions_are_appended_when_enabled() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+    cfg.features
+        .enable(Feature::JsRepl)
+        .expect("test config should allow js_repl");
+
+    let res = get_user_instructions(&cfg).await;
+    assert!(
+        res.is_none(),
+        "removed js_repl features should not append AGENTS.md instructions"
+    );
+}
+
+#[tokio::test]
+async fn js_repl_tools_only_instructions_are_feature_gated() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+    let mut features = cfg.features.get().clone();
+    features
+        .enable(Feature::JsRepl)
+        .enable(Feature::JsReplToolsOnly);
+    cfg.features
+        .set(features)
+        .expect("test config should allow js_repl tool restrictions");
+
+    let res = get_user_instructions(&cfg).await;
+    assert!(
+        res.is_none(),
+        "removed js_repl features should not append AGENTS.md instructions"
+    );
+}
+
 /// When both system instructions and AGENTS.md docs are present the two
 /// should be concatenated with the separator.
 #[tokio::test]
