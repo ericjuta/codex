@@ -112,6 +112,24 @@ perf-build-local:
     fi
     ./scripts/prune_perf_build_target.sh ./target/release/codex
 
+# Build a machine-local codex binary with faster release rebuild settings for
+# local iteration. This writes the same `./target/release/codex` path as
+# `perf-build-local`, but trades some final optimization for faster compile/link.
+perf-build-local-fast:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export CARGO_PROFILE_RELEASE_PANIC=abort
+    export CARGO_PROFILE_RELEASE_LTO=thin
+    export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+    EXTRA_FLAGS="${CODEX_PERF_EXTRA_FLAGS:-}"
+    export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=native${EXTRA_FLAGS:+ $EXTRA_FLAGS}"
+    if [ -n "${CODEX_PERF_FEATURES:-}" ]; then
+        cargo build -p codex-cli --release --locked --features "$CODEX_PERF_FEATURES"
+    else
+        cargo build -p codex-cli --release --locked
+    fi
+    ./scripts/prune_perf_build_target.sh ./target/release/codex
+
 # Build a machine-local codex binary using profile-guided optimization on top
 # of the same local tuning as `perf-build-local`.
 #
