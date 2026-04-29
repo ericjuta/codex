@@ -447,10 +447,15 @@ impl App {
             self.chat_widget.thread_name(),
             self.chat_widget.rollout_path().as_deref(),
         );
-        self.shutdown_current_thread(app_server).await;
+        let previous_thread_id = self
+            .close_current_thread_for_fresh_session(app_server)
+            .await;
         let tracked_thread_ids: Vec<ThreadId> =
             self.thread_event_channels.keys().copied().collect();
         for thread_id in tracked_thread_ids {
+            if Some(thread_id) == previous_thread_id {
+                continue;
+            }
             if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
                 tracing::warn!("failed to unsubscribe tracked thread {thread_id}: {err}");
             }
@@ -493,6 +498,28 @@ impl App {
             }
         }
         tui.frame_requester().schedule_frame();
+    }
+
+    pub(super) async fn close_current_thread_for_fresh_session(
+        &mut self,
+        app_server: &mut AppServerSession,
+    ) -> Option<ThreadId> {
+        let thread_id = self.chat_widget.thread_id()?;
+        self.backtrack.pending_rollback = None;
+        if let Err(err) = app_server.thread_close(thread_id).await {
+            tracing::warn!(
+                "failed to close thread {thread_id} before starting fresh session: {err}"
+            );
+            if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
+                tracing::warn!(
+                    "failed to unsubscribe thread {thread_id} after close failure: {err}"
+                );
+            }
+            self.abort_thread_event_listener(thread_id);
+            return None;
+        }
+        self.abort_thread_event_listener(thread_id);
+        Some(thread_id)
     }
 
     pub(super) async fn replace_chat_widget_with_app_server_thread(

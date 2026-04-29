@@ -139,6 +139,8 @@ use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadArchivedNotification;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
+use codex_app_server_protocol::ThreadCloseParams;
+use codex_app_server_protocol::ThreadCloseResponse;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
@@ -928,6 +930,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadArchive { request_id, params } => {
                 self.thread_archive(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadClose { request_id, params } => {
+                self.thread_close(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadIncrementElicitation { request_id, params } => {
@@ -3009,6 +3015,60 @@ impl CodexMessageProcessor {
             self.outgoing
                 .send_server_notification(ServerNotification::ThreadArchived(notification))
                 .await;
+        }
+    }
+
+    async fn thread_close(&self, request_id: ConnectionRequestId, params: ThreadCloseParams) {
+        let thread_id = match ThreadId::from_string(&params.thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, format!("invalid thread id: {err}"))
+                    .await;
+                return;
+            }
+        };
+
+        let thread = match self.thread_manager.get_thread(thread_id).await {
+            Ok(thread) => thread,
+            Err(_) => {
+                self.finalize_thread_teardown(thread_id).await;
+                self.outgoing
+                    .send_response(request_id, ThreadCloseResponse {})
+                    .await;
+                return;
+            }
+        };
+
+        info!("thread {thread_id} is being closed; shutting down");
+        match Self::wait_for_thread_shutdown(&thread).await {
+            ThreadShutdownResult::Complete => {
+                let _ = self.thread_manager.remove_thread(&thread_id).await;
+                self.finalize_thread_teardown(thread_id).await;
+                self.outgoing
+                    .send_response(request_id, ThreadCloseResponse {})
+                    .await;
+                self.outgoing
+                    .send_server_notification(ServerNotification::ThreadClosed(
+                        ThreadClosedNotification {
+                            thread_id: thread_id.to_string(),
+                        },
+                    ))
+                    .await;
+            }
+            ThreadShutdownResult::SubmitFailed => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to submit Shutdown to thread {thread_id}"),
+                )
+                .await;
+            }
+            ThreadShutdownResult::TimedOut => {
+                self.send_internal_error(
+                    request_id,
+                    format!("timed out waiting for thread {thread_id} to shut down"),
+                )
+                .await;
+            }
         }
     }
 

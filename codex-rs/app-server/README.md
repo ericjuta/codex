@@ -148,6 +148,7 @@ Example with notification opt-out:
 - `memory/reset` — experimental; clear the current `CODEX_HOME/memories` directory and reset persisted memory stage data in sqlite while preserving existing thread memory modes; returns `{}` on success.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory and attempt to move any spawned descendant thread rollout files; returns `{}` on success and emits `thread/archived` for each archived thread.
+- `thread/close` — shut down and unload a loaded thread without archiving its rollout; returns `{}` on success and emits `thread/closed`.
 - `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server keeps the thread loaded and unloads it only after it has had no subscribers and no thread activity for 30 minutes, then emits `thread/closed`.
 - `thread/name/set` — set or update a thread’s user-facing name for either a loaded thread or a persisted rollout; returns `{}` on success and emits `thread/name/updated` to initialized, opted-in clients. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
@@ -363,6 +364,16 @@ Later, after the idle unload timeout:
     "threadId": "thr_123",
     "status": { "type": "notLoaded" }
 } }
+{ "method": "thread/closed", "params": { "threadId": "thr_123" } }
+```
+
+### Example: Close a loaded thread
+
+`thread/close` requests immediate shutdown for a loaded thread and unloads it without moving or archiving the persisted rollout. Use this when a client is replacing a live thread and needs lifecycle cleanup to run before moving on. On success, the server emits `thread/closed`.
+
+```json
+{ "method": "thread/close", "id": 23, "params": { "threadId": "thr_123" } }
+{ "id": 23, "result": {} }
 { "method": "thread/closed", "params": { "threadId": "thr_123" } }
 ```
 

@@ -54,6 +54,8 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
@@ -5188,45 +5190,35 @@ async fn thread_rollback_response_discards_queued_active_thread_events() {
 }
 
 #[tokio::test]
-async fn new_session_requests_shutdown_for_previous_conversation() {
-    let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
-
-    let thread_id = ThreadId::new();
-    let event = SessionConfiguredEvent {
-        session_id: thread_id,
-        forked_from_id: None,
-        thread_name: None,
-        model: "gpt-test".to_string(),
-        model_provider_id: "test-provider".to_string(),
-        service_tier: None,
-        approval_policy: AskForApproval::Never,
-        approvals_reviewer: ApprovalsReviewer::User,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        cwd: test_path_buf("/home/user/project").abs(),
-        reasoning_effort: None,
-        history_log_id: 0,
-        history_entry_count: 0,
-        initial_messages: None,
-        network_proxy: None,
-        rollout_path: Some(PathBuf::new()),
-    };
-
-    app.chat_widget.handle_codex_event(Event {
-        id: String::new(),
-        msg: EventMsg::SessionConfigured(event),
-    });
-
-    while app_event_rx.try_recv().is_ok() {}
-    while op_rx.try_recv().is_ok() {}
-
+async fn fresh_session_close_unloads_previous_app_server_thread() {
+    let mut app = make_test_app().await;
     let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
         .await
         .expect("embedded app server");
-    app.shutdown_current_thread(&mut app_server).await;
+    let started = app_server
+        .start_thread(app.chat_widget.config_ref())
+        .await
+        .expect("thread/start should succeed");
+    let thread_id = started.session.thread_id;
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await
+        .expect("primary thread should be registered");
 
-    assert!(
-        op_rx.try_recv().is_err(),
-        "shutdown should not submit Op::Shutdown"
+    let closed_thread_id = app
+        .close_current_thread_for_fresh_session(&mut app_server)
+        .await;
+    assert_eq!(closed_thread_id, Some(thread_id));
+
+    let loaded = app_server
+        .thread_loaded_list(ThreadLoadedListParams::default())
+        .await
+        .expect("thread/loaded/list should succeed");
+    assert_eq!(
+        loaded,
+        ThreadLoadedListResponse {
+            data: Vec::new(),
+            next_cursor: None,
+        }
     );
 }
 

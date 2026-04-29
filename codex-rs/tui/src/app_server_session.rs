@@ -39,6 +39,8 @@ use codex_app_server_protocol::ThreadApproveGuardianDeniedActionParams;
 use codex_app_server_protocol::ThreadApproveGuardianDeniedActionResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
+use codex_app_server_protocol::ThreadCloseParams;
+use codex_app_server_protocol::ThreadCloseResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
@@ -674,6 +676,21 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/unsubscribe failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_close(&mut self, thread_id: ThreadId) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadCloseResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadClose {
+                request_id,
+                params: ThreadCloseParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/close failed in TUI")?;
         Ok(())
     }
 
