@@ -227,10 +227,66 @@ pub struct ToolSuggestConfig {
     pub disabled_tools: Vec<ToolSuggestDisabledTool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryBackend {
+    #[default]
+    Native,
+    Agentmemory,
+}
+
+/// Agentmemory-specific settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AgentmemoryConfigToml {
+    /// Base URL for the agentmemory backend.
+    pub base_url: Option<String>,
+    /// When `true`, inject startup and pre-tool agentmemory context.
+    pub inject_context: Option<bool>,
+    /// Environment variable whose value is used for agentmemory bearer auth.
+    pub secret_env_var: Option<String>,
+}
+
+/// Effective agentmemory settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentmemoryConfig {
+    pub base_url: String,
+    pub inject_context: bool,
+    pub secret_env_var: String,
+}
+
+impl Default for AgentmemoryConfig {
+    fn default() -> Self {
+        Self {
+            base_url: "http://127.0.0.1:3111".to_string(),
+            inject_context: false,
+            secret_env_var: "AGENTMEMORY_SECRET".to_string(),
+        }
+    }
+}
+
+impl From<AgentmemoryConfigToml> for AgentmemoryConfig {
+    fn from(toml: AgentmemoryConfigToml) -> Self {
+        let defaults = Self::default();
+        let AgentmemoryConfig {
+            base_url,
+            inject_context,
+            secret_env_var,
+        } = defaults;
+        Self {
+            base_url: toml.base_url.unwrap_or(base_url),
+            inject_context: toml.inject_context.unwrap_or(inject_context),
+            secret_env_var: toml.secret_env_var.unwrap_or(secret_env_var),
+        }
+    }
+}
+
 /// Memories settings loaded from config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct MemoriesToml {
+    /// The backend to use for memories.
+    pub backend: Option<MemoryBackend>,
     /// When `true`, external context sources mark the thread `memory_mode` as `"polluted"`.
     #[serde(alias = "no_memories_if_mcp_or_web_search")]
     pub disable_on_external_context: Option<bool>,
@@ -257,11 +313,14 @@ pub struct MemoriesToml {
     pub extract_model: Option<String>,
     /// Model used for memory consolidation.
     pub consolidation_model: Option<String>,
+    /// Agentmemory-specific configuration.
+    pub agentmemory: Option<AgentmemoryConfigToml>,
 }
 
 /// Effective memories settings after defaults are applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoriesConfig {
+    pub backend: MemoryBackend,
     pub disable_on_external_context: bool,
     pub generate_memories: bool,
     pub use_memories: bool,
@@ -273,11 +332,13 @@ pub struct MemoriesConfig {
     pub min_rate_limit_remaining_percent: i64,
     pub extract_model: Option<String>,
     pub consolidation_model: Option<String>,
+    pub agentmemory: AgentmemoryConfig,
 }
 
 impl Default for MemoriesConfig {
     fn default() -> Self {
         Self {
+            backend: MemoryBackend::default(),
             disable_on_external_context: false,
             generate_memories: true,
             use_memories: true,
@@ -289,6 +350,7 @@ impl Default for MemoriesConfig {
             min_rate_limit_remaining_percent: DEFAULT_MEMORIES_MIN_RATE_LIMIT_REMAINING_PERCENT,
             extract_model: None,
             consolidation_model: None,
+            agentmemory: AgentmemoryConfig::default(),
         }
     }
 }
@@ -297,6 +359,7 @@ impl From<MemoriesToml> for MemoriesConfig {
     fn from(toml: MemoriesToml) -> Self {
         let defaults = Self::default();
         Self {
+            backend: toml.backend.unwrap_or(defaults.backend),
             disable_on_external_context: toml
                 .disable_on_external_context
                 .unwrap_or(defaults.disable_on_external_context),
@@ -334,6 +397,7 @@ impl From<MemoriesToml> for MemoriesConfig {
                 .clamp(0, 100),
             extract_model: toml.extract_model,
             consolidation_model: toml.consolidation_model,
+            agentmemory: toml.agentmemory.unwrap_or_default().into(),
         }
     }
 }

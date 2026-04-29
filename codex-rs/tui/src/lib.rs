@@ -183,7 +183,6 @@ mod updates;
 mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;
-mod width;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 mod voice {
@@ -238,6 +237,7 @@ mod voice {
         pub(crate) fn clear(&self) {}
     }
 }
+mod width;
 
 mod wrapping;
 
@@ -438,11 +438,11 @@ pub(crate) async fn start_app_server_for_picker(
 pub(crate) async fn start_embedded_app_server_for_picker(
     config: &Config,
 ) -> color_eyre::Result<AppServerSession> {
-    start_app_server_for_picker(
+    Box::pin(start_app_server_for_picker(
         config,
         &AppServerTarget::Embedded,
         Arc::new(EnvironmentManager::default_for_tests()),
-    )
+    ))
     .await
 }
 

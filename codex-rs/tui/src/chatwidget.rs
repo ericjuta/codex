@@ -137,6 +137,9 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
+use codex_protocol::items::MemoryOperationKind;
+use codex_protocol::items::MemoryOperationScope;
+use codex_protocol::items::MemoryOperationStatus;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::local_image_label_text;
@@ -191,6 +194,8 @@ use codex_protocol::protocol::McpListToolsResponseEvent;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
+use codex_protocol::protocol::MemoryOperationEvent;
+use codex_protocol::protocol::MemoryOperationSource;
 #[cfg(test)]
 use codex_protocol::protocol::ModelVerification as CoreModelVerification;
 use codex_protocol::protocol::Op;
@@ -3136,6 +3141,159 @@ impl ChatWidget {
     pub(crate) fn set_memory_settings(&mut self, use_memories: bool, generate_memories: bool) {
         self.config.memories.use_memories = use_memories;
         self.config.memories.generate_memories = generate_memories;
+    }
+
+    fn app_server_memory_source(
+        source: codex_app_server_protocol::MemoryOperationSource,
+    ) -> MemoryOperationSource {
+        match source {
+            codex_app_server_protocol::MemoryOperationSource::Human => MemoryOperationSource::Human,
+            codex_app_server_protocol::MemoryOperationSource::Assistant => {
+                MemoryOperationSource::Assistant
+            }
+            codex_app_server_protocol::MemoryOperationSource::Automatic => {
+                MemoryOperationSource::Automatic
+            }
+        }
+    }
+
+    fn app_server_memory_kind(
+        operation: codex_app_server_protocol::MemoryOperationKind,
+    ) -> MemoryOperationKind {
+        match operation {
+            codex_app_server_protocol::MemoryOperationKind::Recall => MemoryOperationKind::Recall,
+            codex_app_server_protocol::MemoryOperationKind::Remember => {
+                MemoryOperationKind::Remember
+            }
+            codex_app_server_protocol::MemoryOperationKind::Update => MemoryOperationKind::Update,
+            codex_app_server_protocol::MemoryOperationKind::Drop => MemoryOperationKind::Drop,
+            codex_app_server_protocol::MemoryOperationKind::Lessons => MemoryOperationKind::Lessons,
+            codex_app_server_protocol::MemoryOperationKind::Crystals => {
+                MemoryOperationKind::Crystals
+            }
+            codex_app_server_protocol::MemoryOperationKind::Crystallize => {
+                MemoryOperationKind::Crystallize
+            }
+            codex_app_server_protocol::MemoryOperationKind::AutoCrystallize => {
+                MemoryOperationKind::AutoCrystallize
+            }
+            codex_app_server_protocol::MemoryOperationKind::Insights => {
+                MemoryOperationKind::Insights
+            }
+            codex_app_server_protocol::MemoryOperationKind::Reflect => MemoryOperationKind::Reflect,
+            codex_app_server_protocol::MemoryOperationKind::Actions => MemoryOperationKind::Actions,
+            codex_app_server_protocol::MemoryOperationKind::ActionCreate => {
+                MemoryOperationKind::ActionCreate
+            }
+            codex_app_server_protocol::MemoryOperationKind::ActionUpdate => {
+                MemoryOperationKind::ActionUpdate
+            }
+            codex_app_server_protocol::MemoryOperationKind::Missions => {
+                MemoryOperationKind::Missions
+            }
+            codex_app_server_protocol::MemoryOperationKind::Handoffs => {
+                MemoryOperationKind::Handoffs
+            }
+            codex_app_server_protocol::MemoryOperationKind::HandoffGenerate => {
+                MemoryOperationKind::HandoffGenerate
+            }
+            codex_app_server_protocol::MemoryOperationKind::BranchOverlays => {
+                MemoryOperationKind::BranchOverlays
+            }
+            codex_app_server_protocol::MemoryOperationKind::Guardrails => {
+                MemoryOperationKind::Guardrails
+            }
+            codex_app_server_protocol::MemoryOperationKind::Decisions => {
+                MemoryOperationKind::Decisions
+            }
+            codex_app_server_protocol::MemoryOperationKind::Dossiers => {
+                MemoryOperationKind::Dossiers
+            }
+            codex_app_server_protocol::MemoryOperationKind::RoutineCandidates => {
+                MemoryOperationKind::RoutineCandidates
+            }
+            codex_app_server_protocol::MemoryOperationKind::Frontier => {
+                MemoryOperationKind::Frontier
+            }
+            codex_app_server_protocol::MemoryOperationKind::Next => MemoryOperationKind::Next,
+        }
+    }
+
+    fn app_server_memory_status(
+        status: codex_app_server_protocol::MemoryOperationStatus,
+    ) -> MemoryOperationStatus {
+        match status {
+            codex_app_server_protocol::MemoryOperationStatus::Pending => {
+                MemoryOperationStatus::Pending
+            }
+            codex_app_server_protocol::MemoryOperationStatus::Ready => MemoryOperationStatus::Ready,
+            codex_app_server_protocol::MemoryOperationStatus::Empty => MemoryOperationStatus::Empty,
+            codex_app_server_protocol::MemoryOperationStatus::Skipped => {
+                MemoryOperationStatus::Skipped
+            }
+            codex_app_server_protocol::MemoryOperationStatus::Error => MemoryOperationStatus::Error,
+        }
+    }
+
+    fn app_server_memory_scope(
+        scope: codex_app_server_protocol::MemoryOperationScope,
+    ) -> MemoryOperationScope {
+        match scope {
+            codex_app_server_protocol::MemoryOperationScope::None => MemoryOperationScope::None,
+            codex_app_server_protocol::MemoryOperationScope::Turn => MemoryOperationScope::Turn,
+            codex_app_server_protocol::MemoryOperationScope::Thread => MemoryOperationScope::Thread,
+        }
+    }
+
+    fn on_memory_operation(&mut self, event: MemoryOperationEvent) {
+        if self.try_complete_pending_memory_operation(&event) {
+            self.request_redraw();
+            return;
+        }
+        self.add_to_history(history_cell::new_memory_operation_event(event));
+        self.request_redraw();
+    }
+
+    pub(crate) fn show_pending_memory_operation(&mut self, cell: history_cell::MemoryHistoryCell) {
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(cell));
+        self.bump_active_cell_revision();
+        self.request_redraw();
+    }
+
+    fn try_complete_pending_memory_operation(&mut self, event: &MemoryOperationEvent) -> bool {
+        if event.source != MemoryOperationSource::Human {
+            return false;
+        }
+        let Some(active) = self.active_cell.as_mut() else {
+            return false;
+        };
+        let Some(memory) = active
+            .as_any_mut()
+            .downcast_mut::<history_cell::MemoryHistoryCell>()
+        else {
+            return false;
+        };
+        if !memory.is_human_pending_submission(event.operation, event.query.as_deref()) {
+            return false;
+        }
+        memory.apply_event(event.clone());
+        self.bump_active_cell_revision();
+        self.flush_active_cell();
+        true
+    }
+
+    fn ensure_memory_recall_thread(&mut self) -> bool {
+        if self.thread_id.is_some() {
+            return true;
+        }
+
+        self.add_error_message(
+            "Start a new chat or resume an existing thread before using /memory-recall."
+                .to_string(),
+        );
+        self.bottom_pane.drain_pending_submission_state();
+        false
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -6483,6 +6641,28 @@ impl ChatWidget {
                 });
             }
             ThreadItem::Plan { text, .. } => self.on_plan_item_completed(text),
+            ThreadItem::MemoryOperation {
+                source,
+                operation,
+                status,
+                scope,
+                query,
+                summary,
+                detail,
+                context_injected,
+                ..
+            } => {
+                self.on_memory_operation(MemoryOperationEvent {
+                    source: Self::app_server_memory_source(source),
+                    operation: Self::app_server_memory_kind(operation),
+                    status: Self::app_server_memory_status(status),
+                    scope: Self::app_server_memory_scope(scope),
+                    query,
+                    summary,
+                    detail,
+                    context_injected,
+                });
+            }
             ThreadItem::Reasoning {
                 summary, content, ..
             } => {
@@ -6819,6 +6999,18 @@ impl ChatWidget {
             }
             ServerNotification::ItemCompleted(notification) => {
                 self.handle_item_completed_notification(notification, replay_kind);
+            }
+            ServerNotification::MemoryOperation(notification) => {
+                self.on_memory_operation(MemoryOperationEvent {
+                    source: Self::app_server_memory_source(notification.source),
+                    operation: Self::app_server_memory_kind(notification.operation),
+                    status: Self::app_server_memory_status(notification.status),
+                    scope: Self::app_server_memory_scope(notification.scope),
+                    query: notification.query,
+                    summary: notification.summary,
+                    detail: notification.detail,
+                    context_injected: notification.context_injected,
+                });
             }
             ServerNotification::AgentMessageDelta(notification) => {
                 self.on_agent_message_delta(notification.delta);
@@ -7443,6 +7635,7 @@ impl ChatWidget {
             }
             EventMsg::Warning(WarningEvent { message })
             | EventMsg::GuardianWarning(WarningEvent { message }) => self.on_warning(message),
+            EventMsg::MemoryOperation(event) => self.on_memory_operation(event),
             EventMsg::GuardianAssessment(ev) => self.on_guardian_assessment(ev),
             EventMsg::ModelReroute(_) => {}
             EventMsg::ModelVerification(event) => {

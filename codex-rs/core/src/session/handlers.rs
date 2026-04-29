@@ -898,6 +898,56 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         &[],
     );
 
+    let config = sess.get_config().await;
+    if config.memories.backend == codex_config::types::MemoryBackend::Agentmemory {
+        let adapter = crate::agentmemory::AgentmemoryAdapter::new();
+        let session_id = sess.conversation_id.to_string();
+        let cwd = config.cwd.display().to_string();
+        adapter
+            .capture_event(
+                "Stop",
+                serde_json::json!({
+                    "session_id": &session_id,
+                    "cwd": &cwd,
+                }),
+                &config.memories,
+            )
+            .await;
+
+        let closeout_result = adapter
+            .closeout_session(&session_id, &config.memories)
+            .await;
+        let mut session_end_payload = serde_json::json!({
+            "session_id": &session_id,
+            "cwd": &cwd,
+        });
+        match closeout_result {
+            Ok(closeout) => {
+                session_end_payload["closeout_success"] = serde_json::json!(closeout.success);
+                session_end_payload["closeout_steps"] = closeout.steps_json();
+                if !closeout.errors.is_empty() {
+                    session_end_payload["closeout_errors"] = serde_json::json!(
+                        closeout
+                            .errors
+                            .iter()
+                            .map(|err| serde_json::json!({
+                                "step": &err.step,
+                                "message": &err.message,
+                            }))
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+            Err(err) => {
+                warn!("failed to close out agentmemory session {session_id}: {err}");
+                session_end_payload["summary_error"] = serde_json::json!(err);
+            }
+        }
+        adapter
+            .capture_event("SessionEnd", session_end_payload, &config.memories)
+            .await;
+    }
+
     // Gracefully flush and shutdown thread persistence on session end so tests
     // that inspect durable state do not race with the background writer.
     if let Some(live_thread) = sess.live_thread()
@@ -1120,6 +1170,235 @@ pub(super) async fn submission_loop(
                 }
                 Op::Compact => {
                     compact(&sess, sub.id.clone()).await;
+                    false
+                }
+                Op::DropMemories => {
+                    crate::session::agentmemory_ops::drop_memories(&sess, &config, sub.id.clone())
+                        .await;
+                    false
+                }
+                Op::UpdateMemories => {
+                    crate::session::agentmemory_ops::update_memories(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                    )
+                    .await;
+                    false
+                }
+                Op::RecallMemories { query } => {
+                    crate::session::agentmemory_ops::recall_memories(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        query,
+                    )
+                    .await;
+                    false
+                }
+                Op::RememberMemories { content } => {
+                    crate::session::agentmemory_ops::remember_memories(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        content,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewLessons { query } => {
+                    crate::session::agentmemory_ops::review_lessons(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        query,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewCrystals => {
+                    crate::session::agentmemory_ops::review_crystals(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                    )
+                    .await;
+                    false
+                }
+                Op::CreateCrystals { action_ids } => {
+                    crate::session::agentmemory_ops::create_crystals(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        action_ids,
+                    )
+                    .await;
+                    false
+                }
+                Op::AutoCrystallize { older_than_days } => {
+                    crate::session::agentmemory_ops::auto_crystallize(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        older_than_days,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReflectMemories { max_clusters } => {
+                    crate::session::agentmemory_ops::reflect_memories(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        max_clusters,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewInsights { query } => {
+                    crate::session::agentmemory_ops::review_insights(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        query,
+                    )
+                    .await;
+                    false
+                }
+                Op::ListActions { status } => {
+                    crate::session::agentmemory_ops::list_actions(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        status,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewMissions { mission_id, status } => {
+                    crate::session::agentmemory_ops::review_missions(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        mission_id,
+                        status,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewBranchOverlays { branch } => {
+                    crate::session::agentmemory_ops::review_branch_overlays(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        branch,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewGuardrails { query } => {
+                    crate::session::agentmemory_ops::review_guardrails(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        query,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewDecisions { query } => {
+                    crate::session::agentmemory_ops::review_decisions(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        query,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewDossiers { file_path } => {
+                    crate::session::agentmemory_ops::review_dossiers(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        file_path,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewRoutineCandidates => {
+                    crate::session::agentmemory_ops::review_routine_candidates(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                    )
+                    .await;
+                    false
+                }
+                Op::CreateAction { title } => {
+                    crate::session::agentmemory_ops::create_action(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        title,
+                    )
+                    .await;
+                    false
+                }
+                Op::UpdateAction { action_id, status } => {
+                    crate::session::agentmemory_ops::update_action(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        action_id,
+                        status,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewHandoffs {
+                    handoff_packet_id,
+                    scope_type,
+                    scope_id,
+                } => {
+                    crate::session::agentmemory_ops::review_handoffs(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        handoff_packet_id,
+                        scope_type,
+                        scope_id,
+                    )
+                    .await;
+                    false
+                }
+                Op::GenerateHandoff {
+                    scope_type,
+                    scope_id,
+                } => {
+                    crate::session::agentmemory_ops::generate_handoff(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        scope_type,
+                        scope_id,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewFrontier { limit } => {
+                    crate::session::agentmemory_ops::review_frontier(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        limit,
+                    )
+                    .await;
+                    false
+                }
+                Op::ReviewNext => {
+                    crate::session::agentmemory_ops::review_next(&sess, &config, sub.id.clone())
+                        .await;
                     false
                 }
                 Op::ThreadRollback { num_turns } => {

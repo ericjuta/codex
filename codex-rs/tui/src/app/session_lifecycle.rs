@@ -233,13 +233,6 @@ impl App {
                     }
                     Err(err) => return Err(err),
                 };
-                if turns.is_empty() {
-                    // A `thread/read` fallback without turns would create a blank local replay
-                    // channel with no live listener attached, which blocks later real re-attach.
-                    return Err(color_eyre::eyre::eyre!(
-                        "Agent thread {thread_id} is not yet available for replay or live attach."
-                    ));
-                }
                 let mut session = self.session_state_for_thread_read(thread_id, &thread).await;
                 // `thread/read` can seed replay state, but it does not attach the app-server
                 // listener that `thread/resume` establishes, so treat this path as replay-only.
@@ -247,6 +240,13 @@ impl App {
                 (session, turns, false)
             }
         };
+        if turns.is_empty() {
+            // Empty resume/read snapshots create blank local channels and block a later attach
+            // attempt from replacing them with real replay state.
+            return Err(color_eyre::eyre::eyre!(
+                "Agent thread {thread_id} is not yet available for replay or live attach."
+            ));
+        }
         let channel = self.ensure_thread_channel(thread_id);
         let mut store = channel.store.lock().await;
         store.set_session(session, turns);
