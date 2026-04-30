@@ -199,7 +199,7 @@ If Codex sends a query to `/agentmemory/context`, it must survive end to end.
 
 - runtime recall with query affects ranking predictably
 - behavior without query stays materially unchanged
-- `/agentmemory/context/refresh` and runtime recall semantics stay aligned
+- prompt-submit `/agentmemory/context` and runtime recall semantics stay aligned
 
 ### 3. Shutdown Observation Hygiene
 
@@ -409,7 +409,7 @@ actually sends to:
 - `/agentmemory/context`
 - `/agentmemory/enrich`
 - `/agentmemory/session/start`
-- `/agentmemory/session/end`
+- `/agentmemory/session/closeout`
 
 ## Documentation
 

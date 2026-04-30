@@ -10,10 +10,9 @@ This document tracks the fork-side work needed to fully exploit the
 The backend now emits retrieval explainability from `mem::context` through:
 
 - `POST /agentmemory/context`
-- `POST /agentmemory/context/refresh`
 
-Codex should not ignore that output when it is the active caller of those
-endpoints.
+Codex should not ignore that output when it is the active caller of that
+endpoint.
 
 ## Goal
 
@@ -28,10 +27,10 @@ Concretely, when `agentmemory` returns retrieval trace metadata, Codex should:
 
 ## Problem
 
-Before this follow-up, Codex already did the right runtime calls:
+Before this follow-up, Codex already did the right runtime call:
 
-- non-trivial user turns used `/agentmemory/context/refresh`
-- prompt-submit fallback used `/agentmemory/context`
+- non-trivial user turns used `/agentmemory/context` with prompt-derived
+  `query`
 
 But Codex only deserialized:
 
@@ -67,7 +66,6 @@ This follow-up implements the minimum useful Codex-side surface:
 
 1. parse optional retrieval trace data from:
    - `/agentmemory/context`
-   - `/agentmemory/context/refresh`
 2. derive a compact summary containing:
    - `query_terms`
    - `selected_count`
@@ -93,10 +91,9 @@ When `agentmemory` backend retrieval returns a `trace` object:
 
 - Codex automatic user-turn retrieval must preserve a compact
   `retrieval_trace` summary in `MemoryOperationEvent.detail`
-- successful `context/refresh` injection may include the summary
-- successful fallback `/context` injection may include the summary
-- empty `/context` fallback results may include the summary so operators can
-  still inspect what backend retrieval attempted
+- successful query-aware `/context` injection may include the summary
+- empty `/context` results may include the summary so operators can still
+  inspect what backend retrieval attempted
 
 When no trace is present:
 
@@ -121,10 +118,7 @@ If the fork wants to push the lane further, the next reasonable steps are:
    trace summary
 2. optionally expose trace summary on assistant `memory_recall` when a debug or
    explicit explainability mode is requested
-3. preserve refresh-path trace detail when refresh returns empty and fallback
-   later errors, so both attempts stay inspectable in one event
-4. add parity tests for the direct `/context/refresh` success path, not only
-   fallback `/context`
+3. keep query-aware `/context` trace detail inspectable in runtime events
 
 ## Acceptance Criteria
 
