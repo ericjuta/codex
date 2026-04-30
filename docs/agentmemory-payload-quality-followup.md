@@ -39,12 +39,12 @@ As of this audit, the following sender-side lanes are already landed in
   - `error`
 - shutdown hygiene is fixed:
   - bare `Stop` emits `diagnostics_only`
-  - `SessionEnd` emits `ephemeral` when it only carries summarize status
+  - `SessionEnd` emits `ephemeral` when it only carries closeout status
 - `TaskCompleted`, `SubagentStop`, and `Notification` now require explicit
   `cwd` through the sender normalization path
 - query-aware retrieval is wired:
-  - prompt submit calls `/agentmemory/context/refresh`
-  - fallback recall calls `/agentmemory/context`
+  - prompt submit calls `/agentmemory/context` with prompt-derived `query`
+  - fallback recall also calls `/agentmemory/context`
   - runtime recall preserves `query`
 - pre-tool enrichment covers the native file/search lanes already under
   `agentmemory` handling
