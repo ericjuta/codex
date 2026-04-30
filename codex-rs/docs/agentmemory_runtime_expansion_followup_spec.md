@@ -83,16 +83,13 @@ Current branch implementation now includes:
   - dossiers
   - handoffs
 - lifecycle expansion for:
-  - prompt-submit `context/refresh`
-  - shutdown-side `crystals/auto`
-  - shutdown-side `consolidate-pipeline`
+  - prompt-submit query-aware `context`
+  - shutdown-side `session/closeout`
 
 Operational sync note:
 
-- `memories.use_memories` is the current native toggle for the shutdown-side
-  consolidation calls
-- `CONSOLIDATION_ENABLED=true|false` remains honored as an override so Codex
-  can match the standalone `agentmemory` hook runtime
+- session shutdown now uses `POST /agentmemory/session/closeout`; the backend
+  owns shutdown-side summarize, session-end, crystal, and consolidation steps
 
 ## Goal
 
@@ -173,12 +170,11 @@ Recommended rollout split:
 
 ### 4. Lifecycle Expansion
 
-Add the remaining plugin-aligned lifecycle calls that are still absent from the
-runtime:
+The plugin-aligned lifecycle calls now use the backend's bounded runtime APIs:
 
-- `POST /agentmemory/context/refresh` when query-aware prompt refresh applies
-- `POST /agentmemory/crystals/auto` during session shutdown when enabled
-- `POST /agentmemory/consolidate-pipeline` during session shutdown when enabled
+- `POST /agentmemory/context` with prompt-derived `query` when query-aware
+  prompt retrieval applies
+- `POST /agentmemory/session/closeout` during session shutdown
 
 Design rule:
 
