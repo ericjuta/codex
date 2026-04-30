@@ -17,7 +17,7 @@ use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::SessionStartCommandInput;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize)]
 pub enum SessionStartSource {
     Startup,
     Resume,
@@ -34,7 +34,7 @@ impl SessionStartSource {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SessionStartRequest {
     pub session_id: ThreadId,
     pub cwd: AbsolutePathBuf,

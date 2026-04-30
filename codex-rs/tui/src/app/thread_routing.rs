@@ -18,6 +18,24 @@ impl App {
         }
     }
 
+    pub(super) async fn close_current_thread_for_fresh_session(
+        &mut self,
+        app_server: &mut AppServerSession,
+    ) {
+        if let Some(thread_id) = self.chat_widget.thread_id() {
+            self.backtrack.pending_rollback = None;
+            if let Err(err) = app_server.thread_close(thread_id).await {
+                tracing::warn!(
+                    "failed to close thread {thread_id}; falling back to unsubscribe: {err}"
+                );
+                if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
+                    tracing::warn!("failed to unsubscribe thread {thread_id}: {err}");
+                }
+            }
+            self.abort_thread_event_listener(thread_id);
+        }
+    }
+
     pub(super) fn abort_thread_event_listener(&mut self, thread_id: ThreadId) {
         if let Some(handle) = self.thread_event_listener_tasks.remove(&thread_id) {
             handle.abort();

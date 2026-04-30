@@ -22,6 +22,8 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::RemoteControlClientConnectionAudience;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadCloseParams;
+use codex_app_server_protocol::ThreadCloseResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;

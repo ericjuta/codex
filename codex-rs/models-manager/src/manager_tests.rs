@@ -377,6 +377,27 @@ async fn refresh_available_models_uses_cache_when_fresh() {
     );
 }
 
+#[test]
+fn provider_cache_file_name_scopes_custom_providers() {
+    let default_openai = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    let custom_openai = ModelProviderInfo::create_openai_provider(Some(
+        "http://127.0.0.1:2455/backend-api/codex".to_string(),
+    ));
+    let another_custom_openai = ModelProviderInfo::create_openai_provider(Some(
+        "https://chatgpt.com/backend-api/codex".to_string(),
+    ));
+
+    assert_eq!(provider_cache_file_name(&default_openai), MODEL_CACHE_FILE);
+    assert_ne!(
+        provider_cache_file_name(&custom_openai),
+        provider_cache_file_name(&default_openai)
+    );
+    assert_ne!(
+        provider_cache_file_name(&custom_openai),
+        provider_cache_file_name(&another_custom_openai)
+    );
+}
+
 #[tokio::test]
 async fn refresh_available_models_refetches_when_cache_stale() {
     let initial_models = vec![remote_model("stale", "Stale", /*priority*/ 1)];

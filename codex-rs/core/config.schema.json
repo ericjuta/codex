@@ -31,6 +31,25 @@
       },
       "type": "object"
     },
+    "AgentmemoryConfigToml": {
+      "additionalProperties": false,
+      "description": "Agentmemory-specific settings loaded from config.toml.",
+      "properties": {
+        "base_url": {
+          "description": "Base URL for the agentmemory backend.",
+          "type": "string"
+        },
+        "inject_context": {
+          "description": "When `true`, inject startup and pre-tool agentmemory context.",
+          "type": "boolean"
+        },
+        "secret_env_var": {
+          "description": "Environment variable whose value is used for agentmemory bearer auth.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "AgentsToml": {
       "additionalProperties": {
         "$ref": "#/definitions/AgentRoleToml"
@@ -1130,6 +1149,22 @@
       "additionalProperties": false,
       "description": "Memories settings loaded from config.toml.",
       "properties": {
+        "agentmemory": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AgentmemoryConfigToml"
+            }
+          ],
+          "description": "Agentmemory-specific configuration."
+        },
+        "backend": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MemoryBackend"
+            }
+          ],
+          "description": "The backend to use for memories."
+        },
         "consolidation_model": {
           "description": "Model used for memory consolidation.",
           "type": "string"
@@ -1188,6 +1223,13 @@
         }
       },
       "type": "object"
+    },
+    "MemoryBackend": {
+      "enum": [
+        "native",
+        "agentmemory"
+      ],
+      "type": "string"
     },
     "ModelAvailabilityNuxConfig": {
       "additionalProperties": {

@@ -1,11 +1,22 @@
 ---
 source: core/tests/suite/compact_remote.rs
-expression: "format_labeled_requests_snapshot(\"Remote pre-turn auto-compaction context-window failure: compaction request excludes the incoming user message and the turn errors.\",\n&[(\"Remote Compaction Request (Incoming User Excluded)\",\n&include_attempt_request),])"
+expression: "format_labeled_requests_snapshot(\"Remote pre-turn auto-compaction context-window retry: the first compact request is too large, the retry trims older history, and the turn continues.\",\n&[(\"Remote Compaction Request (Too Large)\", &compact_requests[0]),\n(\"Remote Compaction Request (Retry)\", &compact_requests[1]),\n(\"Remote Post-Compaction History Layout\", &post_compact_request),])"
 ---
-Scenario: Remote pre-turn auto-compaction context-window failure: compaction request excludes the incoming user message and the turn errors.
+Scenario: Remote pre-turn auto-compaction context-window retry: the first compact request is too large, the retry trims older history, and the turn continues.
 
-## Remote Compaction Request (Incoming User Excluded)
+## Remote Compaction Request (Too Large)
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:USER_ONE
 03:message/assistant:REMOTE_FIRST_REPLY
+
+## Remote Compaction Request (Retry)
+00:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+01:message/user:USER_ONE
+02:message/assistant:REMOTE_FIRST_REPLY
+
+## Remote Post-Compaction History Layout
+00:compaction:encrypted=true
+01:message/developer:<PERMISSIONS_INSTRUCTIONS>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+03:message/user:USER_TWO

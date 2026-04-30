@@ -1356,65 +1356,106 @@ async fn open_agent_picker_marks_loaded_threads_open() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn attach_live_thread_for_selection_rejects_empty_non_ephemeral_fallback_threads()
--> Result<()> {
-    let mut app = make_test_app().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
-    let started = app_server
-        .start_thread(app.chat_widget.config_ref())
-        .await?;
-    let thread_id = started.session.thread_id;
-    app.agent_navigation.upsert(
-        thread_id,
-        Some("Scout".to_string()),
-        Some("worker".to_string()),
-        /*is_closed*/ false,
-    );
+fn run_attach_live_thread_fallback_test(
+    name: &str,
+    test: impl FnOnce() -> Result<()> + Send + 'static,
+) -> Result<()> {
+    let handle = std::thread::Builder::new()
+        .name(name.to_string())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(test)
+        .expect("spawn large-stack test thread");
 
-    let err = app
-        .attach_live_thread_for_selection(&mut app_server, thread_id)
-        .await
-        .expect_err("empty fallback should not attach as a blank replay-only thread");
-
-    assert_eq!(
-        err.to_string(),
-        format!("Agent thread {thread_id} is not yet available for replay or live attach.")
-    );
-    assert!(!app.thread_event_channels.contains_key(&thread_id));
-    Ok(())
+    match handle.join() {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
-#[tokio::test]
-async fn attach_live_thread_for_selection_rejects_unmaterialized_fallback_threads() -> Result<()> {
-    let mut app = make_test_app().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
-    let mut ephemeral_config = app.chat_widget.config_ref().clone();
-    ephemeral_config.ephemeral = true;
-    let started = app_server.start_thread(&ephemeral_config).await?;
-    let thread_id = started.session.thread_id;
-    app.agent_navigation.upsert(
-        thread_id,
-        Some("Scout".to_string()),
-        Some("worker".to_string()),
-        /*is_closed*/ false,
-    );
+#[test]
+fn attach_live_thread_for_selection_rejects_empty_non_ephemeral_fallback_threads() -> Result<()> {
+    run_attach_live_thread_fallback_test("rejects_empty_non_ephemeral_fallback_threads", || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        runtime.block_on(async {
+            let mut app = make_test_app().await;
+            let mut app_server =
+                crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                    .await
+                    .expect("embedded app server");
+            let started = app_server.start_thread(app.chat_widget.config_ref()).await?;
+            let thread_id = started.session.thread_id;
+            app.agent_navigation.upsert(
+                thread_id,
+                Some("Scout".to_string()),
+                Some("worker".to_string()),
+                /*is_closed*/ false,
+            );
 
-    let err = app
-        .attach_live_thread_for_selection(&mut app_server, thread_id)
-        .await
-        .expect_err("ephemeral fallback should not attach as a blank live thread");
+            let err = match app
+                .attach_live_thread_for_selection(&mut app_server, thread_id)
+                .await
+            {
+                Ok(attached) => panic!(
+                    "empty fallback should not attach as a blank replay-only thread, got Ok({attached})"
+                ),
+                Err(err) => err,
+            };
 
-    assert_eq!(
-        err.to_string(),
-        format!("Agent thread {thread_id} is not yet available for replay or live attach.")
-    );
-    assert!(!app.thread_event_channels.contains_key(&thread_id));
-    Ok(())
+            assert_eq!(
+                err.to_string(),
+                format!("Agent thread {thread_id} is not yet available for replay or live attach.")
+            );
+            assert!(!app.thread_event_channels.contains_key(&thread_id));
+            Ok(())
+        })
+    })
+}
+
+#[test]
+fn attach_live_thread_for_selection_rejects_unmaterialized_fallback_threads() -> Result<()> {
+    run_attach_live_thread_fallback_test("rejects_unmaterialized_fallback_threads", || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        runtime.block_on(async {
+            let mut app = make_test_app().await;
+            let mut app_server =
+                crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                    .await
+                    .expect("embedded app server");
+            let mut ephemeral_config = app.chat_widget.config_ref().clone();
+            ephemeral_config.ephemeral = true;
+            let started = app_server.start_thread(&ephemeral_config).await?;
+            let thread_id = started.session.thread_id;
+            app.agent_navigation.upsert(
+                thread_id,
+                Some("Scout".to_string()),
+                Some("worker".to_string()),
+                /*is_closed*/ false,
+            );
+
+            let err = match app
+                .attach_live_thread_for_selection(&mut app_server, thread_id)
+                .await
+            {
+                Ok(attached) => panic!(
+                    "ephemeral fallback should not attach as a blank live thread, got Ok({attached})"
+                ),
+                Err(err) => err,
+            };
+
+            assert_eq!(
+                err.to_string(),
+                format!("Agent thread {thread_id} is not yet available for replay or live attach.")
+            );
+            assert!(!app.thread_event_channels.contains_key(&thread_id));
+            Ok(())
+        })
+    })
 }
 
 #[tokio::test]
@@ -3681,14 +3722,14 @@ async fn clear_ui_header_shows_fast_status_for_fast_capable_models() {
     assert_app_snapshot!("clear_ui_header_fast_status_fast_capable_models", rendered);
 }
 
-async fn make_test_app() -> App {
+async fn make_test_app() -> Box<App> {
     let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
 
-    App {
+    Box::new(App {
         model_catalog: chat_widget.model_catalog(),
         session_telemetry,
         app_event_tx,
@@ -3733,11 +3774,11 @@ async fn make_test_app() -> App {
         pending_primary_events: VecDeque::new(),
         pending_app_server_requests: PendingAppServerRequests::default(),
         pending_plugin_enabled_writes: HashMap::new(),
-    }
+    })
 }
 
 async fn make_test_app_with_channels() -> (
-    App,
+    Box<App>,
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     tokio::sync::mpsc::UnboundedReceiver<Op>,
 ) {
@@ -3748,7 +3789,7 @@ async fn make_test_app_with_channels() -> (
     let session_telemetry = test_session_telemetry(&config, model.as_str());
 
     (
-        App {
+        Box::new(App {
             model_catalog: chat_widget.model_catalog(),
             session_telemetry,
             app_event_tx,
@@ -3793,7 +3834,7 @@ async fn make_test_app_with_channels() -> (
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_plugin_enabled_writes: HashMap::new(),
-        },
+        }),
         rx,
         op_rx,
     )
