@@ -392,6 +392,7 @@ pub(crate) struct ChatComposer {
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
+    agentmemory_enabled: bool,
     windows_degraded_sandbox_active: bool,
     side_conversation_active: bool,
     is_zellij: bool,
@@ -572,6 +573,7 @@ impl ChatComposer {
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
+            agentmemory_enabled: false,
             windows_degraded_sandbox_active: false,
             side_conversation_active: false,
             is_zellij: matches!(
@@ -738,6 +740,10 @@ impl ChatComposer {
 
     pub fn set_side_conversation_active(&mut self, active: bool) {
         self.side_conversation_active = active;
+    }
+
+    pub fn set_agentmemory_enabled(&mut self, enabled: bool) {
+        self.agentmemory_enabled = enabled;
     }
 
     /// Compatibility shim for tests that still toggle the removed steer mode flag.
@@ -3478,6 +3484,16 @@ impl ChatComposer {
             }
         };
 
+        let mut status_line_value = self.status_line_value.clone();
+        if self.agentmemory_enabled {
+            if let Some(existing) = status_line_value.as_mut() {
+                existing.spans.push(" · ".into());
+                existing.spans.push("Agentmemory".dim());
+            } else {
+                status_line_value = Some(Line::from("Agentmemory".dim()));
+            }
+        }
+
         FooterProps {
             mode,
             esc_backtrack_hint: self.esc_backtrack_hint,
@@ -3486,7 +3502,9 @@ impl ChatComposer {
             quit_shortcut_key: self.quit_shortcut_key,
             collaboration_modes_enabled: self.collaboration_modes_enabled,
             is_wsl,
-            status_line_value: self.status_line_value.clone(),
+            context_window_percent: self.context_window_percent,
+            context_window_used_tokens: self.context_window_used_tokens,
+            status_line_value,
             status_line_enabled: self.status_line_enabled,
             key_hints: FooterKeyHints {
                 toggle_shortcuts: self.footer_toggle_shortcuts_key,
@@ -4926,6 +4944,19 @@ mod tests {
                     .handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
                 let _ = composer
                     .handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+            },
+        );
+    }
+
+    #[test]
+    fn footer_status_line_shows_agentmemory_indicator() {
+        snapshot_composer_state(
+            "footer_status_line_with_agentmemory_indicator",
+            true,
+            |composer| {
+                composer.set_status_line_enabled(true);
+                composer.set_status_line(Some(Line::from("Status line content".to_string())));
+                composer.set_agentmemory_enabled(true);
             },
         );
 

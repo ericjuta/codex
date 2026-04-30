@@ -371,6 +371,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::SkillsUpdateAvailable
                     | EventMsg::ExitedReviewMode(_)
                     | EventMsg::RequestUserInput(_)
+                    | EventMsg::MemoryOperation(_)
                     | EventMsg::RequestPermissions(_)
                     | EventMsg::DynamicToolCallRequest(_)
                     | EventMsg::DynamicToolCallResponse(_)

@@ -13,6 +13,10 @@ use crate::protocol::v2::DynamicToolCallStatus;
 use crate::protocol::v2::McpToolCallError;
 use crate::protocol::v2::McpToolCallResult;
 use crate::protocol::v2::McpToolCallStatus;
+use crate::protocol::v2::MemoryOperationKind;
+use crate::protocol::v2::MemoryOperationScope;
+use crate::protocol::v2::MemoryOperationSource;
+use crate::protocol::v2::MemoryOperationStatus;
 use crate::protocol::v2::ThreadItem;
 use crate::protocol::v2::Turn;
 use crate::protocol::v2::TurnError as V2TurnError;
@@ -41,6 +45,7 @@ use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
+use codex_protocol::protocol::MemoryOperationEvent;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
@@ -214,6 +219,7 @@ impl ThreadHistoryBuilder {
             EventMsg::ItemStarted(payload) => self.handle_item_started(payload),
             EventMsg::ItemCompleted(payload) => self.handle_item_completed(payload),
             EventMsg::HookStarted(_) | EventMsg::HookCompleted(_) => {}
+            EventMsg::MemoryOperation(payload) => self.handle_memory_operation(payload),
             EventMsg::Error(payload) => self.handle_error(payload),
             EventMsg::TokenCount(_) => {}
             EventMsg::ThreadRolledBack(payload) => self.handle_thread_rollback(payload),
@@ -865,6 +871,101 @@ impl ThreadHistoryBuilder {
         self.ensure_turn()
             .items
             .push(ThreadItem::ExitedReviewMode { id, review });
+    }
+
+    fn handle_memory_operation(&mut self, payload: &MemoryOperationEvent) {
+        let id = self.next_item_id();
+        self.ensure_turn().items.push(ThreadItem::MemoryOperation {
+            id,
+            source: match payload.source {
+                codex_protocol::protocol::MemoryOperationSource::Human => {
+                    MemoryOperationSource::Human
+                }
+                codex_protocol::protocol::MemoryOperationSource::Assistant => {
+                    MemoryOperationSource::Assistant
+                }
+                codex_protocol::protocol::MemoryOperationSource::Automatic => {
+                    MemoryOperationSource::Automatic
+                }
+            },
+            operation: match payload.operation {
+                codex_protocol::items::MemoryOperationKind::Recall => MemoryOperationKind::Recall,
+                codex_protocol::items::MemoryOperationKind::Remember => {
+                    MemoryOperationKind::Remember
+                }
+                codex_protocol::items::MemoryOperationKind::Update => MemoryOperationKind::Update,
+                codex_protocol::items::MemoryOperationKind::Drop => MemoryOperationKind::Drop,
+                codex_protocol::items::MemoryOperationKind::Lessons => MemoryOperationKind::Lessons,
+                codex_protocol::items::MemoryOperationKind::Crystals => {
+                    MemoryOperationKind::Crystals
+                }
+                codex_protocol::items::MemoryOperationKind::Crystallize => {
+                    MemoryOperationKind::Crystallize
+                }
+                codex_protocol::items::MemoryOperationKind::AutoCrystallize => {
+                    MemoryOperationKind::AutoCrystallize
+                }
+                codex_protocol::items::MemoryOperationKind::Insights => {
+                    MemoryOperationKind::Insights
+                }
+                codex_protocol::items::MemoryOperationKind::Reflect => MemoryOperationKind::Reflect,
+                codex_protocol::items::MemoryOperationKind::Actions => MemoryOperationKind::Actions,
+                codex_protocol::items::MemoryOperationKind::ActionCreate => {
+                    MemoryOperationKind::ActionCreate
+                }
+                codex_protocol::items::MemoryOperationKind::ActionUpdate => {
+                    MemoryOperationKind::ActionUpdate
+                }
+                codex_protocol::items::MemoryOperationKind::Missions => {
+                    MemoryOperationKind::Missions
+                }
+                codex_protocol::items::MemoryOperationKind::Handoffs => {
+                    MemoryOperationKind::Handoffs
+                }
+                codex_protocol::items::MemoryOperationKind::HandoffGenerate => {
+                    MemoryOperationKind::HandoffGenerate
+                }
+                codex_protocol::items::MemoryOperationKind::BranchOverlays => {
+                    MemoryOperationKind::BranchOverlays
+                }
+                codex_protocol::items::MemoryOperationKind::Guardrails => {
+                    MemoryOperationKind::Guardrails
+                }
+                codex_protocol::items::MemoryOperationKind::Decisions => {
+                    MemoryOperationKind::Decisions
+                }
+                codex_protocol::items::MemoryOperationKind::Dossiers => {
+                    MemoryOperationKind::Dossiers
+                }
+                codex_protocol::items::MemoryOperationKind::RoutineCandidates => {
+                    MemoryOperationKind::RoutineCandidates
+                }
+                codex_protocol::items::MemoryOperationKind::Frontier => {
+                    MemoryOperationKind::Frontier
+                }
+                codex_protocol::items::MemoryOperationKind::Next => MemoryOperationKind::Next,
+            },
+            status: match payload.status {
+                codex_protocol::items::MemoryOperationStatus::Pending => {
+                    MemoryOperationStatus::Pending
+                }
+                codex_protocol::items::MemoryOperationStatus::Ready => MemoryOperationStatus::Ready,
+                codex_protocol::items::MemoryOperationStatus::Empty => MemoryOperationStatus::Empty,
+                codex_protocol::items::MemoryOperationStatus::Skipped => {
+                    MemoryOperationStatus::Skipped
+                }
+                codex_protocol::items::MemoryOperationStatus::Error => MemoryOperationStatus::Error,
+            },
+            scope: match payload.scope {
+                codex_protocol::items::MemoryOperationScope::None => MemoryOperationScope::None,
+                codex_protocol::items::MemoryOperationScope::Turn => MemoryOperationScope::Turn,
+                codex_protocol::items::MemoryOperationScope::Thread => MemoryOperationScope::Thread,
+            },
+            query: payload.query.clone(),
+            summary: payload.summary.clone(),
+            detail: payload.detail.clone(),
+            context_injected: payload.context_injected,
+        });
     }
 
     fn handle_error(&mut self, payload: &ErrorEvent) {
@@ -3076,6 +3177,53 @@ mod tests {
                         hook_run_id: "hook-run-2".into(),
                     },
                 ],
+            }
+        );
+    }
+
+    #[test]
+    fn rebuilds_memory_operation_items_from_rollout_events() {
+        let items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-a".into(),
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            })),
+            RolloutItem::EventMsg(EventMsg::MemoryOperation(MemoryOperationEvent {
+                source: codex_protocol::protocol::MemoryOperationSource::Human,
+                operation: codex_protocol::items::MemoryOperationKind::Recall,
+                status: codex_protocol::items::MemoryOperationStatus::Ready,
+                scope: codex_protocol::items::MemoryOperationScope::Turn,
+                query: Some("auth failures".into()),
+                summary: "Recalled memory context and injected it into the current thread.".into(),
+                detail: Some("recent auth failure context".into()),
+                context_injected: true,
+            })),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-a".into(),
+                last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            })),
+        ];
+
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].items.len(), 1);
+        assert_eq!(
+            turns[0].items[0],
+            ThreadItem::MemoryOperation {
+                id: turns[0].items[0].id().to_string(),
+                source: MemoryOperationSource::Human,
+                operation: MemoryOperationKind::Recall,
+                status: MemoryOperationStatus::Ready,
+                scope: MemoryOperationScope::Turn,
+                query: Some("auth failures".into()),
+                summary: "Recalled memory context and injected it into the current thread.".into(),
+                detail: Some("recent auth failure context".into()),
+                context_injected: true,
             }
         );
     }

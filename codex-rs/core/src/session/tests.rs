@@ -49,7 +49,13 @@ use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
+use serial_test::serial;
 use tracing::Span;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 use crate::goals::GoalRuntimeEvent;
 use crate::goals::SetGoalRequest;
@@ -5128,6 +5134,301 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
     async_channel::Receiver<Event>,
 ) {
     make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match self.original.take() {
+            Some(value) => unsafe {
+                std::env::set_var(self.key, value);
+            },
+            None => unsafe {
+                std::env::remove_var(self.key);
+            },
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(agentmemory_env)]
+async fn update_memories_emits_empty_event_for_insufficient_observations() {
+    let agentmemory_server = MockServer::start().await;
+    let _agentmemory_url_guard = EnvVarGuard::set("AGENTMEMORY_URL", &agentmemory_server.uri());
+
+    Mock::given(method("POST"))
+        .and(path("/agentmemory/consolidate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "consolidated": 0,
+            "reason": "insufficient_observations",
+            "scannedSessions": 4,
+            "totalObservations": 0
+        })))
+        .expect(1)
+        .mount(&agentmemory_server)
+        .await;
+
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let mut config = build_test_config(codex_home.path()).await;
+    config.memories.backend = codex_config::types::MemoryBackend::Agentmemory;
+    let config = Arc::new(config);
+    let (sess, _tc, rx) = make_session_and_context_with_rx().await;
+
+    crate::session::agentmemory_ops::update_memories(&sess, &config, "sub-id".to_string()).await;
+
+    let event = tokio::time::timeout(StdDuration::from_secs(1), async {
+        loop {
+            let event = rx.recv().await.expect("event");
+            if let EventMsg::MemoryOperation(event) = event.msg {
+                break event;
+            }
+        }
+    })
+    .await
+    .expect("timeout waiting for memory operation event");
+
+    assert_eq!(
+        event.operation,
+        codex_protocol::items::MemoryOperationKind::Update
+    );
+    assert_eq!(
+        event.status,
+        codex_protocol::items::MemoryOperationStatus::Empty
+    );
+    assert_eq!(
+        event.summary,
+        "Not enough observations yet to consolidate agentmemory."
+    );
+    assert_eq!(
+        event.detail,
+        Some(
+            "Agentmemory returned reason 'insufficient_observations' after scanning 4 sessions and considering 0 candidate observations.".to_string()
+        )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(agentmemory_env)]
+async fn remember_memories_emits_ready_event() {
+    let agentmemory_server = MockServer::start().await;
+    let _agentmemory_url_guard = EnvVarGuard::set("AGENTMEMORY_URL", &agentmemory_server.uri());
+
+    Mock::given(method("POST"))
+        .and(path("/agentmemory/remember"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "success": true,
+            "memory": {
+                "id": "mem-123",
+                "content": "retain this note",
+            }
+        })))
+        .expect(1)
+        .mount(&agentmemory_server)
+        .await;
+
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let mut config = build_test_config(codex_home.path()).await;
+    config.memories.backend = codex_config::types::MemoryBackend::Agentmemory;
+    let config = Arc::new(config);
+    let (sess, _tc, rx) = make_session_and_context_with_rx().await;
+
+    crate::session::agentmemory_ops::remember_memories(
+        &sess,
+        &config,
+        "sub-id".to_string(),
+        "retain this note".to_string(),
+    )
+    .await;
+
+    let event = tokio::time::timeout(StdDuration::from_secs(1), async {
+        loop {
+            let event = rx.recv().await.expect("event");
+            if let EventMsg::MemoryOperation(event) = event.msg {
+                break event;
+            }
+        }
+    })
+    .await
+    .expect("timeout waiting for memory operation event");
+
+    assert_eq!(
+        event.operation,
+        codex_protocol::items::MemoryOperationKind::Remember
+    );
+    assert_eq!(
+        event.status,
+        codex_protocol::items::MemoryOperationStatus::Ready
+    );
+    assert_eq!(event.summary, "Saved durable memory `mem-123`.");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(agentmemory_env)]
+async fn submission_loop_dispatches_handoff_frontier_and_next_memory_ops() {
+    let agentmemory_server = MockServer::start().await;
+    let _agentmemory_url_guard = EnvVarGuard::set("AGENTMEMORY_URL", &agentmemory_server.uri());
+
+    Mock::given(method("POST"))
+        .and(path("/agentmemory/handoffs/generate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": true,
+            "handoffPacket": {
+                "id": "handoff-123",
+            }
+        })))
+        .expect(1)
+        .mount(&agentmemory_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/agentmemory/frontier"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": true,
+            "frontier": [
+                {
+                    "actionId": "act-1",
+                    "title": "Tighten the resume flow",
+                }
+            ],
+            "totalUnblocked": 2
+        })))
+        .expect(1)
+        .mount(&agentmemory_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/agentmemory/next"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": true,
+            "message": "Resume with the handoff packet review.",
+            "suggestion": {
+                "actionId": "act-1",
+                "title": "Review the handoff packet",
+            }
+        })))
+        .expect(1)
+        .mount(&agentmemory_server)
+        .await;
+
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let mut config = build_test_config(codex_home.path()).await;
+    config.memories.backend = codex_config::types::MemoryBackend::Agentmemory;
+    let config = Arc::new(config);
+    let (session, _turn_context, rx_event) = make_session_and_context_with_rx().await;
+    let (tx_sub, rx_sub) = async_channel::unbounded();
+    let submission_loop = tokio::spawn(handlers::submission_loop(
+        Arc::clone(&session),
+        Arc::clone(&config),
+        rx_sub,
+    ));
+
+    tx_sub
+        .send(Submission {
+            id: "sub-handoff".into(),
+            op: Op::GenerateHandoff {
+                scope_type: None,
+                scope_id: None,
+            },
+            trace: None,
+        })
+        .await
+        .expect("send handoff op");
+    tx_sub
+        .send(Submission {
+            id: "sub-frontier".into(),
+            op: Op::ReviewFrontier { limit: Some(3) },
+            trace: None,
+        })
+        .await
+        .expect("send frontier op");
+    tx_sub
+        .send(Submission {
+            id: "sub-next".into(),
+            op: Op::ReviewNext,
+            trace: None,
+        })
+        .await
+        .expect("send next op");
+    tx_sub
+        .send(Submission {
+            id: "sub-shutdown".into(),
+            op: Op::Shutdown,
+            trace: None,
+        })
+        .await
+        .expect("send shutdown op");
+    drop(tx_sub);
+
+    let memory_events = timeout(StdDuration::from_secs(1), async {
+        let mut events = Vec::new();
+        while events.len() < 3 {
+            let event = rx_event.recv().await.expect("event");
+            if let EventMsg::MemoryOperation(memory_event) = event.msg {
+                events.push(memory_event);
+            }
+        }
+        events
+    })
+    .await
+    .expect("timeout waiting for memory operation events");
+
+    assert_eq!(memory_events.len(), 3);
+    assert_eq!(
+        memory_events[0].operation,
+        codex_protocol::items::MemoryOperationKind::HandoffGenerate
+    );
+    assert_eq!(
+        memory_events[0].status,
+        codex_protocol::items::MemoryOperationStatus::Ready
+    );
+    assert_eq!(
+        memory_events[0].summary,
+        "Generated handoff packet `handoff-123`."
+    );
+
+    assert_eq!(
+        memory_events[1].operation,
+        codex_protocol::items::MemoryOperationKind::Frontier
+    );
+    assert_eq!(
+        memory_events[1].status,
+        codex_protocol::items::MemoryOperationStatus::Ready
+    );
+    assert_eq!(
+        memory_events[1].summary,
+        "Reviewed 1 frontier suggestions (2 unblocked actions total)."
+    );
+
+    assert_eq!(
+        memory_events[2].operation,
+        codex_protocol::items::MemoryOperationKind::Next
+    );
+    assert_eq!(
+        memory_events[2].status,
+        codex_protocol::items::MemoryOperationStatus::Ready
+    );
+    assert_eq!(
+        memory_events[2].summary,
+        "Resume with the handoff packet review."
+    );
+
+    submission_loop
+        .await
+        .expect("submission loop should exit cleanly");
 }
 
 #[tokio::test]

@@ -1,4 +1,5 @@
 use super::*;
+use codex_config::types::MemoryBackend;
 use codex_features::Feature;
 use codex_features::Features;
 use codex_protocol::config_types::WebSearchMode;
@@ -239,6 +240,46 @@ fn image_generation_requires_feature_and_supported_model() {
     assert!(supported_tools_config.image_gen_tool);
     assert!(!auth_disallowed_tools_config.image_gen_tool);
     assert!(!unsupported_tools_config.image_gen_tool);
+}
+
+#[test]
+fn memory_tool_defaults_to_native_backend_and_feature_flag() {
+    let model_info = model_info();
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    assert_eq!(tools_config.memory_backend, MemoryBackend::Native);
+    assert!(!tools_config.memory_tool_enabled);
+}
+
+#[test]
+fn memory_backend_override_is_retained() {
+    let model_info = model_info();
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_memory_backend(MemoryBackend::Agentmemory);
+
+    assert_eq!(tools_config.memory_backend, MemoryBackend::Agentmemory);
 }
 
 #[test]

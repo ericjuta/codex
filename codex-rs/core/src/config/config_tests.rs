@@ -28,6 +28,7 @@ use codex_config::permissions_toml::NetworkToml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
 use codex_config::profile_toml::ConfigProfile;
+use codex_config::types::AgentmemoryConfig;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::BundledSkillsConfig;
@@ -38,6 +39,7 @@ use codex_config::types::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
 use codex_config::types::MemoriesToml;
+use codex_config::types::MemoryBackend;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
 use codex_config::types::NotificationCondition;
@@ -280,6 +282,7 @@ consolidation_model = "gpt-5.2"
         toml::from_str::<ConfigToml>(memories).expect("TOML deserialization should succeed");
     assert_eq!(
         Some(MemoriesToml {
+            backend: None,
             disable_on_external_context: Some(true),
             generate_memories: Some(false),
             use_memories: Some(false),
@@ -291,6 +294,7 @@ consolidation_model = "gpt-5.2"
             min_rate_limit_remaining_percent: Some(12),
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5.2".to_string()),
+            agentmemory: None,
         }),
         memories_cfg.memories
     );
@@ -305,6 +309,7 @@ consolidation_model = "gpt-5.2"
     assert_eq!(
         config.memories,
         MemoriesConfig {
+            backend: MemoryBackend::Native,
             disable_on_external_context: true,
             generate_memories: false,
             use_memories: false,
@@ -316,6 +321,7 @@ consolidation_model = "gpt-5.2"
             min_rate_limit_remaining_percent: 12,
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5.2".to_string()),
+            agentmemory: AgentmemoryConfig::default(),
         }
     );
 

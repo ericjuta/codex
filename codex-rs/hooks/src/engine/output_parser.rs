@@ -96,15 +96,16 @@ pub(crate) fn parse_pre_tool_use(stdout: &str) -> Option<PreToolUseOutput> {
         output.permission_decision.is_some()
             || output.permission_decision_reason.is_some()
             || output.updated_input.is_some()
-            || output.additional_context.is_some()
     });
-    let invalid_reason = unsupported_pre_tool_use_universal(&universal).or_else(|| {
-        if use_hook_specific_decision {
-            hook_specific_output.and_then(unsupported_pre_tool_use_hook_specific_output)
-        } else {
-            unsupported_pre_tool_use_legacy_decision(decision.as_ref(), reason.as_deref())
-        }
-    });
+    let invalid_reason = unsupported_pre_tool_use_universal(&universal)
+        .or_else(|| hook_specific_output.and_then(unsupported_pre_tool_use_hook_specific_output))
+        .or_else(|| {
+            if use_hook_specific_decision {
+                None
+            } else {
+                unsupported_pre_tool_use_legacy_decision(decision.as_ref(), reason.as_deref())
+            }
+        });
     let block_reason = if invalid_reason.is_none() {
         if use_hook_specific_decision {
             hook_specific_output.and_then(|output| match output.permission_decision {
@@ -123,7 +124,6 @@ pub(crate) fn parse_pre_tool_use(stdout: &str) -> Option<PreToolUseOutput> {
     } else {
         None
     };
-
     Some(PreToolUseOutput {
         universal,
         block_reason,

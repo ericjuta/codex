@@ -354,19 +354,26 @@ impl ToolRegistry {
             return Err(err);
         }
 
-        if let Some(pre_tool_use_payload) = handler.pre_tool_use_payload(&invocation)
-            && let Some(message) = run_pre_tool_use_hooks(
+        if let Some(pre_tool_use_payload) = handler.pre_tool_use_payload(&invocation) {
+            let pre_tool_use_outcome = run_pre_tool_use_hooks(
                 &invocation.session,
                 &invocation.turn,
                 invocation.call_id.clone(),
                 &pre_tool_use_payload.tool_name,
                 &pre_tool_use_payload.tool_input,
             )
-            .await
-        {
-            let err = FunctionCallError::RespondToModel(message);
-            dispatch_trace.record_failed(&err);
-            return Err(err);
+            .await;
+            record_additional_contexts(
+                &invocation.session,
+                &invocation.turn,
+                pre_tool_use_outcome.additional_contexts,
+            )
+            .await;
+            if let Some(message) = pre_tool_use_outcome.block_reason {
+                let err = FunctionCallError::RespondToModel(message);
+                dispatch_trace.record_failed(&err);
+                return Err(err);
+            }
         }
 
         let is_mutating = handler.is_mutating(&invocation).await;

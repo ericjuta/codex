@@ -12,8 +12,12 @@ use tokio::fs;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
@@ -52,6 +56,46 @@ impl ToolHandler for ListDirHandler {
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
+    }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            return None;
+        };
+        let args: ListDirArgs = parse_arguments(arguments).ok()?;
+        Some(PreToolUsePayload {
+            tool_name: HookToolName::new("Glob"),
+            tool_input: serde_json::json!({
+                "dir_path": args.dir_path,
+                "offset": args.offset,
+                "limit": args.limit,
+                "depth": args.depth,
+            }),
+        })
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        invocation: &ToolInvocation,
+        result: &Self::Output,
+    ) -> Option<PostToolUsePayload> {
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            return None;
+        };
+        let args: ListDirArgs = parse_arguments(arguments).ok()?;
+        let tool_response =
+            result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
+        Some(PostToolUsePayload {
+            tool_name: HookToolName::new("Glob"),
+            tool_use_id: invocation.call_id.clone(),
+            tool_input: serde_json::json!({
+                "dir_path": args.dir_path,
+                "offset": args.offset,
+                "limit": args.limit,
+                "depth": args.depth,
+            }),
+            tool_response,
+        })
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {

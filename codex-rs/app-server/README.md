@@ -89,7 +89,7 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 - Start (or resume) a thread: Call `thread/start` to open a fresh conversation. The response returns the thread object and you’ll also get a `thread/started` notification. If you’re continuing an existing conversation, call `thread/resume` with its ID instead. If you want to branch from an existing conversation, call `thread/fork` to create a new thread id with copied history. Like `thread/start`, `thread/fork` also accepts `ephemeral: true` for an in-memory temporary thread.
   The returned `thread.ephemeral` flag tells you whether the session is intentionally in-memory only; when it is `true`, `thread.path` is `null`.
 - Begin a turn: To send user input, call `turn/start` with the target `threadId` and the user's input. Optional fields let you override model, cwd, sandbox policy or experimental `permissions` profile selection, approval policy, approvals reviewer, etc. This immediately returns the new turn object. The app-server emits `turn/started` when that turn actually begins running.
-- Stream events: After `turn/start`, keep reading JSON-RPC notifications on stdout. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
+- Stream events: After `turn/start`, keep reading JSON-RPC notifications on stdout. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, memory-operation notifications, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
 - Finish the turn: When the model is done (or the turn is interrupted via making the `turn/interrupt` call), the server sends `turn/completed` with the final turn state and token usage.
 
 ## Initialization
@@ -606,6 +606,35 @@ If the thread does not already have an active turn, the server starts a standalo
 ```json
 { "method": "thread/shellCommand", "id": 26, "params": { "threadId": "thr_b", "command": "git status --short" } }
 { "id": 26, "result": {} }
+```
+
+### Example: Manage thread memory
+
+Use the thread-scoped memory methods to mirror the legacy TUI slash commands:
+
+- `thread/memory/drop` clears the active memory store for the configured backend.
+- `thread/memory/update` triggers a backend-specific sync/consolidation pass.
+- `thread/memory/recall` retrieves memory context and injects it into the thread as developer instructions.
+
+All three requests return immediately with `{}`. Result details surface through the thread event stream as `thread/memory/operation` notifications carrying the structured source, operation, status, optional query, summary, optional detail, and whether recalled context was injected into the thread.
+
+When turns are later reconstructed through `thread/read`, `thread/resume`, or
+`thread/fork` history replay, persisted memory actions are also represented as
+`{"type":"memoryOperation", ...}` thread items instead of disappearing from the
+transcript.
+
+```json
+{ "method": "thread/memory/drop", "id": 27, "params": { "threadId": "thr_b" } }
+{ "id": 27, "result": {} }
+
+{ "method": "thread/memory/update", "id": 28, "params": { "threadId": "thr_b" } }
+{ "id": 28, "result": {} }
+
+{ "method": "thread/memory/recall", "id": 29, "params": {
+    "threadId": "thr_b",
+    "query": "recent auth failures"
+} }
+{ "id": 29, "result": {} }
 ```
 
 ### Example: Start a turn (send user input)
@@ -1156,7 +1185,8 @@ All items emit shared lifecycle events:
 - `item/started` — emits the full `item` when a new unit of work begins so the UI can render it immediately; the `item.id` in this payload matches the `itemId` used by deltas.
 - `item/completed` — sends the final `item` once that work itself finishes (for example, after a tool call or message completes); treat this as the authoritative execution/result state.
 - `item/autoApprovalReview/started` — [UNSTABLE] temporary auto-review notification carrying `{threadId, turnId, targetItemId, review, action}` when approval auto-review begins. This shape is expected to change soon.
-- `item/autoApprovalReview/completed` — [UNSTABLE] temporary auto-review notification carrying `{threadId, turnId, targetItemId, review, action}` when approval auto-review resolves. This shape is expected to change soon.
+- `item/autoApprovalReview/completed` — [UNSTABLE] temporary guardian notification carrying `{threadId, turnId, targetItemId, review, action}` when guardian approval review resolves. This shape is expected to change soon.
+- `thread/memory/operation` — sends structured memory and action outcomes such as recall, remember, lessons/crystals/insights review, action list/frontier/next review, action create/update, crystallize/auto-crystallize, drop, and update with `{threadId, source, operation, status, query?, summary, detail?, contextInjected}`.
 
 `review` is [UNSTABLE] and currently has `{status, riskLevel?, userAuthorization?, rationale?}`, where `status` is one of `inProgress`, `approved`, `denied`, or `aborted`. `riskLevel` is one of `"low"`, `"medium"`, `"high"`, or `"critical"` when present. `userAuthorization` is one of `"unknown"`, `"low"`, `"medium"`, or `"high"` when present. `action` is a tagged union with `type: "command" | "execve" | "applyPatch" | "networkAccess" | "mcpToolCall"`. Command-like actions include a `source` discriminator (`"shell"` or `"unifiedExec"`). These notifications are separate from the target item's own `item/completed` lifecycle and are intentionally temporary while the auto-review app protocol is still being designed.
 

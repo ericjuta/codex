@@ -67,9 +67,31 @@ pub enum SlashCommand {
     #[strum(serialize = "subagents")]
     MultiAgents,
     // Debugging commands.
-    #[strum(serialize = "debug-m-drop")]
+    #[strum(serialize = "memory-recall")]
+    MemoryRecall,
+    MemoryRemember,
+    MemoryLessons,
+    MemoryCrystals,
+    MemoryCrystalsCreate,
+    MemoryCrystalsAuto,
+    MemoryInsights,
+    MemoryReflect,
+    MemoryActions,
+    MemoryMissions,
+    MemoryBranchOverlays,
+    MemoryGuardrails,
+    MemoryDecisions,
+    MemoryDossiers,
+    MemoryRoutineCandidates,
+    MemoryActionCreate,
+    MemoryActionUpdate,
+    MemoryHandoffs,
+    MemoryHandoffGenerate,
+    MemoryFrontier,
+    MemoryNext,
+    #[strum(to_string = "memory-drop", serialize = "debug-m-drop")]
     MemoryDrop,
-    #[strum(serialize = "debug-m-update")]
+    #[strum(to_string = "memory-update", serialize = "debug-m-update")]
     MemoryUpdate,
 }
 
@@ -99,8 +121,29 @@ impl SlashCommand {
             SlashCommand::Theme => "choose a syntax highlighting theme",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Stop => "stop all background terminals",
-            SlashCommand::MemoryDrop => "DO NOT USE",
-            SlashCommand::MemoryUpdate => "DO NOT USE",
+            SlashCommand::MemoryRecall => "recall relevant memory into the current thread",
+            SlashCommand::MemoryRemember => "save durable memory explicitly",
+            SlashCommand::MemoryLessons => "review agentmemory lessons",
+            SlashCommand::MemoryCrystals => "review crystallized action digests",
+            SlashCommand::MemoryCrystalsCreate => "create a crystal from action ids",
+            SlashCommand::MemoryCrystalsAuto => "auto-crystallize eligible action groups",
+            SlashCommand::MemoryInsights => "review reflected insights",
+            SlashCommand::MemoryReflect => "generate reflected insights",
+            SlashCommand::MemoryActions => "review tracked action work items",
+            SlashCommand::MemoryMissions => "review tracked mission containers",
+            SlashCommand::MemoryBranchOverlays => "review branch-scoped overlay notes",
+            SlashCommand::MemoryGuardrails => "review negative memory guardrails",
+            SlashCommand::MemoryDecisions => "review durable decision memory",
+            SlashCommand::MemoryDossiers => "review file-level component dossiers",
+            SlashCommand::MemoryRoutineCandidates => "review routine compiler proposals",
+            SlashCommand::MemoryActionCreate => "create a tracked action work item",
+            SlashCommand::MemoryActionUpdate => "update a tracked action work item",
+            SlashCommand::MemoryHandoffs => "review durable handoff packets",
+            SlashCommand::MemoryHandoffGenerate => "generate a fresh handoff packet",
+            SlashCommand::MemoryFrontier => "review unblocked frontier suggestions",
+            SlashCommand::MemoryNext => "review the next suggested action",
+            SlashCommand::MemoryDrop => "clear stored memories for this workspace",
+            SlashCommand::MemoryUpdate => "refresh stored memories for this workspace",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Fast => {
                 "toggle Fast mode to enable fastest inference with increased plan usage"
@@ -152,6 +195,24 @@ impl SlashCommand {
                 | SlashCommand::Side
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
+                | SlashCommand::MemoryRecall
+                | SlashCommand::MemoryRemember
+                | SlashCommand::MemoryLessons
+                | SlashCommand::MemoryCrystalsCreate
+                | SlashCommand::MemoryCrystalsAuto
+                | SlashCommand::MemoryInsights
+                | SlashCommand::MemoryReflect
+                | SlashCommand::MemoryActions
+                | SlashCommand::MemoryMissions
+                | SlashCommand::MemoryBranchOverlays
+                | SlashCommand::MemoryGuardrails
+                | SlashCommand::MemoryDecisions
+                | SlashCommand::MemoryDossiers
+                | SlashCommand::MemoryActionCreate
+                | SlashCommand::MemoryActionUpdate
+                | SlashCommand::MemoryHandoffs
+                | SlashCommand::MemoryHandoffGenerate
+                | SlashCommand::MemoryFrontier
         )
     }
 
@@ -186,6 +247,27 @@ impl SlashCommand {
             | SlashCommand::Plan
             | SlashCommand::Clear
             | SlashCommand::Logout
+            | SlashCommand::MemoryRecall
+            | SlashCommand::MemoryRemember
+            | SlashCommand::MemoryLessons
+            | SlashCommand::MemoryCrystals
+            | SlashCommand::MemoryCrystalsCreate
+            | SlashCommand::MemoryCrystalsAuto
+            | SlashCommand::MemoryInsights
+            | SlashCommand::MemoryReflect
+            | SlashCommand::MemoryActions
+            | SlashCommand::MemoryMissions
+            | SlashCommand::MemoryBranchOverlays
+            | SlashCommand::MemoryGuardrails
+            | SlashCommand::MemoryDecisions
+            | SlashCommand::MemoryDossiers
+            | SlashCommand::MemoryRoutineCandidates
+            | SlashCommand::MemoryActionCreate
+            | SlashCommand::MemoryActionUpdate
+            | SlashCommand::MemoryHandoffs
+            | SlashCommand::MemoryHandoffGenerate
+            | SlashCommand::MemoryFrontier
+            | SlashCommand::MemoryNext
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff

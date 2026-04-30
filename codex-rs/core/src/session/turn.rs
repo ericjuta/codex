@@ -13,6 +13,7 @@ use crate::collect_env_var_dependencies;
 use crate::collect_explicit_skill_mentions;
 use crate::compact::InitialContextInjection;
 use crate::compact::collect_user_messages;
+use crate::compact::insert_initial_context_before_last_real_user_or_summary;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
@@ -114,6 +115,8 @@ use tracing::instrument;
 use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
+
+const MAX_CONTEXT_WINDOW_COMPACTION_RETRIES_PER_TURN: usize = 3;
 
 /// Takes a user message as input and runs a loop where, at each sampling request, the model
 /// replies with either:
@@ -296,15 +299,23 @@ pub(crate) async fn run_turn(
         })
         .collect::<Vec<_>>();
 
-    if run_pending_session_start_hooks(&sess, &turn_context).await {
+    let session_start_outcome = run_pending_session_start_hooks(&sess, &turn_context).await;
+    if session_start_outcome.should_stop {
+        record_additional_contexts(
+            &sess,
+            &turn_context,
+            session_start_outcome.additional_contexts,
+        )
+        .await;
         return None;
     }
-    let additional_contexts = if input.is_empty() {
-        Vec::new()
+    let mut additional_contexts = session_start_outcome.additional_contexts;
+    if input.is_empty() {
+        // Nothing else to append for this turn.
     } else {
         let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
         let response_item: ResponseItem = initial_input_for_turn.clone().into();
-        let user_prompt_submit_outcome = run_user_prompt_submit_hooks(
+        let mut user_prompt_submit_outcome = run_user_prompt_submit_hooks(
             &sess,
             &turn_context,
             UserMessageItem::new(&input).message(),
@@ -321,8 +332,8 @@ pub(crate) async fn run_turn(
         }
         sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
             .await;
-        user_prompt_submit_outcome.additional_contexts
-    };
+        additional_contexts.append(&mut user_prompt_submit_outcome.additional_contexts);
+    }
     sess.services
         .analytics_events_client
         .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
@@ -371,11 +382,26 @@ pub(crate) async fn run_turn(
     // 1. At the start of a turn, so the fresh user prompt in `input` gets sampled first.
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
     let mut can_drain_pending_input = input.is_empty();
+    let mut resume_handoff_context_items: Option<Vec<ResponseItem>> = None;
+    let mut context_window_compaction_retries = 0usize;
 
     loop {
-        if run_pending_session_start_hooks(&sess, &turn_context).await {
+        let session_start_outcome = run_pending_session_start_hooks(&sess, &turn_context).await;
+        if session_start_outcome.should_stop {
+            record_additional_contexts(
+                &sess,
+                &turn_context,
+                session_start_outcome.additional_contexts,
+            )
+            .await;
             break;
         }
+        record_additional_contexts(
+            &sess,
+            &turn_context,
+            session_start_outcome.additional_contexts,
+        )
+        .await;
 
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
@@ -427,6 +453,21 @@ pub(crate) async fn run_turn(
         }
 
         // Construct the input that we will send to the model.
+        if resume_handoff_context_items.is_none() {
+            let resume_handoff_context = {
+                let mut state = sess.state.lock().await;
+                state.take_pending_resume_handoff_context()
+            };
+            resume_handoff_context_items = Some(
+                resume_handoff_context
+                    .map(|context| {
+                        crate::context_manager::updates::build_developer_update_item(vec![context])
+                            .into_iter()
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            );
+        }
         let sampling_request_input: Vec<ResponseItem> = {
             sess.clone_history()
                 .await
@@ -449,6 +490,7 @@ pub(crate) async fn run_turn(
             &mut client_session,
             turn_metadata_header.as_deref(),
             sampling_request_input,
+            resume_handoff_context_items.as_deref().unwrap_or(&[]),
             &explicitly_enabled_connectors,
             skills_outcome,
             cancellation_token.child_token(),
@@ -623,6 +665,33 @@ pub(crate) async fn run_turn(
             Err(CodexErr::TurnAborted) => {
                 // Aborted turn is reported via a different event.
                 break;
+            }
+            Err(CodexErr::ContextWindowExceeded)
+                if context_window_compaction_retries
+                    < MAX_CONTEXT_WINDOW_COMPACTION_RETRIES_PER_TURN =>
+            {
+                let should_drop_resume_handoff_context = context_window_compaction_retries > 0
+                    && resume_handoff_context_items
+                        .as_ref()
+                        .is_some_and(|items| !items.is_empty());
+                context_window_compaction_retries += 1;
+                if run_auto_compact(
+                    &sess,
+                    &turn_context,
+                    InitialContextInjection::BeforeLastUserMessage,
+                    CompactionReason::ContextLimit,
+                    CompactionPhase::MidTurn,
+                )
+                .await
+                .is_err()
+                {
+                    return None;
+                }
+                if should_drop_resume_handoff_context {
+                    resume_handoff_context_items = Some(Vec::new());
+                }
+                client_session.reset_websocket_session();
+                continue;
             }
             Err(CodexErr::InvalidImageRequest()) => {
                 {
@@ -968,6 +1037,7 @@ async fn run_sampling_request(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
+    turn_scoped_prompt_context: &[ResponseItem],
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: CancellationToken,
@@ -1003,13 +1073,19 @@ async fn run_sampling_request(
     let mut retries = 0;
     let mut initial_input = Some(input);
     loop {
-        let prompt_input = if let Some(input) = initial_input.take() {
+        let mut prompt_input = if let Some(input) = initial_input.take() {
             input
         } else {
             sess.clone_history()
                 .await
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
+        if !turn_scoped_prompt_context.is_empty() {
+            prompt_input = insert_initial_context_before_last_real_user_or_summary(
+                prompt_input,
+                turn_scoped_prompt_context.to_vec(),
+            );
+        }
         let prompt = build_prompt(
             prompt_input,
             router.as_ref(),
@@ -1484,6 +1560,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::PlanUpdate(_)
         | EventMsg::TurnAborted(_)
         | EventMsg::ShutdownComplete
+        | EventMsg::MemoryOperation(_)
         | EventMsg::EnteredReviewMode(_)
         | EventMsg::ExitedReviewMode(_)
         | EventMsg::RawResponseItem(_)

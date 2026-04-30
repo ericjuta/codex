@@ -25,6 +25,26 @@ fn client_response_payload_returns_jsonrpc_parts_and_client_response() -> Result
 }
 
 #[test]
+fn thread_close_payload_returns_jsonrpc_parts_and_client_response() -> Result<()> {
+    let (request_id, result, payload) =
+        ClientResponsePayload::ThreadClose(v2::ThreadCloseResponse {})
+            .into_jsonrpc_parts_and_payload(RequestId::Integer(7))?;
+
+    assert_eq!(request_id, RequestId::Integer(7));
+    assert_eq!(result, json!({}));
+
+    let Some(ClientResponse::ThreadClose {
+        request_id,
+        response: _,
+    }) = payload.and_then(|payload| payload.into_client_response(RequestId::Integer(7)))
+    else {
+        panic!("expected thread/close client response");
+    };
+    assert_eq!(request_id, RequestId::Integer(7));
+    Ok(())
+}
+
+#[test]
 fn interrupt_conversation_payload_stays_jsonrpc_only() -> Result<()> {
     let (request_id, result, payload) =
         ClientResponsePayload::InterruptConversation(v1::InterruptConversationResponse {

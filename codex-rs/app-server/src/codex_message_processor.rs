@@ -157,6 +157,8 @@ use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadArchivedNotification;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
+use codex_app_server_protocol::ThreadCloseParams;
+use codex_app_server_protocol::ThreadCloseResponse;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
@@ -1039,6 +1041,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadArchive { request_id, params } => {
                 self.thread_archive(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadClose { request_id, params } => {
+                self.thread_close(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadIncrementElicitation { request_id, params } => {
@@ -6067,6 +6073,44 @@ impl CodexMessageProcessor {
             ThreadUnsubscribeStatus::NotSubscribed
         };
         Ok(ThreadUnsubscribeResponse { status })
+    }
+
+    async fn thread_close(&self, request_id: ConnectionRequestId, params: ThreadCloseParams) {
+        let result = self.thread_close_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn thread_close_response(
+        &self,
+        params: ThreadCloseParams,
+    ) -> Result<ThreadCloseResponse, JSONRPCErrorError> {
+        let thread_id = ThreadId::from_string(&params.thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+        self.prepare_thread_for_close(thread_id).await;
+        Ok(ThreadCloseResponse {})
+    }
+
+    async fn prepare_thread_for_close(&self, thread_id: ThreadId) {
+        let removed_thread = self.thread_manager.remove_thread(&thread_id).await;
+        if let Some(thread) = removed_thread {
+            info!("thread {thread_id} was active; closing");
+            match Self::wait_for_thread_shutdown(&thread).await {
+                ThreadShutdownResult::Complete => {}
+                ThreadShutdownResult::SubmitFailed => {
+                    warn!("failed to submit Shutdown to thread {thread_id}; closing anyway");
+                }
+                ThreadShutdownResult::TimedOut => {
+                    warn!("thread {thread_id} shutdown timed out; closing anyway");
+                }
+            }
+        }
+        self.finalize_thread_teardown(thread_id).await;
+        let notification = ThreadClosedNotification {
+            thread_id: thread_id.to_string(),
+        };
+        self.outgoing
+            .send_server_notification(ServerNotification::ThreadClosed(notification))
+            .await;
     }
 
     async fn prepare_thread_for_archive(&self, thread_id: ThreadId) {
