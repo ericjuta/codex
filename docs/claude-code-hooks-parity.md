@@ -26,15 +26,12 @@ Current branch state:
 - non-shell post-tool capture now covers the same native tool-name lane as the
   enrichment matcher when Codex emits `Edit|Write|Read|Glob|Grep`
 - `UserPromptSubmit` retains `observe` and now issues
-  `POST /agentmemory/context/refresh` on every non-trivial user turn, with
-  fallback to `POST /agentmemory/context` when refresh is skipped, empty, or
-  errors
-- shutdown emits `Stop` observation plus summarize, then `SessionEnd`
-  observation plus `session/end`, but bare shutdown markers are now classified
-  as non-persistent sender diagnostics instead of ordinary observations
-- when consolidation is enabled, shutdown also issues
-  `POST /agentmemory/crystals/auto` and
-  `POST /agentmemory/consolidate-pipeline`
+  `POST /agentmemory/context` with the submitted prompt as `query`; the backend
+  owns query-aware ranking and refresh semantics
+- shutdown emits `Stop` observation, then uses
+  `POST /agentmemory/session/closeout` as the primary backend closeout path;
+  bare shutdown markers are now classified as non-persistent sender diagnostics
+  instead of ordinary observations
 - native sender capabilities now advertise `assistant_result`
 - finalized assistant messages emit `AssistantResult`, so freshness is no
   longer stop/task-completed driven only
@@ -51,7 +48,7 @@ practical behavior for:
 
 - session-start context injection
 - pre-tool enrichment on file/search tools
-- prompt-submit context refresh
+- prompt-submit query-aware context retrieval
 - hook environment variables
 - default-off token-cost posture
 - observation capture and lifecycle side effects for the rest of the session
@@ -79,19 +76,14 @@ At the time of this spec, that contract is:
    - injects returned `context` into the upcoming model turn
 3. `UserPromptSubmit`
    - always calls `POST /agentmemory/observe`
-   - calls `POST /agentmemory/context/refresh` on every non-trivial user turn
-   - falls back to `POST /agentmemory/context` when refresh is skipped, empty,
-     or errors
+   - calls `POST /agentmemory/context` with prompt-derived `query` on every
+     non-trivial user turn
    - remains outside the `SessionStart`/`PreToolUse` injection lane, but is
      still part of full plugin parity
 4. `Stop`
    - always calls `POST /agentmemory/observe`
-   - always calls `POST /agentmemory/summarize`
 5. `SessionEnd`
-   - always calls `POST /agentmemory/session/end`
-   - when consolidation is enabled, also calls:
-     - `POST /agentmemory/crystals/auto`
-     - `POST /agentmemory/consolidate-pipeline`
+   - observes the bundled closeout result from `POST /agentmemory/session/closeout`
 6. `PostToolUse`, `PostToolUseFailure`, `PreCompact`, `SubagentStart`,
    `SubagentStop`, `Notification`, and `TaskCompleted`
    - are capture-oriented hooks
@@ -184,10 +176,6 @@ Required semantics:
 - `memories.agentmemory.secret_env_var`
   - names the environment variable whose value should be used as bearer auth
     when present
-- `memories.use_memories`
-  - is the current Codex-native toggle for the optional shutdown-side
-    `crystals/auto` plus `consolidate-pipeline` behavior
-
 Design rules:
 
 - `base_url` belongs in `config.toml`
@@ -222,11 +210,6 @@ Required semantics:
   - overrides `memories.agentmemory.inject_context`
 - `AGENTMEMORY_SECRET`
   - overrides `memories.agentmemory.secret_env_var` indirection
-- `CONSOLIDATION_ENABLED`
-  - when set to `"true"` or `"false"`, overrides the shutdown-side
-    consolidation toggle so Codex matches the standalone `agentmemory` hook
-    runtime
-
 Rationale:
 
 - `config.toml` is the cleanest persistent operator surface in Codex
@@ -333,14 +316,14 @@ Codex must:
 
 1. call `POST /agentmemory/observe`
 2. send the prompt payload in Claude-compatible shape
-3. when the submitted prompt is long enough to justify refresh, call
-   `POST /agentmemory/context/refresh`
+3. when the submitted prompt is long enough to justify retrieval, call
+   `POST /agentmemory/context` with the prompt as `query`
 4. inject returned `context` when the backend returns non-empty context and the
    backend does not mark the request as skipped
 
 Current implementation rule:
 
-- prompt-submit refresh is independent of
+- prompt-submit retrieval is independent of
   `memories.agentmemory.inject_context` and follows the plugin's
   prompt-length-plus-backend-skip contract instead
 
@@ -356,9 +339,6 @@ Design rule:
 Codex must:
 
 1. call `POST /agentmemory/observe`
-2. call `POST /agentmemory/summarize`
-
-This is required parity behavior, not an optional enhancement.
 
 Sender-side payload quality rule:
 
@@ -370,20 +350,15 @@ Sender-side payload quality rule:
 
 Codex must:
 
-1. call `POST /agentmemory/session/end`
-2. when the parity-equivalent consolidation mode is enabled, also call:
-   - `POST /agentmemory/crystals/auto`
-   - `POST /agentmemory/consolidate-pipeline`
+1. call `POST /agentmemory/session/closeout`
 
-The exact config knob may be Codex-native, but the behavior must remain
-equivalent to the plugin's enabled path.
+`/agentmemory/session/closeout` is the primary closeout path. The backend owns
+the summarize, session-end, crystal, and consolidation steps behind that
+bounded API.
 
 Current implementation note:
 
-- Codex currently uses `memories.use_memories` as the native toggle and still
-  honors `CONSOLIDATION_ENABLED` as an override for parity with the standalone
-  hook runtime
-- the native `SessionEnd` observe payload now carries summarize outcome fields
+- the native `SessionEnd` observe payload now carries closeout outcome fields
   and emits as `ephemeral` instead of an unclassified bare lifecycle marker
 
 ## Observation Parity
@@ -456,19 +431,16 @@ This lane is complete only when all of the following are true.
 - `PreToolUse` injection is limited to `Edit|Write|Read|Glob|Grep`
 - `PreToolUse` accepts `additionalContext`
 - `UserPromptSubmit` still calls `observe`
-- `UserPromptSubmit` uses `/agentmemory/context/refresh` for query-aware
-  refresh on every non-trivial user turn and falls back to `/agentmemory/context`
-  when refresh yields no usable context
+- `UserPromptSubmit` uses `/agentmemory/context` with prompt-derived `query` for
+  query-aware retrieval on every non-trivial user turn
 - native observe payloads include explicit sender metadata:
   `source`, `payload_version`, `event_id`, `capabilities`, and
   `persistence_class`
 - native post-tool observe payloads normalize to
   `tool_input` / `tool_output` / `error`
 - `Stop` still calls `observe`
-- `Stop` still calls `summarize`
-- `SessionEnd` still calls `session/end`
-- when consolidation is enabled, `SessionEnd` also calls `crystals/auto` and
-  `consolidate-pipeline`
+- shutdown still calls `session/closeout`
+- `SessionEnd` records the closeout result in the native observe payload
 - `memory_recall` remains available only on the assistant tool surface when its
   existing feature/backend gates are satisfied
 - `memories.agentmemory.base_url` controls the backend URL when no override env
@@ -490,10 +462,9 @@ At minimum, add or update tests that prove:
 - pre-tool enrichment does not inject for non-matching tools
 - `PreToolUse` parsing accepts valid `additionalContext`
 - native post-tool capture covers the real non-shell sender lane Codex owns
-- prompt-submit parity keeps `observe` and `context/refresh` wired together
-- stop parity keeps `observe` and `summarize` wired together
-- session-end parity keeps `session/end` wired and, when enabled,
-  `crystals/auto` plus `consolidate-pipeline`
+- prompt-submit parity keeps `observe` and query-aware `context` wired together
+- shutdown parity keeps `session/closeout` wired and records the closeout
+  result in `SessionEnd` observation
 - `memories.agentmemory.base_url` is honored by the parity path
 - `memories.agentmemory.inject_context` is honored by the parity path
 - `memories.agentmemory.secret_env_var` resolves auth correctly
@@ -510,13 +481,11 @@ Update runtime-facing docs so they say:
 - env vars remain compatible overrides
 - startup injection comes from `session/start`
 - pre-tool enrichment comes from `enrich`
-- prompt-submit refresh comes from `context/refresh`
-- prompt-submit fallback retrieval comes from `context`
+- prompt-submit retrieval comes from query-aware `context`
 - native observe payloads are explicitly versioned and attributed
 - bare shutdown lifecycle markers are sender-classified as non-persistent
-- stop still summarizes the session
-- session end still closes the session and, when enabled, runs the same
-  maintenance calls as the plugin
+- shutdown uses the bounded `session/closeout` backend path and records the
+  closeout result in `SessionEnd` observation
 - `memory_recall` is complementary, not a replacement for hook injection
 - assistant `memory_recall` may explicitly persist to thread history via
   `scope: "thread"`

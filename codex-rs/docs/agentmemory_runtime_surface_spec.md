@@ -172,26 +172,21 @@ Required calls:
   - POST `/agentmemory/session/start`
 - during prompt submission:
   - POST `/agentmemory/observe`
-  - POST `/agentmemory/context/refresh` on every non-trivial user turn when
-    automatic injection is enabled
-  - POST `/agentmemory/context` when `context/refresh` is skipped, empty, or
-    errors and query-aware retrieval is still warranted
+  - POST `/agentmemory/context` with prompt-derived `query` on every
+    non-trivial user turn when automatic injection is enabled
 - on session shutdown:
   - POST `/agentmemory/observe`
-  - POST `/agentmemory/summarize`
-  - POST `/agentmemory/session/end`
-  - when consolidation is enabled:
-    - POST `/agentmemory/crystals/auto`
-    - POST `/agentmemory/consolidate-pipeline`
+  - POST `/agentmemory/session/closeout`
 
 Required behavior:
 
 - session lifecycle transport must be best-effort but observable in tests
 - failure to reach the backend must not crash the main session
-- summarize must happen before session end
+- backend closeout owns summarize, session end, crystallization, and
+  consolidation status
 - bare shutdown `Stop` payloads with only `session_id` / `cwd` must be
   sender-classified as `diagnostics_only`
-- `SessionEnd` observe payloads should include summarize outcome when available
+- `SessionEnd` observe payloads should include closeout outcome when available
 - the request bodies must include enough information for backend session views
   to identify the session and workspace
 
@@ -201,9 +196,7 @@ Minimum request shape:
   - `sessionId`
   - `project`
   - `cwd`
-- summarize:
-  - `sessionId`
-- session end:
+- closeout:
   - `sessionId`
 
 Design rule:
@@ -237,16 +230,12 @@ Confirmed runtime hooks:
 
 - `POST /agentmemory/observe`
 - `POST /agentmemory/session/start`
-- `POST /agentmemory/context/refresh`
-- `POST /agentmemory/context` when `context/refresh` is skipped, empty, or
-  errors and query-aware retrieval still applies
+- `POST /agentmemory/context` with prompt-derived `query` when query-aware
+  retrieval applies
 - `POST /agentmemory/enrich`
 - `GET /agentmemory/handoffs` for best-effort latest session handoff packet
   review on resume
-- `POST /agentmemory/summarize`
-- `POST /agentmemory/session/end`
-- `POST /agentmemory/crystals/auto` when consolidation is enabled
-- `POST /agentmemory/consolidate-pipeline` when consolidation is enabled
+- `POST /agentmemory/session/closeout`
 
 ### Explicit Human / Assistant Surfaces
 
@@ -565,11 +554,9 @@ Rationale:
 
 Current implementation note:
 
-- `memories.use_memories` is the Codex-native consolidation toggle for the
-  session-end `crystals/auto` plus `consolidate-pipeline` side effects
-- `CONSOLIDATION_ENABLED=true|false` remains honored as an override so Codex
-  can match the standalone `agentmemory` hook runtime when operators already
-  use that environment variable
+- session shutdown uses `POST /agentmemory/session/closeout`; the backend owns
+  summarize, session-end, crystal, and consolidation steps behind that bounded
+  path
 
 ## Tool/Slash Semantics
 
@@ -626,17 +613,13 @@ to some of those hooks:
 
 - `UserPromptSubmit`
   - must retain prompt capture via `observe`
-  - must use `context/refresh` on every non-trivial user turn when automatic
-    injection is enabled
-  - must fall back to `context` when `context/refresh` returns no usable
-    context
+  - must use `context` with prompt-derived `query` on every non-trivial user
+    turn when automatic injection is enabled
 - `Stop`
   - must retain `observe`
-  - must also call `summarize`
-- `SessionEnd`
-  - must call `session/end`
-  - when consolidation is enabled, must also call `crystals/auto` and
-    `consolidate-pipeline`
+- shutdown
+  - must call `session/closeout`
+  - must emit `SessionEnd` observation with the closeout result when available
 
 ### Declared But Optional Hook Families
 
@@ -797,7 +780,7 @@ This lane does not include:
    - assistant tool exposure gates
    - assistant tool recall output
    - assistant remember output
-   - session lifecycle start/summarize/end ordering
+   - session lifecycle start/closeout ordering
    - required hook observation capture
    - replay/resume reconstruction of human-visible memory actions
    - app-server memory notification mapping
@@ -826,8 +809,8 @@ The lane is done when all of the following are true:
   surfaces
 - there is one canonical core recall path, not parallel retrieval
   implementations
-- session start, summarize, and session end are sent to `agentmemory` in the
-  required order
+- session start, stop observation, bundled closeout, and session-end observation
+  are sent to `agentmemory` in the required order
 - the required hook observation events are sent to `agentmemory` when the
   backend is `Agentmemory`
 - any additional declared hook families are either implemented or explicitly
