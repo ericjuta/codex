@@ -9,6 +9,7 @@ use super::*;
 use crate::app_event::ThreadGoalSetMode;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands;
+use codex_protocol::protocol::Op;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {

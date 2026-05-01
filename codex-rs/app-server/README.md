@@ -152,6 +152,7 @@ Example with notification opt-out:
 - `thread/turns/list` — experimental; page through a stored thread’s turn history without resuming it; supports cursor-based pagination with `sortDirection`, `nextCursor`, and `backwardsCursor`.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
+- `thread/memory/submit` — experimental; submit a thread-scoped memory operation such as recall, remember, drop, update, lessons/actions review, or handoff/frontier/next lookup; returns `{}` immediately while results stream as memory-operation notifications.
 - `memory/reset` — experimental; clear the current `CODEX_HOME/memories` directory and reset persisted memory stage data in sqlite while preserving existing thread memory modes; returns `{}` on success.
 - `thread/goal/set` — create, replace, or update the single persisted goal for a materialized thread; returns the current goal and emits `thread/goal/updated`. Supplying a new `objective` replaces the goal and resets usage accounting. Supplying the current non-terminal objective or omitting `objective` updates the existing goal’s status and/or token budget while preserving usage.
 - `thread/goal/get` — fetch the current persisted goal for a materialized thread; returns `goal: null` when no goal exists.
@@ -610,13 +611,9 @@ If the thread does not already have an active turn, the server starts a standalo
 
 ### Example: Manage thread memory
 
-Use the thread-scoped memory methods to mirror the legacy TUI slash commands:
+Use `thread/memory/submit` to mirror the legacy TUI slash commands. The `operation` field is a tagged union, for example `{ "type": "drop" }`, `{ "type": "update" }`, `{ "type": "recall", "query": "recent auth failures" }`, or `{ "type": "remember", "content": "Persist this." }`.
 
-- `thread/memory/drop` clears the active memory store for the configured backend.
-- `thread/memory/update` triggers a backend-specific sync/consolidation pass.
-- `thread/memory/recall` retrieves memory context and injects it into the thread as developer instructions.
-
-All three requests return immediately with `{}`. Result details surface through the thread event stream as `thread/memory/operation` notifications carrying the structured source, operation, status, optional query, summary, optional detail, and whether recalled context was injected into the thread.
+Requests return immediately with `{}`. Result details surface through the thread event stream as `thread/memory/operation` notifications carrying the structured source, operation, status, optional query, summary, optional detail, and whether recalled context was injected into the thread.
 
 When turns are later reconstructed through `thread/read`, `thread/resume`, or
 `thread/fork` history replay, persisted memory actions are also represented as
@@ -624,15 +621,21 @@ When turns are later reconstructed through `thread/read`, `thread/resume`, or
 transcript.
 
 ```json
-{ "method": "thread/memory/drop", "id": 27, "params": { "threadId": "thr_b" } }
+{ "method": "thread/memory/submit", "id": 27, "params": {
+    "threadId": "thr_b",
+    "operation": { "type": "drop" }
+} }
 { "id": 27, "result": {} }
 
-{ "method": "thread/memory/update", "id": 28, "params": { "threadId": "thr_b" } }
+{ "method": "thread/memory/submit", "id": 28, "params": {
+    "threadId": "thr_b",
+    "operation": { "type": "update" }
+} }
 { "id": 28, "result": {} }
 
-{ "method": "thread/memory/recall", "id": 29, "params": {
+{ "method": "thread/memory/submit", "id": 29, "params": {
     "threadId": "thr_b",
-    "query": "recent auth failures"
+    "operation": { "type": "recall", "query": "recent auth failures" }
 } }
 { "id": 29, "result": {} }
 ```

@@ -1948,9 +1948,18 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn lookup_session_target_by_name_uses_backend_title_search() -> color_eyre::Result<()> {
-        Box::pin(async {
+    #[test]
+    fn lookup_session_target_by_name_uses_backend_title_search() -> color_eyre::Result<()> {
+        const WORKER_THREADS: usize = 1;
+        const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(WORKER_THREADS)
+            .thread_stack_size(TEST_STACK_SIZE_BYTES)
+            .enable_all()
+            .build()?;
+
+        runtime.block_on(async {
             let temp_dir = TempDir::new()?;
             let config = build_config(&temp_dir).await?;
             let thread_id = ThreadId::new();
@@ -2008,7 +2017,6 @@ mod tests {
             app_server.shutdown().await?;
             Ok(())
         })
-        .await
     }
 
     #[tokio::test]

@@ -75,6 +75,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::Op as CoreOp;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::user_input::TextElement;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -94,6 +95,19 @@ macro_rules! assert_app_snapshot {
             assert_snapshot!($name, $value);
         });
     };
+}
+
+fn run_app_test_with_stack(future: impl std::future::Future<Output = Result<()>>) -> Result<()> {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(future)
 }
 
 fn test_absolute_path(path: &str) -> AbsolutePathBuf {
@@ -1218,117 +1232,125 @@ async fn token_usage_update_refreshes_status_line_with_runtime_context_window() 
     );
 }
 
-#[tokio::test]
-async fn open_agent_picker_keeps_missing_threads_for_replay() -> Result<()> {
-    let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let thread_id = ThreadId::new();
-    app.thread_event_channels
-        .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+#[test]
+fn open_agent_picker_keeps_missing_threads_for_replay() -> Result<()> {
+    run_app_test_with_stack(async {
+        let mut app = Box::pin(make_test_app()).await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        let thread_id = ThreadId::new();
+        app.thread_event_channels
+            .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
 
-    Box::pin(app.open_agent_picker(&mut app_server)).await;
+        Box::pin(app.open_agent_picker(&mut app_server)).await;
 
-    assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
-    assert_eq!(
-        app.agent_navigation.get(&thread_id),
-        Some(&AgentPickerThreadEntry {
-            agent_nickname: None,
-            agent_role: None,
-            is_closed: true,
-        })
-    );
-    assert_eq!(app.agent_navigation.ordered_thread_ids(), vec![thread_id]);
-    Ok(())
+        assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
+        assert_eq!(
+            app.agent_navigation.get(&thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: None,
+                agent_role: None,
+                is_closed: true,
+            })
+        );
+        assert_eq!(app.agent_navigation.ordered_thread_ids(), vec![thread_id]);
+        Ok(())
+    })
 }
 
-#[tokio::test]
-async fn open_agent_picker_preserves_cached_metadata_for_replay_threads() -> Result<()> {
-    let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let thread_id = ThreadId::new();
-    app.thread_event_channels
-        .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
-    app.agent_navigation.upsert(
-        thread_id,
-        Some("Robie".to_string()),
-        Some("explorer".to_string()),
-        /*is_closed*/ true,
-    );
+#[test]
+fn open_agent_picker_preserves_cached_metadata_for_replay_threads() -> Result<()> {
+    run_app_test_with_stack(async {
+        let mut app = Box::pin(make_test_app()).await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        let thread_id = ThreadId::new();
+        app.thread_event_channels
+            .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+        app.agent_navigation.upsert(
+            thread_id,
+            Some("Robie".to_string()),
+            Some("explorer".to_string()),
+            /*is_closed*/ true,
+        );
 
-    Box::pin(app.open_agent_picker(&mut app_server)).await;
+        Box::pin(app.open_agent_picker(&mut app_server)).await;
 
-    assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
-    assert_eq!(
-        app.agent_navigation.get(&thread_id),
-        Some(&AgentPickerThreadEntry {
-            agent_nickname: Some("Robie".to_string()),
-            agent_role: Some("explorer".to_string()),
-            is_closed: true,
-        })
-    );
-    Ok(())
+        assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
+        assert_eq!(
+            app.agent_navigation.get(&thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: Some("Robie".to_string()),
+                agent_role: Some("explorer".to_string()),
+                is_closed: true,
+            })
+        );
+        Ok(())
+    })
 }
 
-#[tokio::test]
-async fn open_agent_picker_prunes_terminal_metadata_only_threads() -> Result<()> {
-    let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let thread_id = ThreadId::new();
-    app.agent_navigation.upsert(
-        thread_id,
-        Some("Ghost".to_string()),
-        Some("worker".to_string()),
-        /*is_closed*/ false,
-    );
+#[test]
+fn open_agent_picker_prunes_terminal_metadata_only_threads() -> Result<()> {
+    run_app_test_with_stack(async {
+        let mut app = Box::pin(make_test_app()).await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        let thread_id = ThreadId::new();
+        app.agent_navigation.upsert(
+            thread_id,
+            Some("Ghost".to_string()),
+            Some("worker".to_string()),
+            /*is_closed*/ false,
+        );
 
-    Box::pin(app.open_agent_picker(&mut app_server)).await;
+        Box::pin(app.open_agent_picker(&mut app_server)).await;
 
-    assert_eq!(app.agent_navigation.get(&thread_id), None);
-    assert!(app.agent_navigation.is_empty());
-    Ok(())
+        assert_eq!(app.agent_navigation.get(&thread_id), None);
+        assert!(app.agent_navigation.is_empty());
+        Ok(())
+    })
 }
 
-#[tokio::test]
-async fn open_agent_picker_marks_terminal_read_errors_closed() -> Result<()> {
-    let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let thread_id = ThreadId::new();
-    app.thread_event_channels
-        .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
-    app.agent_navigation.upsert(
-        thread_id,
-        Some("Robie".to_string()),
-        Some("explorer".to_string()),
-        /*is_closed*/ false,
-    );
+#[test]
+fn open_agent_picker_marks_terminal_read_errors_closed() -> Result<()> {
+    run_app_test_with_stack(async {
+        let mut app = Box::pin(make_test_app()).await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        let thread_id = ThreadId::new();
+        app.thread_event_channels
+            .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+        app.agent_navigation.upsert(
+            thread_id,
+            Some("Robie".to_string()),
+            Some("explorer".to_string()),
+            /*is_closed*/ false,
+        );
 
-    Box::pin(app.open_agent_picker(&mut app_server)).await;
+        Box::pin(app.open_agent_picker(&mut app_server)).await;
 
-    assert_eq!(
-        app.agent_navigation.get(&thread_id),
-        Some(&AgentPickerThreadEntry {
-            agent_nickname: Some("Robie".to_string()),
-            agent_role: Some("explorer".to_string()),
-            is_closed: true,
-        })
-    );
-    Ok(())
+        assert_eq!(
+            app.agent_navigation.get(&thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: Some("Robie".to_string()),
+                agent_role: Some("explorer".to_string()),
+                is_closed: true,
+            })
+        );
+        Ok(())
+    })
 }
 
 #[test]
@@ -1479,104 +1501,111 @@ async fn should_attach_live_thread_for_selection_skips_closed_metadata_only_thre
     assert!(!app.should_attach_live_thread_for_selection(thread_id));
 }
 
-#[tokio::test]
-async fn refresh_agent_picker_thread_liveness_prunes_closed_metadata_only_threads() -> Result<()> {
-    let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let thread_id = ThreadId::new();
-    app.agent_navigation.upsert(
-        thread_id,
-        Some("Ghost".to_string()),
-        Some("worker".to_string()),
-        /*is_closed*/ false,
-    );
+#[test]
+fn refresh_agent_picker_thread_liveness_prunes_closed_metadata_only_threads() -> Result<()> {
+    run_app_test_with_stack(async {
+        let mut app = Box::pin(make_test_app()).await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        let thread_id = ThreadId::new();
+        app.agent_navigation.upsert(
+            thread_id,
+            Some("Ghost".to_string()),
+            Some("worker".to_string()),
+            /*is_closed*/ false,
+        );
 
-    let is_available =
-        Box::pin(app.refresh_agent_picker_thread_liveness(&mut app_server, thread_id)).await;
+        let is_available =
+            Box::pin(app.refresh_agent_picker_thread_liveness(&mut app_server, thread_id)).await;
 
-    assert!(!is_available);
-    assert_eq!(app.agent_navigation.get(&thread_id), None);
-    assert!(!app.thread_event_channels.contains_key(&thread_id));
-    Ok(())
+        assert!(!is_available);
+        assert_eq!(app.agent_navigation.get(&thread_id), None);
+        assert!(!app.thread_event_channels.contains_key(&thread_id));
+        Ok(())
+    })
 }
 
-#[tokio::test]
-async fn open_agent_picker_prompts_to_enable_multi_agent_when_disabled() -> Result<()> {
-    let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let _ = app.config.features.disable(Feature::Collab);
+#[test]
+fn open_agent_picker_prompts_to_enable_multi_agent_when_disabled() -> Result<()> {
+    run_app_test_with_stack(async {
+        let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        let _ = app.config.features.disable(Feature::Collab);
 
-    Box::pin(app.open_agent_picker(&mut app_server)).await;
-    app.chat_widget
-        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        Box::pin(app.open_agent_picker(&mut app_server)).await;
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_matches!(
-        app_event_rx.try_recv(),
-        Ok(AppEvent::UpdateFeatureFlags { updates }) if updates == vec![(Feature::Collab, true)]
-    );
-    let cell = match app_event_rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
-        other => panic!("expected InsertHistoryCell event, got {other:?}"),
-    };
-    let rendered = cell
-        .display_lines(/*width*/ 120)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(rendered.contains("Subagents will be enabled in the next session."));
-    Ok(())
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::UpdateFeatureFlags { updates }) if updates == vec![(Feature::Collab, true)]
+        );
+        let cell = match app_event_rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+            other => panic!("expected InsertHistoryCell event, got {other:?}"),
+        };
+        let rendered = cell
+            .display_lines(/*width*/ 120)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Subagents will be enabled in the next session."));
+        Ok(())
+    })
 }
 
-#[tokio::test]
-async fn update_memory_settings_persists_and_updates_widget_config() -> Result<()> {
-    let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
-    let codex_home = tempdir()?;
-    app.config.codex_home = codex_home.path().to_path_buf().abs();
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+#[test]
+fn update_memory_settings_persists_and_updates_widget_config() -> Result<()> {
+    run_app_test_with_stack(async {
+        let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
+        let mut app_server =
+            Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
 
-    Box::pin(app.update_memory_settings_with_app_server(
-        &mut app_server,
-        /*use_memories*/ false,
-        /*generate_memories*/ false,
-    ))
-    .await;
+        Box::pin(app.update_memory_settings_with_app_server(
+            &mut app_server,
+            /*use_memories*/ false,
+            /*generate_memories*/ false,
+        ))
+        .await;
 
-    assert!(!app.config.memories.use_memories);
-    assert!(!app.config.memories.generate_memories);
-    assert!(!app.chat_widget.config_ref().memories.use_memories);
-    assert!(!app.chat_widget.config_ref().memories.generate_memories);
+        assert!(!app.config.memories.use_memories);
+        assert!(!app.config.memories.generate_memories);
+        assert!(!app.chat_widget.config_ref().memories.use_memories);
+        assert!(!app.chat_widget.config_ref().memories.generate_memories);
 
-    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    let config_value = toml::from_str::<TomlValue>(&config)?;
-    let memories = config_value
-        .as_table()
-        .and_then(|table| table.get("memories"))
-        .and_then(TomlValue::as_table)
-        .expect("memories table should exist");
-    assert_eq!(
-        memories.get("use_memories"),
-        Some(&TomlValue::Boolean(false))
-    );
-    assert_eq!(
-        memories.get("generate_memories"),
-        Some(&TomlValue::Boolean(false))
-    );
-    assert!(
-        !memories.contains_key("disable_on_external_context")
-            && !memories.contains_key("no_memories_if_mcp_or_web_search"),
-        "the TUI menu should not write the external-context memory setting"
-    );
-    app_server.shutdown().await?;
-    Ok(())
+        let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+        let config_value = toml::from_str::<TomlValue>(&config)?;
+        let memories = config_value
+            .as_table()
+            .and_then(|table| table.get("memories"))
+            .and_then(TomlValue::as_table)
+            .expect("memories table should exist");
+        assert_eq!(
+            memories.get("use_memories"),
+            Some(&TomlValue::Boolean(false))
+        );
+        assert_eq!(
+            memories.get("generate_memories"),
+            Some(&TomlValue::Boolean(false))
+        );
+        assert!(
+            !memories.contains_key("disable_on_external_context")
+                && !memories.contains_key("no_memories_if_mcp_or_web_search"),
+            "the TUI menu should not write the external-context memory setting"
+        );
+        app_server.shutdown().await?;
+        Ok(())
+    })
 }
 
 #[test]
@@ -1628,9 +1657,9 @@ fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
     })
 }
 
-#[tokio::test]
-async fn reset_memories_clears_local_memory_directories() -> Result<()> {
-    Box::pin(async {
+#[test]
+fn reset_memories_clears_local_memory_directories() -> Result<()> {
+    run_app_test_with_stack(async {
         let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
@@ -1657,7 +1686,6 @@ async fn reset_memories_clears_local_memory_directories() -> Result<()> {
         app_server.shutdown().await?;
         Ok(())
     })
-    .await
 }
 
 #[tokio::test]
@@ -2188,27 +2216,29 @@ async fn update_feature_flags_disabling_guardian_in_profile_keeps_inherited_non_
     Ok(())
 }
 
-#[tokio::test]
-async fn open_agent_picker_allows_existing_agent_threads_when_feature_is_disabled() -> Result<()> {
-    let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let thread_id = ThreadId::new();
-    app.thread_event_channels
-        .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+#[test]
+fn open_agent_picker_allows_existing_agent_threads_when_feature_is_disabled() -> Result<()> {
+    run_app_test_with_stack(async {
+        let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        let thread_id = ThreadId::new();
+        app.thread_event_channels
+            .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
 
-    Box::pin(app.open_agent_picker(&mut app_server)).await;
-    app.chat_widget
-        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        Box::pin(app.open_agent_picker(&mut app_server)).await;
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_matches!(
-        app_event_rx.try_recv(),
-        Ok(AppEvent::SelectAgentThread(selected_thread_id)) if selected_thread_id == thread_id
-    );
-    Ok(())
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::SelectAgentThread(selected_thread_id)) if selected_thread_id == thread_id
+        );
+        Ok(())
+    })
 }
 
 #[tokio::test]
@@ -3326,34 +3356,37 @@ async fn side_thread_snapshot_skips_session_header_preamble() {
     );
 }
 
-#[tokio::test]
-async fn side_thread_ignores_global_mcp_startup_notifications() {
-    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    while app_event_rx.try_recv().is_ok() {}
-    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
-    let parent_thread_id = ThreadId::new();
-    let side_thread_id = ThreadId::new();
-    app.primary_thread_id = Some(parent_thread_id);
-    app.active_thread_id = Some(side_thread_id);
-    app.side_threads
-        .insert(side_thread_id, SideThreadState::new(parent_thread_id));
-    app.sync_side_thread_ui();
+#[test]
+fn side_thread_ignores_global_mcp_startup_notifications() -> Result<()> {
+    run_app_test_with_stack(async {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        while app_event_rx.try_recv().is_ok() {}
+        let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+            .await
+            .expect("embedded app server");
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(parent_thread_id);
+        app.active_thread_id = Some(side_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+        app.sync_side_thread_ui();
 
-    app.handle_app_server_event(
-        &app_server,
-        codex_app_server_client::AppServerEvent::ServerNotification(
-            ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
-                name: "sentry".to_string(),
-                status: McpServerStartupState::Failed,
-                error: Some("sentry is not logged in".to_string()),
-            }),
-        ),
-    )
-    .await;
+        app.handle_app_server_event(
+            &app_server,
+            codex_app_server_client::AppServerEvent::ServerNotification(
+                ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                    name: "sentry".to_string(),
+                    status: McpServerStartupState::Failed,
+                    error: Some("sentry is not logged in".to_string()),
+                }),
+            ),
+        )
+        .await;
 
-    assert!(app_event_rx.try_recv().is_err());
+        assert!(app_event_rx.try_recv().is_err());
+        Ok(())
+    })
 }
 
 #[tokio::test]
@@ -3388,9 +3421,18 @@ async fn side_discard_selection_keeps_current_side_thread() {
     );
 }
 
-#[tokio::test]
-async fn discard_side_thread_removes_agent_navigation_entry() -> Result<()> {
-    Box::pin(async {
+#[test]
+fn discard_side_thread_removes_agent_navigation_entry() -> Result<()> {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
         let mut app = make_test_app().await;
         let mut app_server =
             crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
@@ -3416,40 +3458,50 @@ async fn discard_side_thread_removes_agent_navigation_entry() -> Result<()> {
         assert!(!app.side_threads.contains_key(&side_thread_id));
         Ok(())
     })
-    .await
 }
 
-#[tokio::test]
-async fn discard_side_thread_keeps_local_state_when_server_close_fails() -> Result<()> {
-    let mut app = make_test_app().await;
-    let mut app_server =
-        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
-    let parent_thread_id = ThreadId::new();
-    let side_thread_id = ThreadId::new();
-    app.active_thread_id = Some(side_thread_id);
-    app.side_threads
-        .insert(side_thread_id, SideThreadState::new(parent_thread_id));
-    app.agent_navigation.upsert(
-        side_thread_id,
-        Some("Side".to_string()),
-        Some("side".to_string()),
-        /*is_closed*/ false,
-    );
+#[test]
+fn discard_side_thread_keeps_local_state_when_server_close_fails() -> Result<()> {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
-    assert!(
-        !app.discard_side_thread(&mut app_server, side_thread_id)
-            .await
-    );
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()?;
 
-    assert_eq!(app.active_thread_id, Some(side_thread_id));
-    assert_eq!(
+    runtime.block_on(async {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.active_thread_id = Some(side_thread_id);
         app.side_threads
-            .get(&side_thread_id)
-            .map(|state| state.parent_thread_id),
-        Some(parent_thread_id)
-    );
-    assert!(app.agent_navigation.get(&side_thread_id).is_some());
-    Ok(())
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+        app.agent_navigation.upsert(
+            side_thread_id,
+            Some("Side".to_string()),
+            Some("side".to_string()),
+            /*is_closed*/ false,
+        );
+
+        assert!(
+            !app.discard_side_thread(&mut app_server, side_thread_id)
+                .await
+        );
+
+        assert_eq!(app.active_thread_id, Some(side_thread_id));
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .map(|state| state.parent_thread_id),
+            Some(parent_thread_id)
+        );
+        assert!(app.agent_navigation.get(&side_thread_id).is_some());
+        Ok(())
+    })
 }
 
 #[tokio::test]
@@ -4901,9 +4953,18 @@ async fn thread_rollback_response_discards_queued_active_thread_events() {
     assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
 }
 
-#[tokio::test]
-async fn new_session_requests_shutdown_for_previous_conversation() {
-    Box::pin(async {
+#[test]
+fn new_session_requests_shutdown_for_previous_conversation() -> Result<()> {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
         let (mut app, mut app_event_rx, mut op_rx) = Box::pin(make_test_app_with_channels()).await;
 
         let thread_id = ThreadId::new();
@@ -4944,57 +5005,65 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
             op_rx.try_recv().is_err(),
             "shutdown should not submit Op::Shutdown"
         );
+        Ok(())
     })
-    .await;
 }
 
-#[tokio::test]
-async fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails() {
-    let mut app = make_test_app().await;
-    let thread_id = ThreadId::new();
-    app.active_thread_id = Some(thread_id);
+#[test]
+fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails() -> Result<()> {
+    run_app_test_with_stack(async {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
 
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let control = Box::pin(app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)).await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        let control =
+            Box::pin(app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)).await;
 
-    assert_eq!(app.pending_shutdown_exit_thread_id, None);
-    assert!(matches!(
-        control,
-        AppRunControl::Exit(ExitReason::UserRequested)
-    ));
+        assert_eq!(app.pending_shutdown_exit_thread_id, None);
+        assert!(matches!(
+            control,
+            AppRunControl::Exit(ExitReason::UserRequested)
+        ));
+        Ok(())
+    })
 }
 
-#[tokio::test]
-async fn shutdown_first_exit_uses_app_server_shutdown_without_submitting_op() {
-    let (mut app, _app_event_rx, mut op_rx) = Box::pin(make_test_app_with_channels()).await;
-    let thread_id = ThreadId::new();
-    app.active_thread_id = Some(thread_id);
+#[test]
+fn shutdown_first_exit_uses_app_server_shutdown_without_submitting_op() -> Result<()> {
+    run_app_test_with_stack(async {
+        let (mut app, _app_event_rx, mut op_rx) = Box::pin(make_test_app_with_channels()).await;
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
 
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let control = Box::pin(app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)).await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        let control =
+            Box::pin(app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)).await;
 
-    assert_eq!(app.pending_shutdown_exit_thread_id, None);
-    assert!(matches!(
-        control,
-        AppRunControl::Exit(ExitReason::UserRequested)
-    ));
-    assert!(
-        op_rx.try_recv().is_err(),
-        "shutdown should not submit Op::Shutdown"
-    );
+        assert_eq!(app.pending_shutdown_exit_thread_id, None);
+        assert!(matches!(
+            control,
+            AppRunControl::Exit(ExitReason::UserRequested)
+        ));
+        assert!(
+            op_rx.try_recv().is_err(),
+            "shutdown should not submit Op::Shutdown"
+        );
+        Ok(())
+    })
 }
 
-#[tokio::test]
-async fn interrupt_without_active_turn_is_treated_as_handled() {
-    Box::pin(async {
+#[test]
+fn interrupt_without_active_turn_is_treated_as_handled() -> Result<()> {
+    run_app_test_with_stack(async {
         let mut app = make_test_app().await;
         let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
             app.chat_widget.config_ref(),
@@ -5020,8 +5089,39 @@ async fn interrupt_without_active_turn_is_treated_as_handled() {
         .expect("interrupt submission should not fail");
 
         assert_eq!(handled, true);
+        Ok(())
     })
-    .await;
+}
+
+#[test]
+fn memory_core_op_is_submitted_through_app_server() -> Result<()> {
+    run_app_test_with_stack(async {
+        let mut app = make_test_app().await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("thread/start should succeed");
+        let thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, started.turns)
+            .await
+            .expect("primary thread should be registered");
+
+        let handled = Box::pin(app.try_submit_active_thread_op_via_app_server(
+            &mut app_server,
+            thread_id,
+            &Op::CoreOp(CoreOp::ReviewNext),
+        ))
+        .await
+        .expect("memory op submission should not fail");
+
+        assert_eq!(handled, true);
+        Ok(())
+    })
 }
 
 #[tokio::test]

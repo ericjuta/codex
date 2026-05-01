@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::session_resume::read_session_model;
+use codex_app_server_protocol::ThreadMemoryOperationParams;
 
 impl App {
     pub(super) async fn shutdown_current_thread(&mut self, app_server: &mut AppServerSession) {
@@ -707,6 +708,15 @@ impl App {
             AppCommand::ApproveGuardianDeniedAction { event } => {
                 app_server
                     .thread_approve_guardian_denied_action(thread_id, event)
+                    .await?;
+                Ok(true)
+            }
+            AppCommand::CoreOp(op) => {
+                let Some(operation) = ThreadMemoryOperationParams::from_core_op(op) else {
+                    return Ok(false);
+                };
+                app_server
+                    .thread_memory_submit(thread_id, operation)
                     .await?;
                 Ok(true)
             }

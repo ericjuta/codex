@@ -188,6 +188,8 @@ use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadMemoryModeSetParams;
 use codex_app_server_protocol::ThreadMemoryModeSetResponse;
+use codex_app_server_protocol::ThreadMemorySubmitParams;
+use codex_app_server_protocol::ThreadMemorySubmitResponse;
 use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateResponse;
@@ -1077,6 +1079,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadMemoryModeSet { request_id, params } => {
                 self.thread_memory_mode_set(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadMemorySubmit { request_id, params } => {
+                self.thread_memory_submit(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::MemoryReset { request_id, params } => {
@@ -3308,6 +3314,30 @@ impl CodexMessageProcessor {
             .map_err(|err| thread_store_write_error("set thread memory mode", err))?;
 
         Ok(ThreadMemoryModeSetResponse {})
+    }
+
+    async fn thread_memory_submit(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadMemorySubmitParams,
+    ) {
+        let ThreadMemorySubmitParams {
+            thread_id,
+            operation,
+        } = params;
+
+        let result = async {
+            let (_, thread) = self.load_thread(&thread_id).await?;
+            self.submit_core_op(&request_id, thread.as_ref(), operation.to_core())
+                .await
+                .map_err(|err| {
+                    internal_error(format!("failed to submit memory operation: {err}"))
+                })?;
+            Ok::<_, JSONRPCErrorError>(ThreadMemorySubmitResponse {})
+        }
+        .await;
+
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn memory_reset(&self, request_id: ConnectionRequestId, _params: Option<()>) {

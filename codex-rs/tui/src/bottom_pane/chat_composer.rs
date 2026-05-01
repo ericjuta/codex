@@ -3502,8 +3502,6 @@ impl ChatComposer {
             quit_shortcut_key: self.quit_shortcut_key,
             collaboration_modes_enabled: self.collaboration_modes_enabled,
             is_wsl,
-            context_window_percent: self.context_window_percent,
-            context_window_used_tokens: self.context_window_used_tokens,
             status_line_value,
             status_line_enabled: self.status_line_enabled,
             key_hints: FooterKeyHints {

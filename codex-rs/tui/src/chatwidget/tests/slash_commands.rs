@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::protocol::Op as CoreOp;
 use pretty_assertions::assert_eq;
 
 fn complete_turn_with_message(chat: &mut ChatWidget, turn_id: &str, message: Option<&str>) {
@@ -44,6 +45,15 @@ fn next_add_to_history_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) 
                 panic!("expected AddToHistory op but channel closed")
             }
         }
+    }
+}
+
+fn next_core_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> CoreOp {
+    match op_rx.try_recv() {
+        Ok(Op::CoreOp(op)) => op,
+        Ok(other) => panic!("expected core op, got {other:?}"),
+        Err(TryRecvError::Empty) => panic!("expected core op but queue was empty"),
+        Err(TryRecvError::Disconnected) => panic!("expected core op but channel closed"),
     }
 }
 
@@ -1098,7 +1108,7 @@ async fn memory_drop_slash_command_is_available_from_local_recall() {
     submit_composer_text(&mut chat, "/debug-m-drop");
 
     assert!(active_blob(&chat).contains("Memory Drop Pending"));
-    assert_matches!(op_rx.try_recv(), Ok(Op::DropMemories));
+    assert_matches!(next_core_op(&mut op_rx), CoreOp::DropMemories);
     assert_eq!(recall_latest_after_clearing(&mut chat), "/debug-m-drop");
 }
 
@@ -1513,7 +1523,7 @@ async fn slash_memory_drop_shows_pending_cell_and_submits_op() {
 
     assert!(active_blob(&chat).contains("Memory Drop Pending"));
     assert!(active_blob(&chat).contains("Dropping stored memories for this workspace."));
-    assert_matches!(op_rx.try_recv(), Ok(Op::DropMemories));
+    assert_matches!(next_core_op(&mut op_rx), CoreOp::DropMemories);
 }
 
 #[tokio::test]
@@ -1588,7 +1598,7 @@ async fn slash_memory_update_shows_pending_cell_and_submits_op() {
 
     assert!(active_blob(&chat).contains("Memory Update Pending"));
     assert!(active_blob(&chat).contains("Requesting a memory refresh."));
-    assert_matches!(op_rx.try_recv(), Ok(Op::UpdateMemories));
+    assert_matches!(next_core_op(&mut op_rx), CoreOp::UpdateMemories);
 }
 
 #[tokio::test]
@@ -1617,7 +1627,10 @@ async fn slash_memory_recall_shows_pending_cell_and_submits_op() {
 
     assert!(active_blob(&chat).contains("Memory Recall Pending"));
     assert!(active_blob(&chat).contains("Recalling memory context for the current thread."));
-    assert_matches!(op_rx.try_recv(), Ok(Op::RecallMemories { query: None }));
+    assert_matches!(
+        next_core_op(&mut op_rx),
+        CoreOp::RecallMemories { query: None }
+    );
 }
 
 #[tokio::test]
@@ -1649,8 +1662,8 @@ async fn slash_memory_remember_with_args_shows_pending_cell_and_submits_op() {
     assert!(active_blob(&chat).contains("Memory Remember Pending"));
     assert!(active_blob(&chat).contains("Saving durable memory."));
     assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::RememberMemories { content }) if content == "retain this durable note"
+        next_core_op(&mut op_rx),
+        CoreOp::RememberMemories { content } if content == "retain this durable note"
     );
 }
 
@@ -1667,8 +1680,8 @@ async fn slash_memory_lessons_with_query_shows_pending_cell_and_submits_op() {
     assert!(active_blob(&chat).contains("Memory Lessons Pending"));
     assert!(active_blob(&chat).contains("hook payloads"));
     assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::ReviewLessons { query }) if query == Some("hook payloads".to_string())
+        next_core_op(&mut op_rx),
+        CoreOp::ReviewLessons { query } if query == Some("hook payloads".to_string())
     );
 }
 
@@ -1685,8 +1698,8 @@ async fn slash_memory_actions_with_status_shows_pending_cell_and_submits_op() {
     assert!(active_blob(&chat).contains("Memory Actions Pending"));
     assert!(active_blob(&chat).contains("blocked"));
     assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::ListActions { status }) if status == Some("blocked".to_string())
+        next_core_op(&mut op_rx),
+        CoreOp::ListActions { status } if status == Some("blocked".to_string())
     );
 }
 
@@ -1699,11 +1712,11 @@ async fn slash_memory_missions_shows_pending_cell_and_submits_op() {
     assert!(active_blob(&chat).contains("Memory Missions Pending"));
     assert!(active_blob(&chat).contains("Reviewing missions for this workspace."));
     assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::ReviewMissions {
+        next_core_op(&mut op_rx),
+        CoreOp::ReviewMissions {
             mission_id: None,
             status: None,
-        })
+        }
     );
 }
 
@@ -1720,8 +1733,8 @@ async fn slash_memory_missions_with_status_shows_pending_cell_and_submits_op() {
     assert!(active_blob(&chat).contains("Memory Missions Pending"));
     assert!(active_blob(&chat).contains("blocked"));
     assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::ReviewMissions { mission_id, status })
+        next_core_op(&mut op_rx),
+        CoreOp::ReviewMissions { mission_id, status }
             if mission_id.is_none() && status == Some("blocked".to_string())
     );
 }
@@ -1735,8 +1748,8 @@ async fn slash_memory_branch_overlays_shows_pending_cell_and_submits_op() {
     assert!(active_blob(&chat).contains("Memory Branch Overlays Pending"));
     assert!(active_blob(&chat).contains("Reviewing branch overlays for this workspace."));
     assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::ReviewBranchOverlays { branch }) if branch.is_none()
+        next_core_op(&mut op_rx),
+        CoreOp::ReviewBranchOverlays { branch } if branch.is_none()
     );
 }
 
@@ -1753,8 +1766,8 @@ async fn slash_memory_guardrails_with_query_shows_pending_cell_and_submits_op() 
     assert!(active_blob(&chat).contains("Memory Guardrails Pending"));
     assert!(active_blob(&chat).contains("localhost binding"));
     assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::ReviewGuardrails { query }) if query == Some("localhost binding".to_string())
+        next_core_op(&mut op_rx),
+        CoreOp::ReviewGuardrails { query } if query == Some("localhost binding".to_string())
     );
 }
 
@@ -1767,8 +1780,8 @@ async fn slash_memory_decisions_shows_pending_cell_and_submits_op() {
     assert!(active_blob(&chat).contains("Memory Decisions Pending"));
     assert!(active_blob(&chat).contains("Reviewing decision memory for this workspace."));
     assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::ReviewDecisions { query }) if query.is_none()
+        next_core_op(&mut op_rx),
+        CoreOp::ReviewDecisions { query } if query.is_none()
     );
 }
 
@@ -1785,8 +1798,8 @@ async fn slash_memory_dossiers_with_file_shows_pending_cell_and_submits_op() {
     assert!(active_blob(&chat).contains("Memory Dossiers Pending"));
     assert!(active_blob(&chat).contains("src/functions/context.ts"));
     assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::ReviewDossiers { file_path })
+        next_core_op(&mut op_rx),
+        CoreOp::ReviewDossiers { file_path }
             if file_path == Some("src/functions/context.ts".to_string())
     );
 }
@@ -1799,7 +1812,7 @@ async fn slash_memory_routine_candidates_shows_pending_cell_and_submits_op() {
 
     assert!(active_blob(&chat).contains("Memory Routine Candidates Pending"));
     assert!(active_blob(&chat).contains("Reviewing routine compiler proposals"));
-    assert_matches!(op_rx.try_recv(), Ok(Op::ReviewRoutineCandidates));
+    assert_matches!(next_core_op(&mut op_rx), CoreOp::ReviewRoutineCandidates);
 }
 
 #[tokio::test]
@@ -1811,12 +1824,12 @@ async fn slash_memory_handoffs_shows_pending_cell_and_submits_op() {
     assert!(active_blob(&chat).contains("Memory Handoffs Pending"));
     assert!(active_blob(&chat).contains("Reviewing handoff packets for this workspace."));
     assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::ReviewHandoffs {
+        next_core_op(&mut op_rx),
+        CoreOp::ReviewHandoffs {
             handoff_packet_id: None,
             scope_type: None,
             scope_id: None,
-        })
+        }
     );
 }
 
@@ -1835,12 +1848,12 @@ async fn slash_memory_handoffs_with_session_scope_targets_current_thread() {
     assert!(active_blob(&chat).contains("Memory Handoffs Pending"));
     assert!(active_blob(&chat).contains("session"));
     assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::ReviewHandoffs {
+        next_core_op(&mut op_rx),
+        CoreOp::ReviewHandoffs {
             handoff_packet_id,
             scope_type,
             scope_id,
-        }) if handoff_packet_id.is_none()
+        } if handoff_packet_id.is_none()
             && scope_type == Some("session".to_string())
             && scope_id == Some(thread_id.to_string())
     );
@@ -1855,11 +1868,11 @@ async fn slash_memory_handoff_generate_shows_pending_cell_and_submits_default_op
     assert!(active_blob(&chat).contains("Memory Handoff Generate Pending"));
     assert!(active_blob(&chat).contains("Generating a fresh handoff packet."));
     assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::GenerateHandoff {
+        next_core_op(&mut op_rx),
+        CoreOp::GenerateHandoff {
             scope_type: None,
             scope_id: None,
-        })
+        }
     );
 }
 
@@ -1876,8 +1889,8 @@ async fn slash_memory_handoff_generate_with_scope_shows_pending_cell_and_submits
     assert!(active_blob(&chat).contains("Memory Handoff Generate Pending"));
     assert!(active_blob(&chat).contains("mission"));
     assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::GenerateHandoff { scope_type, scope_id })
+        next_core_op(&mut op_rx),
+        CoreOp::GenerateHandoff { scope_type, scope_id }
             if scope_type == Some("mission".to_string())
                 && scope_id == Some("msn_123".to_string())
     );
@@ -1891,7 +1904,7 @@ async fn slash_memory_next_shows_pending_cell_and_submits_op() {
 
     assert!(active_blob(&chat).contains("Memory Next Pending"));
     assert!(active_blob(&chat).contains("Reviewing the next suggested action"));
-    assert_matches!(op_rx.try_recv(), Ok(Op::ReviewNext));
+    assert_matches!(next_core_op(&mut op_rx), CoreOp::ReviewNext);
 }
 
 #[tokio::test]

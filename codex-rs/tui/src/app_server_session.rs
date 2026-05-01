@@ -73,6 +73,9 @@ use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadMemoryMode;
 use codex_app_server_protocol::ThreadMemoryModeSetParams;
 use codex_app_server_protocol::ThreadMemoryModeSetResponse;
+use codex_app_server_protocol::ThreadMemoryOperationParams;
+use codex_app_server_protocol::ThreadMemorySubmitParams;
+use codex_app_server_protocol::ThreadMemorySubmitResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
@@ -652,6 +655,26 @@ impl AppServerSession {
             })
             .await
             .wrap_err("memory/reset failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_memory_submit(
+        &mut self,
+        thread_id: ThreadId,
+        operation: ThreadMemoryOperationParams,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadMemorySubmitResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadMemorySubmit {
+                request_id,
+                params: ThreadMemorySubmitParams {
+                    thread_id: thread_id.to_string(),
+                    operation,
+                },
+            })
+            .await
+            .wrap_err("thread/memory/submit failed in TUI")?;
         Ok(())
     }
 
