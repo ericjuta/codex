@@ -130,6 +130,10 @@ perf-build-local-fast:
     fi
     ./scripts/prune_perf_build_target.sh ./target/release/codex
 
+# Compatibility shim for split command form: just perf- build-local-fast
+perf- build_target:
+    just "perf-{{build_target}}"
+
 # Build a machine-local codex binary using profile-guided optimization on top
 # of the same local tuning as `perf-build-local`.
 #
