@@ -161,7 +161,7 @@ impl ThreadMemoryOperationParams {
                 action_ids: action_ids.clone(),
             }),
             CoreOp::AutoCrystallize { older_than_days } => Some(Self::AutoCrystallize {
-                older_than_days: *older_than_days,
+                older_than_days: older_than_days.to_owned(),
             }),
             CoreOp::ReflectMemories { max_clusters } => Some(Self::Reflect {
                 max_clusters: *max_clusters,
@@ -212,53 +212,60 @@ impl ThreadMemoryOperationParams {
                 scope_type: scope_type.clone(),
                 scope_id: scope_id.clone(),
             }),
-            CoreOp::ReviewFrontier { limit } => Some(Self::Frontier { limit: *limit }),
+            CoreOp::ReviewFrontier { limit } => Some(Self::Frontier {
+                limit: *limit,
+            }),
             CoreOp::ReviewNext => Some(Self::Next),
             _ => None,
         }
     }
 
-    pub fn to_core(self) -> CoreOp {
+    pub fn to_core(self) -> Option<CoreOp> {
         match self {
-            Self::Drop => CoreOp::DropMemories,
-            Self::Update => CoreOp::UpdateMemories,
-            Self::Recall { query } => CoreOp::RecallMemories { query },
-            Self::Remember { content } => CoreOp::RememberMemories { content },
-            Self::Lessons { query } => CoreOp::ReviewLessons { query },
-            Self::Crystals => CoreOp::ReviewCrystals,
-            Self::CreateCrystals { action_ids } => CoreOp::CreateCrystals { action_ids },
+            Self::Drop => Some(CoreOp::DropMemories),
+            Self::Update => Some(CoreOp::UpdateMemories),
+            Self::Recall { query } => Some(CoreOp::RecallMemories { query }),
+            Self::Remember { content } => Some(CoreOp::RememberMemories { content }),
+            Self::Lessons { query } => Some(CoreOp::ReviewLessons { query }),
+            Self::Crystals => Some(CoreOp::ReviewCrystals),
+            Self::CreateCrystals { action_ids } => Some(CoreOp::CreateCrystals { action_ids }),
             Self::AutoCrystallize { older_than_days } => {
-                CoreOp::AutoCrystallize { older_than_days }
+                Some(CoreOp::AutoCrystallize { older_than_days })
             }
-            Self::Reflect { max_clusters } => CoreOp::ReflectMemories { max_clusters },
-            Self::Insights { query } => CoreOp::ReviewInsights { query },
-            Self::ListActions { status } => CoreOp::ListActions { status },
-            Self::CreateAction { title } => CoreOp::CreateAction { title },
-            Self::UpdateAction { action_id, status } => CoreOp::UpdateAction { action_id, status },
-            Self::Missions { mission_id, status } => CoreOp::ReviewMissions { mission_id, status },
-            Self::BranchOverlays { branch } => CoreOp::ReviewBranchOverlays { branch },
-            Self::Guardrails { query } => CoreOp::ReviewGuardrails { query },
-            Self::Decisions { query } => CoreOp::ReviewDecisions { query },
-            Self::Dossiers { file_path } => CoreOp::ReviewDossiers { file_path },
-            Self::RoutineCandidates => CoreOp::ReviewRoutineCandidates,
+            Self::Reflect { max_clusters } => Some(CoreOp::ReflectMemories { max_clusters }),
+            Self::Insights { query } => Some(CoreOp::ReviewInsights { query }),
+            Self::ListActions { status } => Some(CoreOp::ListActions { status }),
+            Self::CreateAction { title } => Some(CoreOp::CreateAction { title }),
+            Self::UpdateAction { action_id, status } => {
+                Some(CoreOp::UpdateAction { action_id, status })
+            }
+            Self::Missions { mission_id, status } => Some(CoreOp::ReviewMissions {
+                mission_id,
+                status,
+            }),
+            Self::Guardrails { query } => Some(CoreOp::ReviewGuardrails { query }),
+            Self::Decisions { query } => Some(CoreOp::ReviewDecisions { query }),
+            Self::Dossiers { file_path } => Some(CoreOp::ReviewDossiers { file_path }),
+            Self::BranchOverlays { branch } => Some(CoreOp::ReviewBranchOverlays { branch }),
+            Self::RoutineCandidates => Some(CoreOp::ReviewRoutineCandidates),
             Self::Handoffs {
                 handoff_packet_id,
                 scope_type,
                 scope_id,
-            } => CoreOp::ReviewHandoffs {
+            } => Some(CoreOp::ReviewHandoffs {
                 handoff_packet_id,
                 scope_type,
                 scope_id,
-            },
+            }),
             Self::GenerateHandoff {
                 scope_type,
                 scope_id,
-            } => CoreOp::GenerateHandoff {
+            } => Some(CoreOp::GenerateHandoff {
                 scope_type,
                 scope_id,
-            },
-            Self::Frontier { limit } => CoreOp::ReviewFrontier { limit },
-            Self::Next => CoreOp::ReviewNext,
+            }),
+            Self::Frontier { limit } => Some(CoreOp::ReviewFrontier { limit }),
+            Self::Next => Some(CoreOp::ReviewNext),
         }
     }
 }
