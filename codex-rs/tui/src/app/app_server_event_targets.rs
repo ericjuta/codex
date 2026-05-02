@@ -138,6 +138,7 @@ pub(super) fn server_notification_thread_target(
         ServerNotification::ThreadRealtimeClosed(notification) => {
             Some(notification.thread_id.as_str())
         }
+        ServerNotification::MemoryOperation(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::Warning(notification) => notification.thread_id.as_deref(),
         ServerNotification::GuardianWarning(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::SkillsChanged(_)
