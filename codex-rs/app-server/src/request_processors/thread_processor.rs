@@ -1538,7 +1538,13 @@ impl ThreadRequestProcessor {
             operation,
         } = params;
         let (_, thread) = self.load_thread(&thread_id).await?;
-        self.submit_core_op(request_id, thread.as_ref(), operation.to_core())
+        let Some(operation) = operation.to_core() else {
+            return Err(invalid_request(
+                "thread memory submit operation is unsupported",
+            ));
+        };
+
+        self.submit_core_op(request_id, thread.as_ref(), operation)
             .await
             .map_err(|err| internal_error(format!("failed to submit memory operation: {err}")))?;
         Ok(ThreadMemorySubmitResponse {})

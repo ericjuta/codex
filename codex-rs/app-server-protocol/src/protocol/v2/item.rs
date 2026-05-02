@@ -846,8 +846,7 @@ impl From<CoreTurnItem> for ThreadItem {
                 status: file_change
                     .status
                     .as_ref()
-                    .map(PatchApplyStatus::from)
-                    .unwrap_or(PatchApplyStatus::InProgress),
+                    .map_or(PatchApplyStatus::InProgress, Into::into),
             },
             CoreTurnItem::McpToolCall(mcp) => {
                 let duration_ms = mcp
