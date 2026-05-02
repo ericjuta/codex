@@ -3409,6 +3409,17 @@
       ],
       "type": "object"
     },
+    "ThreadCloseParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadCompactStartParams": {
       "properties": {
         "threadId": {
@@ -3679,6 +3690,515 @@
         "disabled"
       ],
       "type": "string"
+    },
+    "ThreadMemoryOperationParams": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "drop"
+              ],
+              "title": "DropThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "DropThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "update"
+              ],
+              "title": "UpdateThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "UpdateThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "recall"
+              ],
+              "title": "RecallThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RecallThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "remember"
+              ],
+              "title": "RememberThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "type"
+          ],
+          "title": "RememberThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "lessons"
+              ],
+              "title": "LessonsThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "LessonsThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "crystals"
+              ],
+              "title": "CrystalsThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "CrystalsThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "actionIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "createCrystals"
+              ],
+              "title": "CreateCrystalsThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "actionIds",
+            "type"
+          ],
+          "title": "CreateCrystalsThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "olderThanDays": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "autoCrystallize"
+              ],
+              "title": "AutoCrystallizeThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "AutoCrystallizeThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "maxClusters": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "reflect"
+              ],
+              "title": "ReflectThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ReflectThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "insights"
+              ],
+              "title": "InsightsThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "InsightsThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "listActions"
+              ],
+              "title": "ListActionsThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ListActionsThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "createAction"
+              ],
+              "title": "CreateActionThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "type"
+          ],
+          "title": "CreateActionThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "actionId": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "updateAction"
+              ],
+              "title": "UpdateActionThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "actionId",
+            "status",
+            "type"
+          ],
+          "title": "UpdateActionThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "missionId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "missions"
+              ],
+              "title": "MissionsThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "MissionsThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "branch": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "branchOverlays"
+              ],
+              "title": "BranchOverlaysThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "BranchOverlaysThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "guardrails"
+              ],
+              "title": "GuardrailsThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "GuardrailsThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "decisions"
+              ],
+              "title": "DecisionsThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "DecisionsThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "filePath": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "dossiers"
+              ],
+              "title": "DossiersThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "DossiersThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "routineCandidates"
+              ],
+              "title": "RoutineCandidatesThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RoutineCandidatesThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "handoffPacketId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "scopeId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "scopeType": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "handoffs"
+              ],
+              "title": "HandoffsThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "HandoffsThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "scopeId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "scopeType": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "generateHandoff"
+              ],
+              "title": "GenerateHandoffThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "GenerateHandoffThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "limit": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "frontier"
+              ],
+              "title": "FrontierThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FrontierThreadMemoryOperationParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "next"
+              ],
+              "title": "NextThreadMemoryOperationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "NextThreadMemoryOperationParams",
+          "type": "object"
+        }
+      ]
     },
     "ThreadMetadataGitInfoUpdateParams": {
       "properties": {
@@ -4596,6 +5116,30 @@
         "params"
       ],
       "title": "Thread/archiveRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/close"
+          ],
+          "title": "Thread/closeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadCloseParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/closeRequest",
       "type": "object"
     },
     {

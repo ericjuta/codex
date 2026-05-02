@@ -125,7 +125,6 @@ mod frames;
 mod get_git_diff;
 mod goal_display;
 mod history_cell;
-mod ide_context;
 pub(crate) mod insert_history;
 pub use insert_history::insert_history_lines;
 mod key_hint;
@@ -141,7 +140,6 @@ mod markdown_stream;
 mod mention_codec;
 mod model_catalog;
 mod model_migration;
-mod motion;
 mod multi_agents;
 mod notifications;
 #[cfg(any(not(debug_assertions), test))]
@@ -186,7 +184,6 @@ mod updates;
 mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;
-mod width;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 mod voice {
@@ -244,6 +241,7 @@ mod voice {
         pub(crate) fn clear(&self) {}
     }
 }
+mod width;
 
 mod wrapping;
 
@@ -444,11 +442,11 @@ pub(crate) async fn start_app_server_for_picker(
 pub(crate) async fn start_embedded_app_server_for_picker(
     config: &Config,
 ) -> color_eyre::Result<AppServerSession> {
-    start_app_server_for_picker(
+    Box::pin(start_app_server_for_picker(
         config,
         &AppServerTarget::Embedded,
         Arc::new(EnvironmentManager::default_for_tests()),
-    )
+    ))
     .await
 }
 
@@ -1951,9 +1949,18 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn lookup_session_target_by_name_uses_backend_title_search() -> color_eyre::Result<()> {
-        Box::pin(async {
+    #[test]
+    fn lookup_session_target_by_name_uses_backend_title_search() -> color_eyre::Result<()> {
+        const WORKER_THREADS: usize = 1;
+        const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(WORKER_THREADS)
+            .thread_stack_size(TEST_STACK_SIZE_BYTES)
+            .enable_all()
+            .build()?;
+
+        runtime.block_on(async {
             let temp_dir = TempDir::new()?;
             let config = build_config(&temp_dir).await?;
             let thread_id = ThreadId::new();
@@ -2011,7 +2018,6 @@ mod tests {
             app_server.shutdown().await?;
             Ok(())
         })
-        .await
     }
 
     #[tokio::test]

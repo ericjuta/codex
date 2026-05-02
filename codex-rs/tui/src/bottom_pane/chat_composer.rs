@@ -121,6 +121,7 @@
 //! overall state machine, since it affects which transitions are even possible from a given UI
 //! state.
 //!
+use crate::bottom_pane::footer::goal_status_indicator_line;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
@@ -166,6 +167,7 @@ use super::footer::footer_hint_items_width;
 use super::footer::footer_line_width;
 use super::footer::inset_footer_hint_area;
 use super::footer::max_left_width_for_right;
+use super::footer::mode_indicator_line as collaboration_mode_indicator_line;
 use super::footer::passive_footer_status_line;
 use super::footer::render_context_right;
 use super::footer::render_footer_from_props;
@@ -174,7 +176,6 @@ use super::footer::render_footer_line;
 use super::footer::reset_mode_after_activity;
 use super::footer::side_conversation_context_line;
 use super::footer::single_line_footer_layout;
-use super::footer::status_line_right_indicator_line;
 use super::footer::toggle_shortcut_mode;
 use super::footer::uses_passive_footer_status_layout;
 use super::paste_burst::CharDecision;
@@ -384,7 +385,6 @@ pub(crate) struct ChatComposer {
     config: ChatComposerConfig,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     goal_status_indicator: Option<GoalStatusIndicator>,
-    ide_context_active: bool,
     connectors_enabled: bool,
     plugins_command_enabled: bool,
     fast_command_enabled: bool,
@@ -392,6 +392,7 @@ pub(crate) struct ChatComposer {
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
+    agentmemory_enabled: bool,
     windows_degraded_sandbox_active: bool,
     side_conversation_active: bool,
     is_zellij: bool,
@@ -565,7 +566,6 @@ impl ChatComposer {
             config,
             collaboration_mode_indicator: None,
             goal_status_indicator: None,
-            ide_context_active: false,
             connectors_enabled: false,
             plugins_command_enabled: false,
             fast_command_enabled: false,
@@ -573,6 +573,7 @@ impl ChatComposer {
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
+            agentmemory_enabled: false,
             windows_degraded_sandbox_active: false,
             side_conversation_active: false,
             is_zellij: matches!(
@@ -725,10 +726,6 @@ impl ChatComposer {
         self.goal_status_indicator = indicator;
     }
 
-    pub fn set_ide_context_active(&mut self, active: bool) {
-        self.ide_context_active = active;
-    }
-
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
         self.personality_command_enabled = enabled;
     }
@@ -743,6 +740,10 @@ impl ChatComposer {
 
     pub fn set_side_conversation_active(&mut self, active: bool) {
         self.side_conversation_active = active;
+    }
+
+    pub fn set_agentmemory_enabled(&mut self, enabled: bool) {
+        self.agentmemory_enabled = enabled;
     }
 
     /// Compatibility shim for tests that still toggle the removed steer mode flag.
@@ -1088,16 +1089,14 @@ impl ChatComposer {
         if let Some(vim_mode) = self.vim_mode_indicator_span() {
             spans.push(vim_mode);
         }
-        if let Some(indicators) = status_line_right_indicator_line(
-            self.collaboration_mode_indicator,
-            self.goal_status_indicator.as_ref(),
-            self.ide_context_active,
-            show_cycle_hint,
-        ) {
+        if let Some(collab) =
+            collaboration_mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint)
+                .or_else(|| goal_status_indicator_line(self.goal_status_indicator.as_ref()))
+        {
             if !spans.is_empty() {
                 spans.push(" | ".dim());
             }
-            spans.extend(indicators.spans);
+            spans.extend(collab.spans);
         }
         if spans.is_empty() {
             None
@@ -3485,6 +3484,16 @@ impl ChatComposer {
             }
         };
 
+        let mut status_line_value = self.status_line_value.clone();
+        if self.agentmemory_enabled {
+            if let Some(existing) = status_line_value.as_mut() {
+                existing.spans.push(" · ".into());
+                existing.spans.push("Agentmemory".dim());
+            } else {
+                status_line_value = Some(Line::from("Agentmemory".dim()));
+            }
+        }
+
         FooterProps {
             mode,
             esc_backtrack_hint: self.esc_backtrack_hint,
@@ -3493,7 +3502,7 @@ impl ChatComposer {
             quit_shortcut_key: self.quit_shortcut_key,
             collaboration_modes_enabled: self.collaboration_modes_enabled,
             is_wsl,
-            status_line_value: self.status_line_value.clone(),
+            status_line_value,
             status_line_enabled: self.status_line_enabled,
             key_hints: FooterKeyHints {
                 toggle_shortcuts: self.footer_toggle_shortcuts_key,
@@ -4933,6 +4942,19 @@ mod tests {
                     .handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
                 let _ = composer
                     .handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+            },
+        );
+    }
+
+    #[test]
+    fn footer_status_line_shows_agentmemory_indicator() {
+        snapshot_composer_state(
+            "footer_status_line_with_agentmemory_indicator",
+            true,
+            |composer| {
+                composer.set_status_line_enabled(true);
+                composer.set_status_line(Some(Line::from("Status line content".to_string())));
+                composer.set_agentmemory_enabled(true);
             },
         );
 

@@ -157,6 +157,8 @@ use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadArchivedNotification;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
+use codex_app_server_protocol::ThreadCloseParams;
+use codex_app_server_protocol::ThreadCloseResponse;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
@@ -186,6 +188,8 @@ use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadMemoryModeSetParams;
 use codex_app_server_protocol::ThreadMemoryModeSetResponse;
+use codex_app_server_protocol::ThreadMemorySubmitParams;
+use codex_app_server_protocol::ThreadMemorySubmitResponse;
 use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateResponse;
@@ -225,7 +229,6 @@ use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
 use codex_app_server_protocol::Turn;
-use codex_app_server_protocol::TurnEnvironmentParams;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
@@ -274,6 +277,7 @@ use codex_core::find_thread_name_by_id;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::path_utils;
 use codex_core::read_head_for_summary;
+use codex_core::read_session_meta_line;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
@@ -1041,6 +1045,10 @@ impl CodexMessageProcessor {
                 self.thread_archive(to_connection_request_id(request_id), params)
                     .await;
             }
+            ClientRequest::ThreadClose { request_id, params } => {
+                self.thread_close(to_connection_request_id(request_id), params)
+                    .await;
+            }
             ClientRequest::ThreadIncrementElicitation { request_id, params } => {
                 self.thread_increment_elicitation(to_connection_request_id(request_id), params)
                     .await;
@@ -1071,6 +1079,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadMemoryModeSet { request_id, params } => {
                 self.thread_memory_mode_set(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadMemorySubmit { request_id, params } => {
+                self.thread_memory_submit(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::MemoryReset { request_id, params } => {
@@ -2528,13 +2540,28 @@ impl CodexMessageProcessor {
                 .await;
             return;
         }
-        let environment_selections = match self.parse_environment_selections(environments) {
-            Ok(environment_selections) => environment_selections,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let environments = environments.map(|environments| {
+            environments
+                .into_iter()
+                .map(|environment| TurnEnvironmentSelection {
+                    environment_id: environment.environment_id,
+                    cwd: environment.cwd,
+                })
+                .collect::<Vec<_>>()
+        });
+        if let Some(environments) = environments.as_ref()
+            && let Err(err) = self
+                .thread_manager
+                .validate_environment_selections(environments)
+        {
+            self.outgoing
+                .send_error(
+                    request_id,
+                    invalid_request(environment_selection_error_message(err)),
+                )
+                .await;
+            return;
+        }
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -2573,7 +2600,7 @@ impl CodexMessageProcessor {
                 typesafe_overrides,
                 dynamic_tools,
                 session_start_source,
-                environment_selections,
+                environments,
                 persist_extended_history,
                 service_name,
                 experimental_raw_events,
@@ -2998,27 +3025,6 @@ impl CodexMessageProcessor {
         overrides
     }
 
-    fn parse_environment_selections(
-        &self,
-        environments: Option<Vec<TurnEnvironmentParams>>,
-    ) -> Result<Option<Vec<TurnEnvironmentSelection>>, JSONRPCErrorError> {
-        let environment_selections = environments.map(|environments| {
-            environments
-                .into_iter()
-                .map(|environment| TurnEnvironmentSelection {
-                    environment_id: environment.environment_id,
-                    cwd: environment.cwd,
-                })
-                .collect::<Vec<_>>()
-        });
-        if let Some(environment_selections) = environment_selections.as_ref() {
-            self.thread_manager
-                .validate_environment_selections(environment_selections)
-                .map_err(|err| invalid_request(environment_selection_error_message(err)))?;
-        }
-        Ok(environment_selections)
-    }
-
     async fn thread_archive(&self, request_id: ConnectionRequestId, params: ThreadArchiveParams) {
         let _thread_list_state_permit = match self.acquire_thread_list_state_permit().await {
             Ok(permit) => permit,
@@ -3308,6 +3314,30 @@ impl CodexMessageProcessor {
             .map_err(|err| thread_store_write_error("set thread memory mode", err))?;
 
         Ok(ThreadMemoryModeSetResponse {})
+    }
+
+    async fn thread_memory_submit(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadMemorySubmitParams,
+    ) {
+        let ThreadMemorySubmitParams {
+            thread_id,
+            operation,
+        } = params;
+
+        let result = async {
+            let (_, thread) = self.load_thread(&thread_id).await?;
+            self.submit_core_op(&request_id, thread.as_ref(), operation.to_core())
+                .await
+                .map_err(|err| {
+                    internal_error(format!("failed to submit memory operation: {err}"))
+                })?;
+            Ok::<_, JSONRPCErrorError>(ThreadMemorySubmitResponse {})
+        }
+        .await;
+
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn memory_reset(&self, request_id: ConnectionRequestId, _params: Option<()>) {
@@ -3953,48 +3983,16 @@ impl CodexMessageProcessor {
         include_turns: bool,
     ) -> Result<Thread, ThreadReadViewError> {
         let loaded_thread = self.thread_manager.get_thread(thread_id).await.ok();
-        let mut thread = if include_turns {
-            if let Some(loaded_thread) = loaded_thread.as_ref() {
-                // Loaded thread with turns: use persisted metadata when it exists,
-                // but reconstruct turns from the live ThreadStore history.
-                let persisted_thread = self
-                    .load_persisted_thread_for_read(thread_id, /*include_turns*/ false)
-                    .await?;
-                self.load_live_thread_view(
-                    thread_id,
-                    include_turns,
-                    loaded_thread,
-                    persisted_thread,
-                )
-                .await?
-            } else if let Some(thread) = self
-                .load_persisted_thread_for_read(thread_id, include_turns)
-                .await?
-            {
-                // Unloaded thread with turns: load metadata and history together
-                // from the ThreadStore.
-                thread
-            } else {
-                return Err(ThreadReadViewError::InvalidRequest(format!(
-                    "thread not loaded: {thread_id}"
-                )));
-            }
-        } else if let Some(thread) = self
+        let mut thread = if let Some(thread) = self
             .load_persisted_thread_for_read(thread_id, include_turns)
             .await?
         {
-            // Persisted metadata-only read: no live thread state is needed.
             thread
-        } else if let Some(loaded_thread) = loaded_thread.as_ref() {
-            // Loaded metadata-only read before persistence is materialized: build
-            // the response from the live thread snapshot.
-            self.load_live_thread_view(
-                thread_id,
-                include_turns,
-                loaded_thread,
-                /*persisted_thread*/ None,
-            )
+        } else if let Some(thread) = self
+            .load_live_thread_view(thread_id, include_turns, loaded_thread.as_ref())
             .await?
+        {
+            thread
         } else {
             return Err(ThreadReadViewError::InvalidRequest(format!(
                 "thread not loaded: {thread_id}"
@@ -4060,51 +4058,65 @@ impl CodexMessageProcessor {
         }
     }
 
-    /// Builds a `thread/read` view from a loaded thread plus optional persisted metadata.
     async fn load_live_thread_view(
         &self,
         thread_id: ThreadId,
         include_turns: bool,
-        loaded_thread: &CodexThread,
-        persisted_thread: Option<Thread>,
-    ) -> Result<Thread, ThreadReadViewError> {
-        let config_snapshot = loaded_thread.config_snapshot().await;
-        if include_turns && config_snapshot.ephemeral {
+        loaded_thread: Option<&Arc<CodexThread>>,
+    ) -> Result<Option<Thread>, ThreadReadViewError> {
+        let Some(thread) = loaded_thread else {
+            return Ok(None);
+        };
+        let config_snapshot = thread.config_snapshot().await;
+        let loaded_rollout_path = thread.rollout_path();
+        if include_turns && loaded_rollout_path.is_none() {
             return Err(ThreadReadViewError::InvalidRequest(
                 "ephemeral threads do not support includeTurns".to_string(),
             ));
         }
-        let fallback_thread =
-            build_thread_from_loaded_snapshot(thread_id, &config_snapshot, loaded_thread);
-        let mut thread = if let Some(mut thread) = persisted_thread {
-            if thread.path.is_none() {
-                thread.path = fallback_thread.path.clone();
-            }
-            thread.ephemeral = fallback_thread.ephemeral;
-            thread
-        } else {
-            fallback_thread
-        };
-        self.apply_thread_read_store_fields(thread_id, &mut thread, include_turns, loaded_thread)
-            .await?;
-        Ok(thread)
+        let mut thread =
+            build_thread_from_snapshot(thread_id, &config_snapshot, loaded_rollout_path.clone());
+        self.apply_thread_read_rollout_fields(
+            thread_id,
+            &mut thread,
+            loaded_rollout_path.as_deref(),
+            include_turns,
+        )
+        .await?;
+        Ok(Some(thread))
     }
 
-    async fn apply_thread_read_store_fields(
+    async fn apply_thread_read_rollout_fields(
         &self,
         thread_id: ThreadId,
         thread: &mut Thread,
+        rollout_path: Option<&Path>,
         include_turns: bool,
-        loaded_thread: &CodexThread,
     ) -> Result<(), ThreadReadViewError> {
+        if thread.forked_from_id.is_none()
+            && let Some(rollout_path) = rollout_path
+        {
+            thread.forked_from_id = forked_from_id_from_rollout(rollout_path).await;
+        }
         self.attach_thread_name(thread_id, thread).await;
 
-        if include_turns {
-            let history = loaded_thread
-                .load_history(/*include_archived*/ true)
-                .await
-                .map_err(|err| thread_read_history_load_error(thread_id, err))?;
-            thread.turns = build_turns_from_rollout_items(&history.items);
+        if include_turns && let Some(rollout_path) = rollout_path {
+            match read_rollout_items_from_rollout(rollout_path).await {
+                Ok(items) => {
+                    thread.turns = build_turns_from_rollout_items(&items);
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(ThreadReadViewError::InvalidRequest(format!(
+                        "thread {thread_id} is not materialized yet; includeTurns is unavailable before first user message"
+                    )));
+                }
+                Err(err) => {
+                    return Err(ThreadReadViewError::Internal(format!(
+                        "failed to load rollout `{}` for thread {thread_id}: {err}",
+                        rollout_path.display()
+                    )));
+                }
+            }
         }
 
         Ok(())
@@ -6093,6 +6105,44 @@ impl CodexMessageProcessor {
         Ok(ThreadUnsubscribeResponse { status })
     }
 
+    async fn thread_close(&self, request_id: ConnectionRequestId, params: ThreadCloseParams) {
+        let result = self.thread_close_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn thread_close_response(
+        &self,
+        params: ThreadCloseParams,
+    ) -> Result<ThreadCloseResponse, JSONRPCErrorError> {
+        let thread_id = ThreadId::from_string(&params.thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+        self.prepare_thread_for_close(thread_id).await;
+        Ok(ThreadCloseResponse {})
+    }
+
+    async fn prepare_thread_for_close(&self, thread_id: ThreadId) {
+        let removed_thread = self.thread_manager.remove_thread(&thread_id).await;
+        if let Some(thread) = removed_thread {
+            info!("thread {thread_id} was active; closing");
+            match Self::wait_for_thread_shutdown(&thread).await {
+                ThreadShutdownResult::Complete => {}
+                ThreadShutdownResult::SubmitFailed => {
+                    warn!("failed to submit Shutdown to thread {thread_id}; closing anyway");
+                }
+                ThreadShutdownResult::TimedOut => {
+                    warn!("thread {thread_id} shutdown timed out; closing anyway");
+                }
+            }
+        }
+        self.finalize_thread_teardown(thread_id).await;
+        let notification = ThreadClosedNotification {
+            thread_id: thread_id.to_string(),
+        };
+        self.outgoing
+            .send_server_notification(ServerNotification::ThreadClosed(notification))
+            .await;
+    }
+
     async fn prepare_thread_for_archive(&self, thread_id: ThreadId) {
         // If the thread is active, request shutdown and wait briefly.
         let removed_conversation = self.thread_manager.remove_thread(&thread_id).await;
@@ -6693,7 +6743,21 @@ impl CodexMessageProcessor {
             let collaboration_mode = params
                 .collaboration_mode
                 .map(|mode| self.normalize_turn_start_collaboration_mode(mode));
-            let environment_selections = self.parse_environment_selections(params.environments)?;
+            let environments: Option<Vec<TurnEnvironmentSelection>> =
+                params.environments.map(|environments| {
+                    environments
+                        .into_iter()
+                        .map(|environment| TurnEnvironmentSelection {
+                            environment_id: environment.environment_id,
+                            cwd: environment.cwd,
+                        })
+                        .collect()
+                });
+            if let Some(environments) = environments.as_ref() {
+                self.thread_manager
+                    .validate_environment_selections(environments)
+                    .map_err(|err| invalid_request(environment_selection_error_message(err)))?;
+            }
 
             // Map v2 input items to core input items.
             let mapped_items: Vec<CoreInputItem> = params
@@ -6802,7 +6866,7 @@ impl CodexMessageProcessor {
             let turn_op = if has_any_overrides {
                 Op::UserInputWithTurnContext {
                     items: mapped_items,
-                    environments: environment_selections,
+                    environments,
                     final_output_json_schema: params.output_schema,
                     responsesapi_client_metadata: params.responsesapi_client_metadata,
                     cwd,
@@ -6822,7 +6886,7 @@ impl CodexMessageProcessor {
             } else {
                 Op::UserInput {
                     items: mapped_items,
-                    environments: environment_selections,
+                    environments,
                     final_output_json_schema: params.output_schema,
                     responsesapi_client_metadata: params.responsesapi_client_metadata,
                 }
@@ -9155,32 +9219,6 @@ fn thread_turns_list_history_load_error(
     }
 }
 
-fn thread_read_history_load_error(
-    thread_id: ThreadId,
-    err: ThreadStoreError,
-) -> ThreadReadViewError {
-    match err {
-        ThreadStoreError::InvalidRequest { message }
-            if message.starts_with("failed to resolve rollout path `") =>
-        {
-            ThreadReadViewError::InvalidRequest(format!(
-                "thread {thread_id} is not materialized yet; includeTurns is unavailable before first user message"
-            ))
-        }
-        ThreadStoreError::ThreadNotFound {
-            thread_id: missing_thread_id,
-        } if missing_thread_id == thread_id => ThreadReadViewError::InvalidRequest(format!(
-            "thread {thread_id} is not materialized yet; includeTurns is unavailable before first user message"
-        )),
-        ThreadStoreError::InvalidRequest { message } => {
-            ThreadReadViewError::InvalidRequest(message)
-        }
-        err => ThreadReadViewError::Internal(format!(
-            "failed to load thread history for thread {thread_id}: {err}"
-        )),
-    }
-}
-
 fn conversation_summary_thread_id_read_error(
     conversation_id: ThreadId,
     err: ThreadStoreError,
@@ -9600,9 +9638,8 @@ fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
     }
 }
 
-#[cfg(test)]
 async fn forked_from_id_from_rollout(path: &Path) -> Option<String> {
-    codex_core::read_session_meta_line(path)
+    read_session_meta_line(path)
         .await
         .ok()
         .and_then(|meta_line| meta_line.meta.forked_from_id)
@@ -9778,14 +9815,6 @@ fn build_thread_from_snapshot(
         name: None,
         turns: Vec::new(),
     }
-}
-
-fn build_thread_from_loaded_snapshot(
-    thread_id: ThreadId,
-    config_snapshot: &ThreadConfigSnapshot,
-    loaded_thread: &CodexThread,
-) -> Thread {
-    build_thread_from_snapshot(thread_id, config_snapshot, loaded_thread.rollout_path())
 }
 
 fn thread_started_notification(mut thread: Thread) -> ThreadStartedNotification {

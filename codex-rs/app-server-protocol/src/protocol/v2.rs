@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 use crate::RequestId;
 use crate::protocol::common::AuthMode;
-use crate::protocol::item_builders::convert_patch_changes;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::account::PlanType;
 use codex_protocol::account::ProviderAccount;
@@ -31,6 +30,9 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
+use codex_protocol::items::MemoryOperationKind as CoreMemoryOperationKind;
+use codex_protocol::items::MemoryOperationScope as CoreMemoryOperationScope;
+use codex_protocol::items::MemoryOperationStatus as CoreMemoryOperationStatus;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::CallToolResult as CoreMcpCallToolResult;
 use codex_protocol::mcp::Resource as McpResource;
@@ -78,10 +80,12 @@ use codex_protocol::protocol::HookRunStatus as CoreHookRunStatus;
 use codex_protocol::protocol::HookRunSummary as CoreHookRunSummary;
 use codex_protocol::protocol::HookScope as CoreHookScope;
 use codex_protocol::protocol::HookSource as CoreHookSource;
+use codex_protocol::protocol::MemoryOperationSource as CoreMemoryOperationSource;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::ModelVerification as CoreModelVerification;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::protocol::NonSteerableTurnKind as CoreNonSteerableTurnKind;
+use codex_protocol::protocol::Op as CoreOp;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::RateLimitReachedType as CoreRateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
@@ -443,7 +447,7 @@ v2_enum_from_core!(
 
 v2_enum_from_core!(
     pub enum HookEventName from CoreHookEventName {
-        PreToolUse, PermissionRequest, PostToolUse, SessionStart, UserPromptSubmit, Stop
+        PreToolUse, PermissionRequest, PostToolUse, PostToolUseFailure, PreCompact, SessionStart, SubagentStart, SubagentStop, Notification, TaskCompleted, UserPromptSubmit, Stop, SessionEnd
     }
 );
 
@@ -3902,6 +3906,18 @@ pub struct ThreadArchiveResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadCloseParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadCloseResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadUnsubscribeParams {
     pub thread_id: String,
 }
@@ -4176,6 +4192,265 @@ pub struct ThreadMemoryModeSetResponse {}
 #[ts(export_to = "v2/")]
 pub struct MemoryResetResponse {}
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMemorySubmitParams {
+    pub thread_id: String,
+    pub operation: ThreadMemoryOperationParams,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMemorySubmitResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum ThreadMemoryOperationParams {
+    Drop,
+    Update,
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Recall {
+        #[ts(optional = nullable)]
+        query: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Remember {
+        content: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Lessons {
+        #[ts(optional = nullable)]
+        query: Option<String>,
+    },
+    Crystals,
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    CreateCrystals {
+        action_ids: Vec<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    AutoCrystallize {
+        #[ts(optional = nullable)]
+        older_than_days: Option<u32>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Reflect {
+        #[ts(optional = nullable)]
+        max_clusters: Option<u32>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Insights {
+        #[ts(optional = nullable)]
+        query: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ListActions {
+        #[ts(optional = nullable)]
+        status: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    CreateAction {
+        title: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    UpdateAction {
+        action_id: String,
+        status: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Missions {
+        #[ts(optional = nullable)]
+        mission_id: Option<String>,
+        #[ts(optional = nullable)]
+        status: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    BranchOverlays {
+        #[ts(optional = nullable)]
+        branch: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Guardrails {
+        #[ts(optional = nullable)]
+        query: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Decisions {
+        #[ts(optional = nullable)]
+        query: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Dossiers {
+        #[ts(optional = nullable)]
+        file_path: Option<String>,
+    },
+    RoutineCandidates,
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Handoffs {
+        #[ts(optional = nullable)]
+        handoff_packet_id: Option<String>,
+        #[ts(optional = nullable)]
+        scope_type: Option<String>,
+        #[ts(optional = nullable)]
+        scope_id: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    GenerateHandoff {
+        #[ts(optional = nullable)]
+        scope_type: Option<String>,
+        #[ts(optional = nullable)]
+        scope_id: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Frontier {
+        #[ts(optional = nullable)]
+        limit: Option<u32>,
+    },
+    Next,
+}
+
+impl ThreadMemoryOperationParams {
+    pub fn from_core_op(op: &CoreOp) -> Option<Self> {
+        match op {
+            CoreOp::DropMemories => Some(Self::Drop),
+            CoreOp::UpdateMemories => Some(Self::Update),
+            CoreOp::RecallMemories { query } => Some(Self::Recall {
+                query: query.clone(),
+            }),
+            CoreOp::RememberMemories { content } => Some(Self::Remember {
+                content: content.clone(),
+            }),
+            CoreOp::ReviewLessons { query } => Some(Self::Lessons {
+                query: query.clone(),
+            }),
+            CoreOp::ReviewCrystals => Some(Self::Crystals),
+            CoreOp::CreateCrystals { action_ids } => Some(Self::CreateCrystals {
+                action_ids: action_ids.clone(),
+            }),
+            CoreOp::AutoCrystallize { older_than_days } => Some(Self::AutoCrystallize {
+                older_than_days: *older_than_days,
+            }),
+            CoreOp::ReflectMemories { max_clusters } => Some(Self::Reflect {
+                max_clusters: *max_clusters,
+            }),
+            CoreOp::ReviewInsights { query } => Some(Self::Insights {
+                query: query.clone(),
+            }),
+            CoreOp::ListActions { status } => Some(Self::ListActions {
+                status: status.clone(),
+            }),
+            CoreOp::CreateAction { title } => Some(Self::CreateAction {
+                title: title.clone(),
+            }),
+            CoreOp::UpdateAction { action_id, status } => Some(Self::UpdateAction {
+                action_id: action_id.clone(),
+                status: status.clone(),
+            }),
+            CoreOp::ReviewMissions { mission_id, status } => Some(Self::Missions {
+                mission_id: mission_id.clone(),
+                status: status.clone(),
+            }),
+            CoreOp::ReviewBranchOverlays { branch } => Some(Self::BranchOverlays {
+                branch: branch.clone(),
+            }),
+            CoreOp::ReviewGuardrails { query } => Some(Self::Guardrails {
+                query: query.clone(),
+            }),
+            CoreOp::ReviewDecisions { query } => Some(Self::Decisions {
+                query: query.clone(),
+            }),
+            CoreOp::ReviewDossiers { file_path } => Some(Self::Dossiers {
+                file_path: file_path.clone(),
+            }),
+            CoreOp::ReviewRoutineCandidates => Some(Self::RoutineCandidates),
+            CoreOp::ReviewHandoffs {
+                handoff_packet_id,
+                scope_type,
+                scope_id,
+            } => Some(Self::Handoffs {
+                handoff_packet_id: handoff_packet_id.clone(),
+                scope_type: scope_type.clone(),
+                scope_id: scope_id.clone(),
+            }),
+            CoreOp::GenerateHandoff {
+                scope_type,
+                scope_id,
+            } => Some(Self::GenerateHandoff {
+                scope_type: scope_type.clone(),
+                scope_id: scope_id.clone(),
+            }),
+            CoreOp::ReviewFrontier { limit } => Some(Self::Frontier { limit: *limit }),
+            CoreOp::ReviewNext => Some(Self::Next),
+            _ => None,
+        }
+    }
+
+    pub fn to_core(self) -> CoreOp {
+        match self {
+            Self::Drop => CoreOp::DropMemories,
+            Self::Update => CoreOp::UpdateMemories,
+            Self::Recall { query } => CoreOp::RecallMemories { query },
+            Self::Remember { content } => CoreOp::RememberMemories { content },
+            Self::Lessons { query } => CoreOp::ReviewLessons { query },
+            Self::Crystals => CoreOp::ReviewCrystals,
+            Self::CreateCrystals { action_ids } => CoreOp::CreateCrystals { action_ids },
+            Self::AutoCrystallize { older_than_days } => {
+                CoreOp::AutoCrystallize { older_than_days }
+            }
+            Self::Reflect { max_clusters } => CoreOp::ReflectMemories { max_clusters },
+            Self::Insights { query } => CoreOp::ReviewInsights { query },
+            Self::ListActions { status } => CoreOp::ListActions { status },
+            Self::CreateAction { title } => CoreOp::CreateAction { title },
+            Self::UpdateAction { action_id, status } => CoreOp::UpdateAction { action_id, status },
+            Self::Missions { mission_id, status } => CoreOp::ReviewMissions { mission_id, status },
+            Self::BranchOverlays { branch } => CoreOp::ReviewBranchOverlays { branch },
+            Self::Guardrails { query } => CoreOp::ReviewGuardrails { query },
+            Self::Decisions { query } => CoreOp::ReviewDecisions { query },
+            Self::Dossiers { file_path } => CoreOp::ReviewDossiers { file_path },
+            Self::RoutineCandidates => CoreOp::ReviewRoutineCandidates,
+            Self::Handoffs {
+                handoff_packet_id,
+                scope_type,
+                scope_id,
+            } => CoreOp::ReviewHandoffs {
+                handoff_packet_id,
+                scope_type,
+                scope_id,
+            },
+            Self::GenerateHandoff {
+                scope_type,
+                scope_id,
+            } => CoreOp::GenerateHandoff {
+                scope_type,
+                scope_id,
+            },
+            Self::Frontier { limit } => CoreOp::ReviewFrontier { limit },
+            Self::Next => CoreOp::ReviewNext,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -4194,6 +4469,127 @@ pub struct ThreadCompactStartParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadCompactStartResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum MemoryOperationKind {
+    Recall,
+    Remember,
+    Update,
+    Drop,
+    Lessons,
+    Crystals,
+    Crystallize,
+    AutoCrystallize,
+    Insights,
+    Reflect,
+    Actions,
+    ActionCreate,
+    ActionUpdate,
+    Missions,
+    Handoffs,
+    HandoffGenerate,
+    BranchOverlays,
+    Guardrails,
+    Decisions,
+    Dossiers,
+    RoutineCandidates,
+    Frontier,
+    Next,
+}
+
+impl From<CoreMemoryOperationKind> for MemoryOperationKind {
+    fn from(value: CoreMemoryOperationKind) -> Self {
+        match value {
+            CoreMemoryOperationKind::Recall => Self::Recall,
+            CoreMemoryOperationKind::Remember => Self::Remember,
+            CoreMemoryOperationKind::Update => Self::Update,
+            CoreMemoryOperationKind::Drop => Self::Drop,
+            CoreMemoryOperationKind::Lessons => Self::Lessons,
+            CoreMemoryOperationKind::Crystals => Self::Crystals,
+            CoreMemoryOperationKind::Crystallize => Self::Crystallize,
+            CoreMemoryOperationKind::AutoCrystallize => Self::AutoCrystallize,
+            CoreMemoryOperationKind::Insights => Self::Insights,
+            CoreMemoryOperationKind::Reflect => Self::Reflect,
+            CoreMemoryOperationKind::Actions => Self::Actions,
+            CoreMemoryOperationKind::ActionCreate => Self::ActionCreate,
+            CoreMemoryOperationKind::ActionUpdate => Self::ActionUpdate,
+            CoreMemoryOperationKind::Missions => Self::Missions,
+            CoreMemoryOperationKind::Handoffs => Self::Handoffs,
+            CoreMemoryOperationKind::HandoffGenerate => Self::HandoffGenerate,
+            CoreMemoryOperationKind::BranchOverlays => Self::BranchOverlays,
+            CoreMemoryOperationKind::Guardrails => Self::Guardrails,
+            CoreMemoryOperationKind::Decisions => Self::Decisions,
+            CoreMemoryOperationKind::Dossiers => Self::Dossiers,
+            CoreMemoryOperationKind::RoutineCandidates => Self::RoutineCandidates,
+            CoreMemoryOperationKind::Frontier => Self::Frontier,
+            CoreMemoryOperationKind::Next => Self::Next,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum MemoryOperationStatus {
+    Pending,
+    Ready,
+    Empty,
+    Skipped,
+    Error,
+}
+
+impl From<CoreMemoryOperationStatus> for MemoryOperationStatus {
+    fn from(value: CoreMemoryOperationStatus) -> Self {
+        match value {
+            CoreMemoryOperationStatus::Pending => Self::Pending,
+            CoreMemoryOperationStatus::Ready => Self::Ready,
+            CoreMemoryOperationStatus::Empty => Self::Empty,
+            CoreMemoryOperationStatus::Skipped => Self::Skipped,
+            CoreMemoryOperationStatus::Error => Self::Error,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum MemoryOperationSource {
+    Human,
+    Assistant,
+    Automatic,
+}
+
+impl From<CoreMemoryOperationSource> for MemoryOperationSource {
+    fn from(value: CoreMemoryOperationSource) -> Self {
+        match value {
+            CoreMemoryOperationSource::Human => Self::Human,
+            CoreMemoryOperationSource::Assistant => Self::Assistant,
+            CoreMemoryOperationSource::Automatic => Self::Automatic,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum MemoryOperationScope {
+    #[default]
+    None,
+    Turn,
+    Thread,
+}
+
+impl From<CoreMemoryOperationScope> for MemoryOperationScope {
+    fn from(value: CoreMemoryOperationScope) -> Self {
+        match value {
+            CoreMemoryOperationScope::None => Self::None,
+            CoreMemoryOperationScope::Turn => Self::Turn,
+            CoreMemoryOperationScope::Thread => Self::Thread,
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -5870,6 +6266,20 @@ pub enum ThreadItem {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
+    MemoryOperation {
+        id: String,
+        source: MemoryOperationSource,
+        operation: MemoryOperationKind,
+        status: MemoryOperationStatus,
+        #[serde(default)]
+        scope: MemoryOperationScope,
+        query: Option<String>,
+        summary: String,
+        detail: Option<String>,
+        context_injected: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     AgentMessage {
         id: String,
         text: String,
@@ -6023,6 +6433,7 @@ impl ThreadItem {
         match self {
             ThreadItem::UserMessage { id, .. }
             | ThreadItem::HookPrompt { id, .. }
+            | ThreadItem::MemoryOperation { id, .. }
             | ThreadItem::AgentMessage { id, .. }
             | ThreadItem::Plan { id, .. }
             | ThreadItem::Reasoning { id, .. }
@@ -6463,25 +6874,12 @@ impl From<CoreTurnItem> for ThreadItem {
                 query: search.query,
                 action: Some(WebSearchAction::from(search.action)),
             },
-            CoreTurnItem::ImageView(image) => ThreadItem::ImageView {
-                id: image.id,
-                path: image.path,
-            },
             CoreTurnItem::ImageGeneration(image) => ThreadItem::ImageGeneration {
                 id: image.id,
                 status: image.status,
                 revised_prompt: image.revised_prompt,
                 result: image.result,
                 saved_path: image.saved_path,
-            },
-            CoreTurnItem::FileChange(file_change) => ThreadItem::FileChange {
-                id: file_change.id,
-                changes: convert_patch_changes(&file_change.changes),
-                status: file_change
-                    .status
-                    .as_ref()
-                    .map(PatchApplyStatus::from)
-                    .unwrap_or(PatchApplyStatus::InProgress),
             },
             CoreTurnItem::ContextCompaction(compaction) => {
                 ThreadItem::ContextCompaction { id: compaction.id }
@@ -6940,6 +7338,22 @@ pub struct ItemCompletedNotification {
     pub item: ThreadItem,
     pub thread_id: String,
     pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MemoryOperationNotification {
+    pub thread_id: String,
+    pub source: MemoryOperationSource,
+    pub operation: MemoryOperationKind,
+    pub status: MemoryOperationStatus,
+    #[serde(default)]
+    pub scope: MemoryOperationScope,
+    pub query: Option<String>,
+    pub summary: String,
+    pub detail: Option<String>,
+    pub context_injected: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -8092,8 +8506,6 @@ mod tests {
     use super::*;
     use codex_protocol::items::AgentMessageContent;
     use codex_protocol::items::AgentMessageItem;
-    use codex_protocol::items::FileChangeItem;
-    use codex_protocol::items::ImageViewItem;
     use codex_protocol::items::ReasoningItem;
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
@@ -10372,48 +10784,6 @@ mod tests {
                     query: Some("docs".to_string()),
                     queries: None,
                 }),
-            }
-        );
-
-        let image_view_item = TurnItem::ImageView(ImageViewItem {
-            id: "view-image-1".to_string(),
-            path: test_path_buf("/tmp/view-image.png").abs(),
-        });
-
-        assert_eq!(
-            ThreadItem::from(image_view_item),
-            ThreadItem::ImageView {
-                id: "view-image-1".to_string(),
-                path: test_path_buf("/tmp/view-image.png").abs(),
-            }
-        );
-
-        let file_change_item = TurnItem::FileChange(FileChangeItem {
-            id: "patch-1".to_string(),
-            changes: [(
-                PathBuf::from("README.md"),
-                codex_protocol::protocol::FileChange::Add {
-                    content: "hello\n".to_string(),
-                },
-            )]
-            .into_iter()
-            .collect(),
-            status: Some(codex_protocol::protocol::PatchApplyStatus::Completed),
-            auto_approved: None,
-            stdout: Some("Done!".to_string()),
-            stderr: Some(String::new()),
-        });
-
-        assert_eq!(
-            ThreadItem::from(file_change_item),
-            ThreadItem::FileChange {
-                id: "patch-1".to_string(),
-                changes: vec![FileUpdateChange {
-                    path: "README.md".to_string(),
-                    kind: PatchChangeKind::Add,
-                    diff: "hello\n".to_string(),
-                }],
-                status: PatchApplyStatus::Completed,
             }
         );
     }
