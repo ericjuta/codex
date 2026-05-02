@@ -156,16 +156,11 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
-use codex_protocol::items::MemoryOperationKind;
-use codex_protocol::items::MemoryOperationScope;
-use codex_protocol::items::MemoryOperationStatus;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
-use codex_protocol::protocol::MemoryOperationEvent;
-use codex_protocol::protocol::MemoryOperationSource;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
@@ -333,6 +328,7 @@ use self::mcp_startup::McpStartupStatus;
 mod session_header;
 use self::session_header::SessionHeader;
 mod hooks;
+mod ide_context;
 mod skills;
 mod slash_dispatch;
 use self::skills::collect_tool_mentions;
@@ -849,6 +845,7 @@ pub(crate) struct ChatWidget {
     plugin_install_auth_flow: Option<PluginInstallAuthFlowState>,
     plugins_active_tab_id: Option<String>,
     newly_installed_marketplace_tab_id: Option<String>,
+    ide_context: self::ide_context::IdeContextState,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
     // Accumulates the current reasoning block text to extract a header
@@ -2786,157 +2783,21 @@ impl ChatWidget {
         self.config.memories.generate_memories = generate_memories;
     }
 
-    fn app_server_memory_source(
-        source: codex_app_server_protocol::MemoryOperationSource,
-    ) -> MemoryOperationSource {
-        match source {
-            codex_app_server_protocol::MemoryOperationSource::Human => MemoryOperationSource::Human,
-            codex_app_server_protocol::MemoryOperationSource::Assistant => {
-                MemoryOperationSource::Assistant
-            }
-            codex_app_server_protocol::MemoryOperationSource::Automatic => {
-                MemoryOperationSource::Automatic
-            }
-        }
-    }
-
-    fn app_server_memory_kind(
-        operation: codex_app_server_protocol::MemoryOperationKind,
-    ) -> MemoryOperationKind {
-        match operation {
-            codex_app_server_protocol::MemoryOperationKind::Recall => MemoryOperationKind::Recall,
-            codex_app_server_protocol::MemoryOperationKind::Remember => {
-                MemoryOperationKind::Remember
-            }
-            codex_app_server_protocol::MemoryOperationKind::Update => MemoryOperationKind::Update,
-            codex_app_server_protocol::MemoryOperationKind::Drop => MemoryOperationKind::Drop,
-            codex_app_server_protocol::MemoryOperationKind::Lessons => MemoryOperationKind::Lessons,
-            codex_app_server_protocol::MemoryOperationKind::Crystals => {
-                MemoryOperationKind::Crystals
-            }
-            codex_app_server_protocol::MemoryOperationKind::Crystallize => {
-                MemoryOperationKind::Crystallize
-            }
-            codex_app_server_protocol::MemoryOperationKind::AutoCrystallize => {
-                MemoryOperationKind::AutoCrystallize
-            }
-            codex_app_server_protocol::MemoryOperationKind::Insights => {
-                MemoryOperationKind::Insights
-            }
-            codex_app_server_protocol::MemoryOperationKind::Reflect => MemoryOperationKind::Reflect,
-            codex_app_server_protocol::MemoryOperationKind::Actions => MemoryOperationKind::Actions,
-            codex_app_server_protocol::MemoryOperationKind::ActionCreate => {
-                MemoryOperationKind::ActionCreate
-            }
-            codex_app_server_protocol::MemoryOperationKind::ActionUpdate => {
-                MemoryOperationKind::ActionUpdate
-            }
-            codex_app_server_protocol::MemoryOperationKind::Missions => {
-                MemoryOperationKind::Missions
-            }
-            codex_app_server_protocol::MemoryOperationKind::Handoffs => {
-                MemoryOperationKind::Handoffs
-            }
-            codex_app_server_protocol::MemoryOperationKind::HandoffGenerate => {
-                MemoryOperationKind::HandoffGenerate
-            }
-            codex_app_server_protocol::MemoryOperationKind::BranchOverlays => {
-                MemoryOperationKind::BranchOverlays
-            }
-            codex_app_server_protocol::MemoryOperationKind::Guardrails => {
-                MemoryOperationKind::Guardrails
-            }
-            codex_app_server_protocol::MemoryOperationKind::Decisions => {
-                MemoryOperationKind::Decisions
-            }
-            codex_app_server_protocol::MemoryOperationKind::Dossiers => {
-                MemoryOperationKind::Dossiers
-            }
-            codex_app_server_protocol::MemoryOperationKind::RoutineCandidates => {
-                MemoryOperationKind::RoutineCandidates
-            }
-            codex_app_server_protocol::MemoryOperationKind::Frontier => {
-                MemoryOperationKind::Frontier
-            }
-            codex_app_server_protocol::MemoryOperationKind::Next => MemoryOperationKind::Next,
-        }
-    }
-
-    fn app_server_memory_status(
-        status: codex_app_server_protocol::MemoryOperationStatus,
-    ) -> MemoryOperationStatus {
-        match status {
-            codex_app_server_protocol::MemoryOperationStatus::Pending => {
-                MemoryOperationStatus::Pending
-            }
-            codex_app_server_protocol::MemoryOperationStatus::Ready => MemoryOperationStatus::Ready,
-            codex_app_server_protocol::MemoryOperationStatus::Empty => MemoryOperationStatus::Empty,
-            codex_app_server_protocol::MemoryOperationStatus::Skipped => {
-                MemoryOperationStatus::Skipped
-            }
-            codex_app_server_protocol::MemoryOperationStatus::Error => MemoryOperationStatus::Error,
-        }
-    }
-
-    fn app_server_memory_scope(
-        scope: codex_app_server_protocol::MemoryOperationScope,
-    ) -> MemoryOperationScope {
-        match scope {
-            codex_app_server_protocol::MemoryOperationScope::None => MemoryOperationScope::None,
-            codex_app_server_protocol::MemoryOperationScope::Turn => MemoryOperationScope::Turn,
-            codex_app_server_protocol::MemoryOperationScope::Thread => MemoryOperationScope::Thread,
-        }
-    }
-
-    fn on_memory_operation(&mut self, event: MemoryOperationEvent) {
-        if self.try_complete_pending_memory_operation(&event) {
-            self.request_redraw();
-            return;
-        }
-        self.add_to_history(history_cell::new_memory_operation_event(event));
-        self.request_redraw();
-    }
-
-    pub(crate) fn show_pending_memory_operation(&mut self, cell: history_cell::MemoryHistoryCell) {
-        self.flush_active_cell();
-        self.active_cell = Some(Box::new(cell));
-        self.bump_active_cell_revision();
-        self.request_redraw();
-    }
-
-    fn try_complete_pending_memory_operation(&mut self, event: &MemoryOperationEvent) -> bool {
-        if event.source != MemoryOperationSource::Human {
-            return false;
-        }
-        let Some(active) = self.active_cell.as_mut() else {
-            return false;
+    fn add_memory_operation_message(&mut self, summary: String, detail: Option<String>) {
+        let mut message = if summary.is_empty() {
+            "Memory operation event".to_string()
+        } else {
+            summary
         };
-        let Some(memory) = active
-            .as_any_mut()
-            .downcast_mut::<history_cell::MemoryHistoryCell>()
-        else {
-            return false;
-        };
-        if !memory.is_human_pending_submission(event.operation, event.query.as_deref()) {
-            return false;
+        if let Some(detail) = detail {
+            if message.is_empty() {
+                message = detail;
+            } else {
+                message.push_str(": ");
+                message.push_str(&detail);
+            }
         }
-        memory.apply_event(event.clone());
-        self.bump_active_cell_revision();
-        self.flush_active_cell();
-        true
-    }
-
-    fn ensure_memory_recall_thread(&mut self) -> bool {
-        if self.thread_id.is_some() {
-            return true;
-        }
-
-        self.add_error_message(
-            "Start a new chat or resume an existing thread before using /memory-recall."
-                .to_string(),
-        );
-        self.bottom_pane.drain_pending_submission_state();
-        false
+        self.add_info_message(message, /*hint*/ None);
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -5047,6 +4908,7 @@ impl ChatWidget {
             plugin_install_auth_flow: None,
             plugins_active_tab_id: None,
             newly_installed_marketplace_tab_id: None,
+            ide_context: self::ide_context::IdeContextState::default(),
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -6177,26 +6039,13 @@ impl ChatWidget {
             }
             ThreadItem::Plan { text, .. } => self.on_plan_item_completed(text),
             ThreadItem::MemoryOperation {
-                source,
-                operation,
-                status,
-                scope,
-                query,
+                query: _query,
                 summary,
                 detail,
-                context_injected,
+                context_injected: _context_injected,
                 ..
             } => {
-                self.on_memory_operation(MemoryOperationEvent {
-                    source: Self::app_server_memory_source(source),
-                    operation: Self::app_server_memory_kind(operation),
-                    status: Self::app_server_memory_status(status),
-                    scope: Self::app_server_memory_scope(scope),
-                    query,
-                    summary,
-                    detail,
-                    context_injected,
-                });
+                self.add_memory_operation_message(summary, detail);
             }
             ThreadItem::Reasoning {
                 summary, content, ..
@@ -6391,16 +6240,7 @@ impl ChatWidget {
                 self.handle_item_completed_notification(notification, replay_kind);
             }
             ServerNotification::MemoryOperation(notification) => {
-                self.on_memory_operation(MemoryOperationEvent {
-                    source: Self::app_server_memory_source(notification.source),
-                    operation: Self::app_server_memory_kind(notification.operation),
-                    status: Self::app_server_memory_status(notification.status),
-                    scope: Self::app_server_memory_scope(notification.scope),
-                    query: notification.query,
-                    summary: notification.summary,
-                    detail: notification.detail,
-                    context_injected: notification.context_injected,
-                });
+                self.add_memory_operation_message(notification.summary, notification.detail);
             }
             ServerNotification::AgentMessageDelta(notification) => {
                 self.on_agent_message_delta(notification.delta);

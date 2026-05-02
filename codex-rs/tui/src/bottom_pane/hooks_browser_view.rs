@@ -536,16 +536,9 @@ fn event_label(event_name: HookEventName) -> &'static str {
         HookEventName::PreToolUse => "PreToolUse",
         HookEventName::PermissionRequest => "PermissionRequest",
         HookEventName::PostToolUse => "PostToolUse",
-        HookEventName::PostToolUseFailure => "PostToolUseFailure",
-        HookEventName::PreCompact => "PreCompact",
         HookEventName::SessionStart => "SessionStart",
-        HookEventName::SubagentStart => "SubagentStart",
-        HookEventName::SubagentStop => "SubagentStop",
-        HookEventName::Notification => "Notification",
-        HookEventName::TaskCompleted => "TaskCompleted",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
         HookEventName::Stop => "Stop",
-        HookEventName::SessionEnd => "SessionEnd",
     }
 }
 
@@ -554,16 +547,9 @@ fn event_description(event_name: HookEventName) -> &'static str {
         HookEventName::PreToolUse => "Before a tool executes",
         HookEventName::PermissionRequest => "When permission is requested",
         HookEventName::PostToolUse => "After a tool executes",
-        HookEventName::PostToolUseFailure => "After a tool fails",
-        HookEventName::PreCompact => "Before context compaction",
         HookEventName::SessionStart => "When a new session starts",
-        HookEventName::SubagentStart => "When a subagent starts",
-        HookEventName::SubagentStop => "When a subagent stops",
-        HookEventName::Notification => "When Codex sends a notification",
-        HookEventName::TaskCompleted => "When a task completes",
         HookEventName::UserPromptSubmit => "When the user submits a prompt",
         HookEventName::Stop => "Right before Codex ends its turn",
-        HookEventName::SessionEnd => "When a session ends",
     }
 }
 

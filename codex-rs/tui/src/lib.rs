@@ -133,6 +133,7 @@ mod keymap_setup;
 mod line_truncation;
 pub(crate) mod live_wrap;
 pub use live_wrap::RowBuilder;
+mod ide_context;
 mod local_chatgpt_auth;
 mod markdown;
 mod markdown_render;
@@ -140,6 +141,7 @@ mod markdown_stream;
 mod mention_codec;
 mod model_catalog;
 mod model_migration;
+mod motion;
 mod multi_agents;
 mod notifications;
 #[cfg(any(not(debug_assertions), test))]

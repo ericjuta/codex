@@ -726,6 +726,8 @@ impl ChatComposer {
         self.goal_status_indicator = indicator;
     }
 
+    pub(crate) fn set_ide_context_active(&mut self, _enabled: bool) {}
+
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
         self.personality_command_enabled = enabled;
     }

@@ -443,7 +443,7 @@ v2_enum_from_core!(
 
 v2_enum_from_core!(
     pub enum HookEventName from CoreHookEventName {
-        PreToolUse, PermissionRequest, PostToolUse, PostToolUseFailure, PreCompact, SessionStart, SubagentStart, SubagentStop, Notification, TaskCompleted, UserPromptSubmit, Stop, SessionEnd
+        PreToolUse, PermissionRequest, PostToolUse, SessionStart, UserPromptSubmit, Stop
     }
 );
 
@@ -4396,9 +4396,7 @@ impl ThreadMemoryOperationParams {
                 scope_type: scope_type.clone(),
                 scope_id: scope_id.clone(),
             }),
-            CoreOp::ReviewFrontier { limit } => Some(Self::Frontier {
-                limit: *limit,
-            }),
+            CoreOp::ReviewFrontier { limit } => Some(Self::Frontier { limit: *limit }),
             CoreOp::ReviewNext => Some(Self::Next),
             _ => None,
         }
@@ -4416,19 +4414,16 @@ impl ThreadMemoryOperationParams {
             Self::AutoCrystallize { older_than_days } => {
                 Some(CoreOp::AutoCrystallize { older_than_days })
             }
-            Self::Reflect { max_clusters } => Some(CoreOp::ReflectMemories {
-                max_clusters,
-            }),
+            Self::Reflect { max_clusters } => Some(CoreOp::ReflectMemories { max_clusters }),
             Self::Insights { query } => Some(CoreOp::ReviewInsights { query }),
             Self::ListActions { status } => Some(CoreOp::ListActions { status }),
             Self::CreateAction { title } => Some(CoreOp::CreateAction { title }),
             Self::UpdateAction { action_id, status } => {
                 Some(CoreOp::UpdateAction { action_id, status })
             }
-            Self::Missions { mission_id, status } => Some(CoreOp::ReviewMissions {
-                mission_id,
-                status,
-            }),
+            Self::Missions { mission_id, status } => {
+                Some(CoreOp::ReviewMissions { mission_id, status })
+            }
             Self::Guardrails { query } => Some(CoreOp::ReviewGuardrails { query }),
             Self::Decisions { query } => Some(CoreOp::ReviewDecisions { query }),
             Self::Dossiers { file_path } => Some(CoreOp::ReviewDossiers { file_path }),
@@ -4533,7 +4528,6 @@ pub enum MemoryOperationScope {
     Turn,
     Thread,
 }
-
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

@@ -34,7 +34,7 @@ impl ChatWidget {
         local_images: Vec<PathBuf>,
         remote_image_urls: Vec<String>,
     ) -> UserMessageDisplay {
-        let (message, prompt_request_offset) =
+        let (message, prompt_request_offset): (&str, usize) =
             crate::ide_context::extract_prompt_request_with_offset(&message);
         let prompt_request_end = prompt_request_offset + message.len();
         // Prompt context uses the same delimiter and stripping behavior as the desktop app and IDE
