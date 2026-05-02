@@ -30,9 +30,6 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
-use codex_protocol::items::MemoryOperationKind as CoreMemoryOperationKind;
-use codex_protocol::items::MemoryOperationScope as CoreMemoryOperationScope;
-use codex_protocol::items::MemoryOperationStatus as CoreMemoryOperationStatus;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::CallToolResult as CoreMcpCallToolResult;
 use codex_protocol::mcp::Resource as McpResource;
@@ -80,7 +77,6 @@ use codex_protocol::protocol::HookRunStatus as CoreHookRunStatus;
 use codex_protocol::protocol::HookRunSummary as CoreHookRunSummary;
 use codex_protocol::protocol::HookScope as CoreHookScope;
 use codex_protocol::protocol::HookSource as CoreHookSource;
-use codex_protocol::protocol::MemoryOperationSource as CoreMemoryOperationSource;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::ModelVerification as CoreModelVerification;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
@@ -4349,7 +4345,7 @@ impl ThreadMemoryOperationParams {
                 action_ids: action_ids.clone(),
             }),
             CoreOp::AutoCrystallize { older_than_days } => Some(Self::AutoCrystallize {
-                older_than_days: *older_than_days,
+                older_than_days: older_than_days.to_owned(),
             }),
             CoreOp::ReflectMemories { max_clusters } => Some(Self::Reflect {
                 max_clusters: *max_clusters,
@@ -4400,53 +4396,62 @@ impl ThreadMemoryOperationParams {
                 scope_type: scope_type.clone(),
                 scope_id: scope_id.clone(),
             }),
-            CoreOp::ReviewFrontier { limit } => Some(Self::Frontier { limit: *limit }),
+            CoreOp::ReviewFrontier { limit } => Some(Self::Frontier {
+                limit: *limit,
+            }),
             CoreOp::ReviewNext => Some(Self::Next),
             _ => None,
         }
     }
 
-    pub fn to_core(self) -> CoreOp {
+    pub fn to_core(self) -> Option<CoreOp> {
         match self {
-            Self::Drop => CoreOp::DropMemories,
-            Self::Update => CoreOp::UpdateMemories,
-            Self::Recall { query } => CoreOp::RecallMemories { query },
-            Self::Remember { content } => CoreOp::RememberMemories { content },
-            Self::Lessons { query } => CoreOp::ReviewLessons { query },
-            Self::Crystals => CoreOp::ReviewCrystals,
-            Self::CreateCrystals { action_ids } => CoreOp::CreateCrystals { action_ids },
+            Self::Drop => Some(CoreOp::DropMemories),
+            Self::Update => Some(CoreOp::UpdateMemories),
+            Self::Recall { query } => Some(CoreOp::RecallMemories { query }),
+            Self::Remember { content } => Some(CoreOp::RememberMemories { content }),
+            Self::Lessons { query } => Some(CoreOp::ReviewLessons { query }),
+            Self::Crystals => Some(CoreOp::ReviewCrystals),
+            Self::CreateCrystals { action_ids } => Some(CoreOp::CreateCrystals { action_ids }),
             Self::AutoCrystallize { older_than_days } => {
-                CoreOp::AutoCrystallize { older_than_days }
+                Some(CoreOp::AutoCrystallize { older_than_days })
             }
-            Self::Reflect { max_clusters } => CoreOp::ReflectMemories { max_clusters },
-            Self::Insights { query } => CoreOp::ReviewInsights { query },
-            Self::ListActions { status } => CoreOp::ListActions { status },
-            Self::CreateAction { title } => CoreOp::CreateAction { title },
-            Self::UpdateAction { action_id, status } => CoreOp::UpdateAction { action_id, status },
-            Self::Missions { mission_id, status } => CoreOp::ReviewMissions { mission_id, status },
-            Self::BranchOverlays { branch } => CoreOp::ReviewBranchOverlays { branch },
-            Self::Guardrails { query } => CoreOp::ReviewGuardrails { query },
-            Self::Decisions { query } => CoreOp::ReviewDecisions { query },
-            Self::Dossiers { file_path } => CoreOp::ReviewDossiers { file_path },
-            Self::RoutineCandidates => CoreOp::ReviewRoutineCandidates,
+            Self::Reflect { max_clusters } => Some(CoreOp::ReflectMemories {
+                max_clusters,
+            }),
+            Self::Insights { query } => Some(CoreOp::ReviewInsights { query }),
+            Self::ListActions { status } => Some(CoreOp::ListActions { status }),
+            Self::CreateAction { title } => Some(CoreOp::CreateAction { title }),
+            Self::UpdateAction { action_id, status } => {
+                Some(CoreOp::UpdateAction { action_id, status })
+            }
+            Self::Missions { mission_id, status } => Some(CoreOp::ReviewMissions {
+                mission_id,
+                status,
+            }),
+            Self::Guardrails { query } => Some(CoreOp::ReviewGuardrails { query }),
+            Self::Decisions { query } => Some(CoreOp::ReviewDecisions { query }),
+            Self::Dossiers { file_path } => Some(CoreOp::ReviewDossiers { file_path }),
+            Self::BranchOverlays { branch } => Some(CoreOp::ReviewBranchOverlays { branch }),
+            Self::RoutineCandidates => Some(CoreOp::ReviewRoutineCandidates),
             Self::Handoffs {
                 handoff_packet_id,
                 scope_type,
                 scope_id,
-            } => CoreOp::ReviewHandoffs {
+            } => Some(CoreOp::ReviewHandoffs {
                 handoff_packet_id,
                 scope_type,
                 scope_id,
-            },
+            }),
             Self::GenerateHandoff {
                 scope_type,
                 scope_id,
-            } => CoreOp::GenerateHandoff {
+            } => Some(CoreOp::GenerateHandoff {
                 scope_type,
                 scope_id,
-            },
-            Self::Frontier { limit } => CoreOp::ReviewFrontier { limit },
-            Self::Next => CoreOp::ReviewNext,
+            }),
+            Self::Frontier { limit } => Some(CoreOp::ReviewFrontier { limit }),
+            Self::Next => Some(CoreOp::ReviewNext),
         }
     }
 }
@@ -4499,36 +4504,6 @@ pub enum MemoryOperationKind {
     Next,
 }
 
-impl From<CoreMemoryOperationKind> for MemoryOperationKind {
-    fn from(value: CoreMemoryOperationKind) -> Self {
-        match value {
-            CoreMemoryOperationKind::Recall => Self::Recall,
-            CoreMemoryOperationKind::Remember => Self::Remember,
-            CoreMemoryOperationKind::Update => Self::Update,
-            CoreMemoryOperationKind::Drop => Self::Drop,
-            CoreMemoryOperationKind::Lessons => Self::Lessons,
-            CoreMemoryOperationKind::Crystals => Self::Crystals,
-            CoreMemoryOperationKind::Crystallize => Self::Crystallize,
-            CoreMemoryOperationKind::AutoCrystallize => Self::AutoCrystallize,
-            CoreMemoryOperationKind::Insights => Self::Insights,
-            CoreMemoryOperationKind::Reflect => Self::Reflect,
-            CoreMemoryOperationKind::Actions => Self::Actions,
-            CoreMemoryOperationKind::ActionCreate => Self::ActionCreate,
-            CoreMemoryOperationKind::ActionUpdate => Self::ActionUpdate,
-            CoreMemoryOperationKind::Missions => Self::Missions,
-            CoreMemoryOperationKind::Handoffs => Self::Handoffs,
-            CoreMemoryOperationKind::HandoffGenerate => Self::HandoffGenerate,
-            CoreMemoryOperationKind::BranchOverlays => Self::BranchOverlays,
-            CoreMemoryOperationKind::Guardrails => Self::Guardrails,
-            CoreMemoryOperationKind::Decisions => Self::Decisions,
-            CoreMemoryOperationKind::Dossiers => Self::Dossiers,
-            CoreMemoryOperationKind::RoutineCandidates => Self::RoutineCandidates,
-            CoreMemoryOperationKind::Frontier => Self::Frontier,
-            CoreMemoryOperationKind::Next => Self::Next,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case", export_to = "v2/")]
@@ -4540,18 +4515,6 @@ pub enum MemoryOperationStatus {
     Error,
 }
 
-impl From<CoreMemoryOperationStatus> for MemoryOperationStatus {
-    fn from(value: CoreMemoryOperationStatus) -> Self {
-        match value {
-            CoreMemoryOperationStatus::Pending => Self::Pending,
-            CoreMemoryOperationStatus::Ready => Self::Ready,
-            CoreMemoryOperationStatus::Empty => Self::Empty,
-            CoreMemoryOperationStatus::Skipped => Self::Skipped,
-            CoreMemoryOperationStatus::Error => Self::Error,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case", export_to = "v2/")]
@@ -4559,16 +4522,6 @@ pub enum MemoryOperationSource {
     Human,
     Assistant,
     Automatic,
-}
-
-impl From<CoreMemoryOperationSource> for MemoryOperationSource {
-    fn from(value: CoreMemoryOperationSource) -> Self {
-        match value {
-            CoreMemoryOperationSource::Human => Self::Human,
-            CoreMemoryOperationSource::Assistant => Self::Assistant,
-            CoreMemoryOperationSource::Automatic => Self::Automatic,
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema, TS)]
@@ -4581,15 +4534,6 @@ pub enum MemoryOperationScope {
     Thread,
 }
 
-impl From<CoreMemoryOperationScope> for MemoryOperationScope {
-    fn from(value: CoreMemoryOperationScope) -> Self {
-        match value {
-            CoreMemoryOperationScope::None => Self::None,
-            CoreMemoryOperationScope::Turn => Self::Turn,
-            CoreMemoryOperationScope::Thread => Self::Thread,
-        }
-    }
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

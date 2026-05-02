@@ -777,6 +777,125 @@ pub enum Op {
     /// model.
     SetThreadMemoryMode { mode: ThreadMemoryMode },
 
+    /// Request Codex to drop the last N memory entries from recent context.
+    DropMemories,
+
+    /// Trigger a memory-refresh pass for the active session.
+    UpdateMemories,
+
+    /// Recall memory entries, optionally scoped by a search query.
+    RecallMemories {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+
+    /// Persist a durable memory entry explicitly.
+    RememberMemories { content: String },
+
+    /// Review lessons, optionally scoped by a search query.
+    ReviewLessons {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+
+    /// Review crystallized session digests.
+    ReviewCrystals,
+
+    /// Create a crystal from explicit action ids.
+    CreateCrystals { action_ids: Vec<String> },
+
+    /// Trigger automatic crystallization for eligible action groups.
+    AutoCrystallize {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        older_than_days: Option<u32>,
+    },
+
+    /// Trigger reflective insight generation.
+    ReflectMemories {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_clusters: Option<u32>,
+    },
+
+    /// Review insights, optionally scoped by a search query.
+    ReviewInsights {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+
+    /// Review explicit action work items.
+    ListActions {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+    },
+
+    /// Create a new explicit action work item.
+    CreateAction { title: String },
+
+    /// Update an existing action work item.
+    UpdateAction { action_id: String, status: String },
+
+    /// Review missions, optionally scoped by mission + status.
+    ReviewMissions {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mission_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+    },
+
+    /// Review branch overlays.
+    ReviewBranchOverlays {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
+    },
+
+    /// Review guardrails.
+    ReviewGuardrails {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+
+    /// Review decisions.
+    ReviewDecisions {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+
+    /// Review dossiers.
+    ReviewDossiers {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_path: Option<String>,
+    },
+
+    /// Review routine candidates.
+    ReviewRoutineCandidates,
+
+    /// Review handoffs.
+    ReviewHandoffs {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff_packet_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_type: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_id: Option<String>,
+    },
+
+    /// Generate a handoff.
+    GenerateHandoff {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_type: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_id: Option<String>,
+    },
+
+    /// Review frontier candidates.
+    ReviewFrontier {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<u32>,
+    },
+
+    /// Review next frontier item.
+    ReviewNext,
+
     /// Request Codex to drop the last N user turns from in-memory context.
     ///
     /// This does not attempt to revert local filesystem changes. Clients are
@@ -906,6 +1025,29 @@ impl Op {
             Self::SetThreadName { .. } => "set_thread_name",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
             Self::ThreadRollback { .. } => "thread_rollback",
+            Self::DropMemories => "drop_memories",
+            Self::UpdateMemories => "update_memories",
+            Self::RecallMemories { .. } => "recall_memories",
+            Self::RememberMemories { .. } => "remember_memories",
+            Self::ReviewLessons { .. } => "review_lessons",
+            Self::ReviewCrystals => "review_crystals",
+            Self::CreateCrystals { .. } => "create_crystals",
+            Self::AutoCrystallize { .. } => "auto_crystallize",
+            Self::ReflectMemories { .. } => "reflect_memories",
+            Self::ReviewInsights { .. } => "review_insights",
+            Self::ListActions { .. } => "list_actions",
+            Self::CreateAction { .. } => "create_action",
+            Self::UpdateAction { .. } => "update_action",
+            Self::ReviewMissions { .. } => "review_missions",
+            Self::ReviewBranchOverlays { .. } => "review_branch_overlays",
+            Self::ReviewGuardrails { .. } => "review_guardrails",
+            Self::ReviewDecisions { .. } => "review_decisions",
+            Self::ReviewDossiers { .. } => "review_dossiers",
+            Self::ReviewRoutineCandidates => "review_routine_candidates",
+            Self::ReviewHandoffs { .. } => "review_handoffs",
+            Self::GenerateHandoff { .. } => "generate_handoff",
+            Self::ReviewFrontier { .. } => "review_frontier",
+            Self::ReviewNext => "review_next",
             Self::Review { .. } => "review",
             Self::ApproveGuardianDeniedAction { .. } => "approve_guardian_denied_action",
             Self::Shutdown => "shutdown",
