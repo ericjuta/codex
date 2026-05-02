@@ -6825,6 +6825,20 @@ impl From<CoreTurnItem> for ThreadItem {
                 result: image.result,
                 saved_path: image.saved_path,
             },
+            CoreTurnItem::ImageView(image) => ThreadItem::ImageView {
+                id: image.id,
+                path: image.path,
+            },
+            CoreTurnItem::FileChange(file_change) => ThreadItem::FileChange {
+                id: file_change.id,
+                changes: crate::protocol::item_builders::convert_patch_changes(
+                    &file_change.changes,
+                ),
+                status: file_change
+                    .status
+                    .as_ref()
+                    .map_or(PatchApplyStatus::InProgress, Into::into),
+            },
             CoreTurnItem::ContextCompaction(compaction) => {
                 ThreadItem::ContextCompaction { id: compaction.id }
             }
