@@ -19,6 +19,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::Op;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use serde::Serialize;
 use serde_json::Value;
@@ -114,6 +115,7 @@ pub(crate) enum AppCommand {
     ApproveGuardianDeniedAction {
         event: GuardianAssessmentEvent,
     },
+    CoreOp(Op),
 }
 
 impl AppCommand {
@@ -289,12 +291,18 @@ impl AppCommand {
     }
 
     pub(crate) fn is_review(&self) -> bool {
-        matches!(self, Self::Review { .. })
+        matches!(self, Self::Review { .. } | Self::CoreOp(Op::Review { .. }))
     }
 }
 
 impl From<&AppCommand> for AppCommand {
     fn from(value: &AppCommand) -> Self {
         value.clone()
+    }
+}
+
+impl From<Op> for AppCommand {
+    fn from(value: Op) -> Self {
+        Self::CoreOp(value)
     }
 }

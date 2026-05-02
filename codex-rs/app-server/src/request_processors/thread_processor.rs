@@ -442,6 +442,25 @@ impl ThreadRequestProcessor {
         }
     }
 
+    pub(crate) async fn thread_close(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadCloseParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        match self.thread_close_response_inner(params).await {
+            Ok((response, notification)) => {
+                self.outgoing
+                    .send_response(request_id.clone(), response)
+                    .await;
+                self.outgoing
+                    .send_server_notification(ServerNotification::ThreadClosed(notification))
+                    .await;
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     pub(crate) async fn thread_increment_elicitation(
         &self,
         params: ThreadIncrementElicitationParams,
@@ -497,6 +516,16 @@ impl ThreadRequestProcessor {
         params: ThreadMemoryModeSetParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_memory_mode_set_response_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_memory_submit(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadMemorySubmitParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_memory_submit_response_inner(&request_id, params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -729,6 +758,23 @@ impl ThreadRequestProcessor {
                 }
                 ThreadShutdownResult::TimedOut => {
                     warn!("thread {thread_id} shutdown timed out; proceeding with archive");
+                }
+            }
+        }
+        self.finalize_thread_teardown(thread_id).await;
+    }
+
+    async fn prepare_thread_for_close(&self, thread_id: ThreadId) {
+        let removed_thread = self.thread_manager.remove_thread(&thread_id).await;
+        if let Some(thread) = removed_thread {
+            info!("thread {thread_id} was active; closing");
+            match wait_for_thread_shutdown(&thread).await {
+                ThreadShutdownResult::Complete => {}
+                ThreadShutdownResult::SubmitFailed => {
+                    warn!("failed to submit Shutdown to thread {thread_id}; closing anyway");
+                }
+                ThreadShutdownResult::TimedOut => {
+                    warn!("thread {thread_id} shutdown timed out; closing anyway");
                 }
             }
         }
@@ -1355,6 +1401,21 @@ impl ThreadRequestProcessor {
         Ok((ThreadArchiveResponse {}, archived_thread_ids))
     }
 
+    async fn thread_close_response_inner(
+        &self,
+        params: ThreadCloseParams,
+    ) -> Result<(ThreadCloseResponse, ThreadClosedNotification), JSONRPCErrorError> {
+        let thread_id = ThreadId::from_string(&params.thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+        self.prepare_thread_for_close(thread_id).await;
+        Ok((
+            ThreadCloseResponse {},
+            ThreadClosedNotification {
+                thread_id: thread_id.to_string(),
+            },
+        ))
+    }
+
     async fn thread_increment_elicitation_inner(
         &self,
         params: ThreadIncrementElicitationParams,
@@ -1465,6 +1526,22 @@ impl ThreadRequestProcessor {
             .map_err(|err| thread_store_write_error("set thread memory mode", err))?;
 
         Ok(ThreadMemoryModeSetResponse {})
+    }
+
+    async fn thread_memory_submit_response_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadMemorySubmitParams,
+    ) -> Result<ThreadMemorySubmitResponse, JSONRPCErrorError> {
+        let ThreadMemorySubmitParams {
+            thread_id,
+            operation,
+        } = params;
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        self.submit_core_op(request_id, thread.as_ref(), operation.to_core())
+            .await
+            .map_err(|err| internal_error(format!("failed to submit memory operation: {err}")))?;
+        Ok(ThreadMemorySubmitResponse {})
     }
 
     async fn memory_reset_response_inner(&self) -> Result<MemoryResetResponse, JSONRPCErrorError> {

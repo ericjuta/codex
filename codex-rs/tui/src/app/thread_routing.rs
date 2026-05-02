@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::session_resume::read_session_model;
+use codex_app_server_protocol::ThreadMemoryOperationParams;
 
 impl App {
     pub(super) async fn shutdown_current_thread(&mut self, app_server: &mut AppServerSession) {
@@ -14,6 +15,24 @@ impl App {
             self.backtrack.pending_rollback = None;
             if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
                 tracing::warn!("failed to unsubscribe thread {thread_id}: {err}");
+            }
+            self.abort_thread_event_listener(thread_id);
+        }
+    }
+
+    pub(super) async fn close_current_thread_for_fresh_session(
+        &mut self,
+        app_server: &mut AppServerSession,
+    ) {
+        if let Some(thread_id) = self.chat_widget.thread_id() {
+            self.backtrack.pending_rollback = None;
+            if let Err(err) = app_server.thread_close(thread_id).await {
+                tracing::warn!(
+                    "failed to close thread {thread_id}; falling back to unsubscribe: {err}"
+                );
+                if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
+                    tracing::warn!("failed to unsubscribe thread {thread_id}: {err}");
+                }
             }
             self.abort_thread_event_listener(thread_id);
         }
@@ -689,6 +708,15 @@ impl App {
             AppCommand::ApproveGuardianDeniedAction { event } => {
                 app_server
                     .thread_approve_guardian_denied_action(thread_id, event)
+                    .await?;
+                Ok(true)
+            }
+            AppCommand::CoreOp(op) => {
+                let Some(operation) = ThreadMemoryOperationParams::from_core_op(op) else {
+                    return Ok(false);
+                };
+                app_server
+                    .thread_memory_submit(thread_id, operation)
                     .await?;
                 Ok(true)
             }

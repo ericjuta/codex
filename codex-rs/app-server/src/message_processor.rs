@@ -980,6 +980,11 @@ impl MessageProcessor {
                     .thread_archive(request_id.clone(), params)
                     .await
             }
+            ClientRequest::ThreadClose { params, .. } => {
+                self.thread_processor
+                    .thread_close(request_id.clone(), params)
+                    .await
+            }
             ClientRequest::ThreadIncrementElicitation { params, .. } => {
                 self.thread_processor
                     .thread_increment_elicitation(params)
@@ -1013,6 +1018,11 @@ impl MessageProcessor {
             }
             ClientRequest::ThreadMemoryModeSet { params, .. } => {
                 self.thread_processor.thread_memory_mode_set(params).await
+            }
+            ClientRequest::ThreadMemorySubmit { params, .. } => {
+                self.thread_processor
+                    .thread_memory_submit(request_id.clone(), params)
+                    .await
             }
             ClientRequest::MemoryReset { .. } => self.thread_processor.memory_reset().await,
             ClientRequest::ThreadUnarchive { params, .. } => {

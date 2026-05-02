@@ -156,11 +156,16 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
+use codex_protocol::items::MemoryOperationKind;
+use codex_protocol::items::MemoryOperationScope;
+use codex_protocol::items::MemoryOperationStatus;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
+use codex_protocol::protocol::MemoryOperationEvent;
+use codex_protocol::protocol::MemoryOperationSource;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
@@ -850,7 +855,6 @@ pub(crate) struct ChatWidget {
     connectors_partial_snapshot: Option<ConnectorsSnapshot>,
     connectors_prefetch_in_flight: bool,
     connectors_force_refetch_pending: bool,
-    ide_context: IdeContextState,
     plugins_cache: PluginsCacheState,
     plugins_fetch_state: PluginListFetchState,
     plugin_install_apps_needing_auth: Vec<AppSummary>,
@@ -1161,7 +1165,6 @@ pub(crate) struct ThreadInputState {
     composer: Option<ThreadComposerState>,
     pending_steers: VecDeque<UserMessage>,
     pending_steer_history_records: VecDeque<UserMessageHistoryRecord>,
-    pending_steer_compare_keys: VecDeque<PendingSteerCompareKey>,
     rejected_steers_queue: VecDeque<UserMessage>,
     rejected_steer_history_records: VecDeque<UserMessageHistoryRecord>,
     queued_user_messages: VecDeque<QueuedUserMessage>,
@@ -1475,16 +1478,16 @@ fn user_message_display_for_history(
     history_record: &UserMessageHistoryRecord,
 ) -> UserMessageDisplay {
     let message = user_message_for_restore(message, history_record);
-    ChatWidget::user_message_display_from_parts(
-        message.text,
-        message.text_elements,
-        message
+    UserMessageDisplay {
+        message: message.text,
+        remote_image_urls: message.remote_image_urls,
+        local_images: message
             .local_images
             .into_iter()
             .map(|image| image.path)
             .collect(),
-        message.remote_image_urls,
-    )
+        text_elements: message.text_elements,
+    }
 }
 
 fn merge_user_messages_with_history_record(
@@ -2828,6 +2831,159 @@ impl ChatWidget {
         self.config.memories.generate_memories = generate_memories;
     }
 
+    fn app_server_memory_source(
+        source: codex_app_server_protocol::MemoryOperationSource,
+    ) -> MemoryOperationSource {
+        match source {
+            codex_app_server_protocol::MemoryOperationSource::Human => MemoryOperationSource::Human,
+            codex_app_server_protocol::MemoryOperationSource::Assistant => {
+                MemoryOperationSource::Assistant
+            }
+            codex_app_server_protocol::MemoryOperationSource::Automatic => {
+                MemoryOperationSource::Automatic
+            }
+        }
+    }
+
+    fn app_server_memory_kind(
+        operation: codex_app_server_protocol::MemoryOperationKind,
+    ) -> MemoryOperationKind {
+        match operation {
+            codex_app_server_protocol::MemoryOperationKind::Recall => MemoryOperationKind::Recall,
+            codex_app_server_protocol::MemoryOperationKind::Remember => {
+                MemoryOperationKind::Remember
+            }
+            codex_app_server_protocol::MemoryOperationKind::Update => MemoryOperationKind::Update,
+            codex_app_server_protocol::MemoryOperationKind::Drop => MemoryOperationKind::Drop,
+            codex_app_server_protocol::MemoryOperationKind::Lessons => MemoryOperationKind::Lessons,
+            codex_app_server_protocol::MemoryOperationKind::Crystals => {
+                MemoryOperationKind::Crystals
+            }
+            codex_app_server_protocol::MemoryOperationKind::Crystallize => {
+                MemoryOperationKind::Crystallize
+            }
+            codex_app_server_protocol::MemoryOperationKind::AutoCrystallize => {
+                MemoryOperationKind::AutoCrystallize
+            }
+            codex_app_server_protocol::MemoryOperationKind::Insights => {
+                MemoryOperationKind::Insights
+            }
+            codex_app_server_protocol::MemoryOperationKind::Reflect => MemoryOperationKind::Reflect,
+            codex_app_server_protocol::MemoryOperationKind::Actions => MemoryOperationKind::Actions,
+            codex_app_server_protocol::MemoryOperationKind::ActionCreate => {
+                MemoryOperationKind::ActionCreate
+            }
+            codex_app_server_protocol::MemoryOperationKind::ActionUpdate => {
+                MemoryOperationKind::ActionUpdate
+            }
+            codex_app_server_protocol::MemoryOperationKind::Missions => {
+                MemoryOperationKind::Missions
+            }
+            codex_app_server_protocol::MemoryOperationKind::Handoffs => {
+                MemoryOperationKind::Handoffs
+            }
+            codex_app_server_protocol::MemoryOperationKind::HandoffGenerate => {
+                MemoryOperationKind::HandoffGenerate
+            }
+            codex_app_server_protocol::MemoryOperationKind::BranchOverlays => {
+                MemoryOperationKind::BranchOverlays
+            }
+            codex_app_server_protocol::MemoryOperationKind::Guardrails => {
+                MemoryOperationKind::Guardrails
+            }
+            codex_app_server_protocol::MemoryOperationKind::Decisions => {
+                MemoryOperationKind::Decisions
+            }
+            codex_app_server_protocol::MemoryOperationKind::Dossiers => {
+                MemoryOperationKind::Dossiers
+            }
+            codex_app_server_protocol::MemoryOperationKind::RoutineCandidates => {
+                MemoryOperationKind::RoutineCandidates
+            }
+            codex_app_server_protocol::MemoryOperationKind::Frontier => {
+                MemoryOperationKind::Frontier
+            }
+            codex_app_server_protocol::MemoryOperationKind::Next => MemoryOperationKind::Next,
+        }
+    }
+
+    fn app_server_memory_status(
+        status: codex_app_server_protocol::MemoryOperationStatus,
+    ) -> MemoryOperationStatus {
+        match status {
+            codex_app_server_protocol::MemoryOperationStatus::Pending => {
+                MemoryOperationStatus::Pending
+            }
+            codex_app_server_protocol::MemoryOperationStatus::Ready => MemoryOperationStatus::Ready,
+            codex_app_server_protocol::MemoryOperationStatus::Empty => MemoryOperationStatus::Empty,
+            codex_app_server_protocol::MemoryOperationStatus::Skipped => {
+                MemoryOperationStatus::Skipped
+            }
+            codex_app_server_protocol::MemoryOperationStatus::Error => MemoryOperationStatus::Error,
+        }
+    }
+
+    fn app_server_memory_scope(
+        scope: codex_app_server_protocol::MemoryOperationScope,
+    ) -> MemoryOperationScope {
+        match scope {
+            codex_app_server_protocol::MemoryOperationScope::None => MemoryOperationScope::None,
+            codex_app_server_protocol::MemoryOperationScope::Turn => MemoryOperationScope::Turn,
+            codex_app_server_protocol::MemoryOperationScope::Thread => MemoryOperationScope::Thread,
+        }
+    }
+
+    fn on_memory_operation(&mut self, event: MemoryOperationEvent) {
+        if self.try_complete_pending_memory_operation(&event) {
+            self.request_redraw();
+            return;
+        }
+        self.add_to_history(history_cell::new_memory_operation_event(event));
+        self.request_redraw();
+    }
+
+    pub(crate) fn show_pending_memory_operation(&mut self, cell: history_cell::MemoryHistoryCell) {
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(cell));
+        self.bump_active_cell_revision();
+        self.request_redraw();
+    }
+
+    fn try_complete_pending_memory_operation(&mut self, event: &MemoryOperationEvent) -> bool {
+        if event.source != MemoryOperationSource::Human {
+            return false;
+        }
+        let Some(active) = self.active_cell.as_mut() else {
+            return false;
+        };
+        let Some(memory) = active
+            .as_any_mut()
+            .downcast_mut::<history_cell::MemoryHistoryCell>()
+        else {
+            return false;
+        };
+        if !memory.is_human_pending_submission(event.operation, event.query.as_deref()) {
+            return false;
+        }
+        memory.apply_event(event.clone());
+        self.bump_active_cell_revision();
+        self.flush_active_cell();
+        true
+    }
+
+    fn ensure_memory_recall_thread(&mut self) -> bool {
+        if self.thread_id.is_some() {
+            return true;
+        }
+
+        self.add_error_message(
+            "Start a new chat or resume an existing thread before using /memory-recall."
+                .to_string(),
+        );
+        self.bottom_pane.drain_pending_submission_state();
+        false
+    }
+
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         match info {
             Some(info) => self.apply_token_info(info),
@@ -2981,12 +3137,6 @@ impl ChatWidget {
     fn finalize_turn(&mut self) {
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();
-        // Turn-scoped hook rows are transient live state; once the turn is over,
-        // do not leave an orphaned running row behind if no matching completion
-        // event arrived before cancellation.
-        if self.active_hook_cell.take().is_some() {
-            self.bump_active_cell_revision();
-        }
         // Reset running state and clear streaming buffers.
         self.user_turn_pending_start = false;
         self.agent_turn_running = false;
@@ -3289,11 +3439,6 @@ impl ChatWidget {
                 .iter()
                 .map(|pending| pending.history_record.clone())
                 .collect(),
-            pending_steer_compare_keys: self
-                .pending_steers
-                .iter()
-                .map(|pending| pending.compare_key.clone())
-                .collect(),
             rejected_steers_queue: self.rejected_steers_queue.clone(),
             rejected_steer_history_records: self.rejected_steer_history_records.clone(),
             queued_user_messages: self.queued_user_messages.clone(),
@@ -3347,19 +3492,16 @@ impl ChatWidget {
                 input_state.pending_steers.len(),
                 UserMessageHistoryRecord::UserMessageText,
             );
-            let mut pending_steer_compare_keys = input_state.pending_steer_compare_keys;
             self.pending_steers = input_state
                 .pending_steers
                 .into_iter()
                 .zip(pending_steer_history_records)
                 .map(|(user_message, history_record)| PendingSteer {
-                    compare_key: pending_steer_compare_keys.pop_front().unwrap_or_else(|| {
-                        PendingSteerCompareKey {
-                            message: user_message.text.clone(),
-                            image_count: user_message.local_images.len()
-                                + user_message.remote_image_urls.len(),
-                        }
-                    }),
+                    compare_key: PendingSteerCompareKey {
+                        message: user_message.text.clone(),
+                        image_count: user_message.local_images.len()
+                            + user_message.remote_image_urls.len(),
+                    },
                     history_record,
                     user_message,
                 })
@@ -4948,7 +5090,6 @@ impl ChatWidget {
             connectors_partial_snapshot: None,
             connectors_prefetch_in_flight: false,
             connectors_force_refetch_pending: false,
-            ide_context: IdeContextState::default(),
             plugins_cache: PluginsCacheState::default(),
             plugins_fetch_state: PluginListFetchState::default(),
             plugin_install_apps_needing_auth: Vec::new(),
@@ -5090,7 +5231,6 @@ impl ChatWidget {
                 } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c')
             )
             && !key_hint::ctrl(KeyCode::Char('r')).is_press(key_event)
-            && !key_hint::ctrl(KeyCode::Char('u')).is_press(key_event)
         {
             self.bottom_pane.handle_key_event(key_event);
             if self.bottom_pane.no_modal_or_popup_active() {
@@ -5821,9 +5961,6 @@ impl ChatWidget {
             ));
             return (false, None);
         }
-
-        self.maybe_apply_ide_context(&mut items);
-
         let collaboration_mode = if self.collaboration_modes_enabled() {
             self.active_collaboration_mask
                 .as_ref()
@@ -5906,7 +6043,7 @@ impl ChatWidget {
 
         // Show replayable user content in conversation history.
         let display_user_message = render_in_history.then(|| {
-            user_message_display_for_history(
+            user_message_for_restore(
                 UserMessage {
                     text,
                     local_images,
@@ -5917,8 +6054,49 @@ impl ChatWidget {
                 &history_record,
             )
         });
-        if let Some(display) = display_user_message {
-            self.on_user_message_display(display);
+        if let Some(display_user_message) = display_user_message {
+            let UserMessage {
+                text,
+                local_images,
+                remote_image_urls,
+                text_elements,
+                mention_bindings: _,
+            } = display_user_message;
+            if !text.is_empty() {
+                let local_image_paths = local_images
+                    .into_iter()
+                    .map(|img| img.path)
+                    .collect::<Vec<_>>();
+                self.last_rendered_user_message_display =
+                    Some(Self::user_message_display_from_parts(
+                        text.clone(),
+                        text_elements.clone(),
+                        local_image_paths.clone(),
+                        remote_image_urls.clone(),
+                    ));
+                self.add_to_history(history_cell::new_user_prompt(
+                    text,
+                    text_elements,
+                    local_image_paths,
+                    remote_image_urls,
+                ));
+                self.record_visible_user_turn_for_copy();
+            } else if !remote_image_urls.is_empty() {
+                self.last_rendered_user_message_display =
+                    Some(Self::user_message_display_from_parts(
+                        String::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        remote_image_urls.clone(),
+                    ));
+                self.add_to_history(history_cell::new_user_prompt(
+                    String::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    remote_image_urls,
+                ));
+                self.record_visible_user_turn_for_copy();
+            }
         }
 
         self.needs_final_message_separator = false;
@@ -6054,6 +6232,28 @@ impl ChatWidget {
                 });
             }
             ThreadItem::Plan { text, .. } => self.on_plan_item_completed(text),
+            ThreadItem::MemoryOperation {
+                source,
+                operation,
+                status,
+                scope,
+                query,
+                summary,
+                detail,
+                context_injected,
+                ..
+            } => {
+                self.on_memory_operation(MemoryOperationEvent {
+                    source: Self::app_server_memory_source(source),
+                    operation: Self::app_server_memory_kind(operation),
+                    status: Self::app_server_memory_status(status),
+                    scope: Self::app_server_memory_scope(scope),
+                    query,
+                    summary,
+                    detail,
+                    context_injected,
+                });
+            }
             ThreadItem::Reasoning {
                 summary, content, ..
             } => {
@@ -6245,6 +6445,18 @@ impl ChatWidget {
             }
             ServerNotification::ItemCompleted(notification) => {
                 self.handle_item_completed_notification(notification, replay_kind);
+            }
+            ServerNotification::MemoryOperation(notification) => {
+                self.on_memory_operation(MemoryOperationEvent {
+                    source: Self::app_server_memory_source(notification.source),
+                    operation: Self::app_server_memory_kind(notification.operation),
+                    status: Self::app_server_memory_status(notification.status),
+                    scope: Self::app_server_memory_scope(notification.scope),
+                    query: notification.query,
+                    summary: notification.summary,
+                    detail: notification.detail,
+                    context_injected: notification.context_injected,
+                });
             }
             ServerNotification::AgentMessageDelta(notification) => {
                 self.on_agent_message_delta(notification.delta);
@@ -6660,7 +6872,6 @@ impl ChatWidget {
         self.last_rendered_user_message_display = Some(display.clone());
         if !display.message.trim().is_empty()
             || !display.text_elements.is_empty()
-            || !display.local_images.is_empty()
             || !display.remote_image_urls.is_empty()
         {
             self.record_visible_user_turn_for_copy();
@@ -10646,9 +10857,6 @@ impl ChatWidget {
         &mut self,
         plugins: Option<Vec<PluginCapabilitySummary>>,
     ) {
-        if self.bottom_pane.plugins() == plugins.as_ref() {
-            return;
-        }
         self.bottom_pane.set_plugin_mentions(plugins);
     }
 

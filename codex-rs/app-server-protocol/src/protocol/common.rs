@@ -460,6 +460,11 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadArchiveResponse,
     },
+    ThreadClose => "thread/close" {
+        params: v2::ThreadCloseParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadCloseResponse,
+    },
     ThreadUnsubscribe => "thread/unsubscribe" {
         params: v2::ThreadUnsubscribeParams,
         serialization: thread_id(params.thread_id),
@@ -517,6 +522,12 @@ client_request_definitions! {
         params: v2::ThreadMemoryModeSetParams,
         serialization: thread_id(params.thread_id),
         response: v2::ThreadMemoryModeSetResponse,
+    },
+    #[experimental("thread/memory/submit")]
+    ThreadMemorySubmit => "thread/memory/submit" {
+        params: v2::ThreadMemorySubmitParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadMemorySubmitResponse,
     },
     #[experimental("memory/reset")]
     MemoryReset => "memory/reset" {
@@ -1438,6 +1449,7 @@ server_notification_definitions! {
     ItemGuardianApprovalReviewStarted => "item/autoApprovalReview/started" (v2::ItemGuardianApprovalReviewStartedNotification),
     ItemGuardianApprovalReviewCompleted => "item/autoApprovalReview/completed" (v2::ItemGuardianApprovalReviewCompletedNotification),
     ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
+    MemoryOperation => "thread/memory/operation" (v2::MemoryOperationNotification),
     /// This event is internal-only. Used by Codex Cloud.
     RawResponseItemCompleted => "rawResponseItem/completed" (v2::RawResponseItemCompletedNotification),
     AgentMessageDelta => "item/agentMessage/delta" (v2::AgentMessageDeltaNotification),
