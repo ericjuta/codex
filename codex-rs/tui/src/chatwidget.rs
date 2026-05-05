@@ -323,7 +323,6 @@ use self::goal_status::goal_status_indicator_from_app_goal;
 mod goal_menu;
 mod goal_validation;
 mod ide_context;
-use self::ide_context::IdeContextState;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod keymap_picker;
@@ -332,7 +331,6 @@ use self::mcp_startup::McpStartupStatus;
 mod session_header;
 use self::session_header::SessionHeader;
 mod hooks;
-mod ide_context;
 mod skills;
 mod slash_dispatch;
 use self::skills::collect_tool_mentions;
@@ -1162,6 +1160,7 @@ pub(crate) struct ThreadInputState {
     composer: Option<ThreadComposerState>,
     pending_steers: VecDeque<UserMessage>,
     pending_steer_history_records: VecDeque<UserMessageHistoryRecord>,
+    pending_steer_compare_keys: VecDeque<PendingSteerCompareKey>,
     rejected_steers_queue: VecDeque<UserMessage>,
     rejected_steer_history_records: VecDeque<UserMessageHistoryRecord>,
     queued_user_messages: VecDeque<QueuedUserMessage>,
@@ -3300,6 +3299,11 @@ impl ChatWidget {
                 .iter()
                 .map(|pending| pending.history_record.clone())
                 .collect(),
+            pending_steer_compare_keys: self
+                .pending_steers
+                .iter()
+                .map(|pending| pending.compare_key.clone())
+                .collect(),
             rejected_steers_queue: self.rejected_steers_queue.clone(),
             rejected_steer_history_records: self.rejected_steer_history_records.clone(),
             queued_user_messages: self.queued_user_messages.clone(),
@@ -3353,16 +3357,19 @@ impl ChatWidget {
                 input_state.pending_steers.len(),
                 UserMessageHistoryRecord::UserMessageText,
             );
+            let mut pending_steer_compare_keys = input_state.pending_steer_compare_keys;
             self.pending_steers = input_state
                 .pending_steers
                 .into_iter()
                 .zip(pending_steer_history_records)
                 .map(|(user_message, history_record)| PendingSteer {
-                    compare_key: PendingSteerCompareKey {
-                        message: user_message.text.clone(),
-                        image_count: user_message.local_images.len()
-                            + user_message.remote_image_urls.len(),
-                    },
+                    compare_key: pending_steer_compare_keys.pop_front().unwrap_or_else(|| {
+                        PendingSteerCompareKey {
+                            message: user_message.text.clone(),
+                            image_count: user_message.local_images.len()
+                                + user_message.remote_image_urls.len(),
+                        }
+                    }),
                     history_record,
                     user_message,
                 })

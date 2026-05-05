@@ -72,6 +72,19 @@ pub enum SlashCommand {
     MemoryDrop,
     #[strum(serialize = "debug-m-update")]
     MemoryUpdate,
+    MemoryRecall,
+    MemoryRemember,
+    MemoryLessons,
+    MemoryActions,
+    MemoryMissions,
+    MemoryBranchOverlays,
+    MemoryGuardrails,
+    MemoryDecisions,
+    MemoryDossiers,
+    MemoryRoutineCandidates,
+    MemoryHandoffs,
+    MemoryHandoffGenerate,
+    MemoryNext,
 }
 
 impl SlashCommand {
@@ -103,6 +116,19 @@ impl SlashCommand {
             SlashCommand::Stop => "stop all background terminals",
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
+            SlashCommand::MemoryRecall => "recall memory context for this thread",
+            SlashCommand::MemoryRemember => "save a durable memory",
+            SlashCommand::MemoryLessons => "review lesson memories",
+            SlashCommand::MemoryActions => "review action memories",
+            SlashCommand::MemoryMissions => "review mission memories",
+            SlashCommand::MemoryBranchOverlays => "review branch overlay memories",
+            SlashCommand::MemoryGuardrails => "review guardrail memories",
+            SlashCommand::MemoryDecisions => "review decision memories",
+            SlashCommand::MemoryDossiers => "review dossier memories",
+            SlashCommand::MemoryRoutineCandidates => "review routine memory candidates",
+            SlashCommand::MemoryHandoffs => "review handoff memories",
+            SlashCommand::MemoryHandoffGenerate => "generate a memory handoff",
+            SlashCommand::MemoryNext => "review the next memory action",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Fast => {
                 "toggle Fast mode to enable fastest inference with increased plan usage"
@@ -159,6 +185,17 @@ impl SlashCommand {
                 | SlashCommand::Side
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
+                | SlashCommand::MemoryRecall
+                | SlashCommand::MemoryRemember
+                | SlashCommand::MemoryLessons
+                | SlashCommand::MemoryActions
+                | SlashCommand::MemoryMissions
+                | SlashCommand::MemoryBranchOverlays
+                | SlashCommand::MemoryGuardrails
+                | SlashCommand::MemoryDecisions
+                | SlashCommand::MemoryDossiers
+                | SlashCommand::MemoryHandoffs
+                | SlashCommand::MemoryHandoffGenerate
         )
     }
 
@@ -198,7 +235,20 @@ impl SlashCommand {
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
-            | SlashCommand::MemoryUpdate => false,
+            | SlashCommand::MemoryUpdate
+            | SlashCommand::MemoryRecall
+            | SlashCommand::MemoryRemember
+            | SlashCommand::MemoryLessons
+            | SlashCommand::MemoryActions
+            | SlashCommand::MemoryMissions
+            | SlashCommand::MemoryBranchOverlays
+            | SlashCommand::MemoryGuardrails
+            | SlashCommand::MemoryDecisions
+            | SlashCommand::MemoryDossiers
+            | SlashCommand::MemoryRoutineCandidates
+            | SlashCommand::MemoryHandoffs
+            | SlashCommand::MemoryHandoffGenerate
+            | SlashCommand::MemoryNext => false,
             SlashCommand::Diff
             | SlashCommand::Copy
             | SlashCommand::Raw

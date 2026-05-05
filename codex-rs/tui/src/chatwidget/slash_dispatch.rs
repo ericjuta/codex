@@ -34,6 +34,7 @@ const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the ma
 const GOAL_USAGE: &str = "Usage: /goal <objective>";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
+const MEMORY_REMEMBER_USAGE: &str = "Usage: /memory-remember <content>";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -398,10 +399,123 @@ impl ChatWidget {
                 self.clean_background_terminals();
             }
             SlashCommand::MemoryDrop => {
-                self.submit_op(Op::DropMemories);
+                self.submit_memory_op(
+                    "Memory Drop",
+                    "Dropping stored memories for this workspace.",
+                    Op::DropMemories,
+                );
             }
             SlashCommand::MemoryUpdate => {
-                self.submit_op(Op::UpdateMemories);
+                self.submit_memory_op(
+                    "Memory Update",
+                    "Requesting a memory refresh.",
+                    Op::UpdateMemories,
+                );
+            }
+            SlashCommand::MemoryRecall => {
+                if self.thread_id.is_none() {
+                    self.add_info_message(
+                        "Start a new chat or resume an existing thread before using /memory-recall."
+                            .to_string(),
+                        /*hint*/ None,
+                    );
+                    return;
+                }
+                self.submit_memory_op(
+                    "Memory Recall",
+                    "Recalling memory context for the current thread.",
+                    Op::RecallMemories { query: None },
+                );
+            }
+            SlashCommand::MemoryRemember => {
+                self.add_info_message(MEMORY_REMEMBER_USAGE.to_string(), /*hint*/ None);
+            }
+            SlashCommand::MemoryMissions => {
+                self.submit_memory_op(
+                    "Memory Missions",
+                    "Reviewing missions for this workspace.",
+                    Op::ReviewMissions {
+                        mission_id: None,
+                        status: None,
+                    },
+                );
+            }
+            SlashCommand::MemoryBranchOverlays => {
+                self.submit_memory_op(
+                    "Memory Branch Overlays",
+                    "Reviewing branch overlays for this workspace.",
+                    Op::ReviewBranchOverlays { branch: None },
+                );
+            }
+            SlashCommand::MemoryDecisions => {
+                self.submit_memory_op(
+                    "Memory Decisions",
+                    "Reviewing decision memory for this workspace.",
+                    Op::ReviewDecisions { query: None },
+                );
+            }
+            SlashCommand::MemoryRoutineCandidates => {
+                self.submit_memory_op(
+                    "Memory Routine Candidates",
+                    "Reviewing routine compiler proposals.",
+                    Op::ReviewRoutineCandidates,
+                );
+            }
+            SlashCommand::MemoryHandoffs => {
+                self.submit_memory_op(
+                    "Memory Handoffs",
+                    "Reviewing handoff packets for this workspace.",
+                    Op::ReviewHandoffs {
+                        handoff_packet_id: None,
+                        scope_type: None,
+                        scope_id: None,
+                    },
+                );
+            }
+            SlashCommand::MemoryHandoffGenerate => {
+                self.submit_memory_op(
+                    "Memory Handoff Generate",
+                    "Generating a fresh handoff packet.",
+                    Op::GenerateHandoff {
+                        scope_type: None,
+                        scope_id: None,
+                    },
+                );
+            }
+            SlashCommand::MemoryNext => {
+                self.submit_memory_op(
+                    "Memory Next",
+                    "Reviewing the next suggested action.",
+                    Op::ReviewNext,
+                );
+            }
+            SlashCommand::MemoryLessons => {
+                self.submit_memory_op(
+                    "Memory Lessons",
+                    "Reviewing lesson memories.",
+                    Op::ReviewLessons { query: None },
+                );
+            }
+            SlashCommand::MemoryActions => {
+                self.submit_memory_op(
+                    "Memory Actions",
+                    "Reviewing action memories.",
+                    Op::ListActions { status: None },
+                );
+            }
+            SlashCommand::MemoryGuardrails => {
+                self.submit_memory_op(
+                    "Memory Guardrails",
+                    "Reviewing guardrail memories.",
+                    Op::ReviewGuardrails { query: None },
+                );
+            }
+            SlashCommand::MemoryDossiers => {
+                self.submit_memory_op(
+                    "Memory Dossiers",
+                    "Reviewing dossier memories.",
+                    Op::ReviewDossiers { file_path: None },
+                );
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output(McpServerStatusDetail::ToolsAndAuthOnly);
@@ -457,6 +571,29 @@ impl ChatWidget {
                 );
             }
         }
+    }
+
+    fn submit_memory_op(&mut self, title: &str, detail: &str, op: Op) {
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(history_cell::new_info_event(
+            format!("{title} Pending"),
+            Some(detail.to_string()),
+        )));
+        self.bump_active_cell_revision();
+        self.submit_op(op);
+    }
+
+    fn memory_scope_args(&self, args: &str) -> (Option<String>, Option<String>) {
+        let mut parts = args.split_whitespace();
+        let Some(scope_type) = parts.next() else {
+            return (None, None);
+        };
+        let scope_id = if scope_type == "session" {
+            self.thread_id.map(|thread_id| thread_id.to_string())
+        } else {
+            parts.next().map(ToString::to_string)
+        };
+        (Some(scope_type.to_string()), scope_id)
     }
 
     /// Run an inline slash command.
@@ -601,6 +738,119 @@ impl ChatWidget {
                 "verbose" => self.add_mcp_output(McpServerStatusDetail::Full),
                 _ => self.add_error_message("Usage: /mcp [verbose]".to_string()),
             },
+            SlashCommand::MemoryRecall => {
+                if self.thread_id.is_none() {
+                    self.add_info_message(
+                        "Start a new chat or resume an existing thread before using /memory-recall."
+                            .to_string(),
+                        /*hint*/ None,
+                    );
+                    return;
+                }
+                self.submit_memory_op(
+                    "Memory Recall",
+                    trimmed,
+                    Op::RecallMemories {
+                        query: Some(trimmed.to_string()),
+                    },
+                );
+            }
+            SlashCommand::MemoryRemember => {
+                self.submit_memory_op(
+                    "Memory Remember",
+                    "Saving durable memory.",
+                    Op::RememberMemories {
+                        content: trimmed.to_string(),
+                    },
+                );
+            }
+            SlashCommand::MemoryLessons => {
+                self.submit_memory_op(
+                    "Memory Lessons",
+                    trimmed,
+                    Op::ReviewLessons {
+                        query: Some(trimmed.to_string()),
+                    },
+                );
+            }
+            SlashCommand::MemoryActions => {
+                self.submit_memory_op(
+                    "Memory Actions",
+                    trimmed,
+                    Op::ListActions {
+                        status: Some(trimmed.to_string()),
+                    },
+                );
+            }
+            SlashCommand::MemoryMissions => {
+                self.submit_memory_op(
+                    "Memory Missions",
+                    trimmed,
+                    Op::ReviewMissions {
+                        mission_id: None,
+                        status: Some(trimmed.to_string()),
+                    },
+                );
+            }
+            SlashCommand::MemoryBranchOverlays => {
+                self.submit_memory_op(
+                    "Memory Branch Overlays",
+                    trimmed,
+                    Op::ReviewBranchOverlays {
+                        branch: Some(trimmed.to_string()),
+                    },
+                );
+            }
+            SlashCommand::MemoryGuardrails => {
+                self.submit_memory_op(
+                    "Memory Guardrails",
+                    trimmed,
+                    Op::ReviewGuardrails {
+                        query: Some(trimmed.to_string()),
+                    },
+                );
+            }
+            SlashCommand::MemoryDecisions => {
+                self.submit_memory_op(
+                    "Memory Decisions",
+                    trimmed,
+                    Op::ReviewDecisions {
+                        query: Some(trimmed.to_string()),
+                    },
+                );
+            }
+            SlashCommand::MemoryDossiers => {
+                self.submit_memory_op(
+                    "Memory Dossiers",
+                    trimmed,
+                    Op::ReviewDossiers {
+                        file_path: Some(trimmed.to_string()),
+                    },
+                );
+            }
+            SlashCommand::MemoryHandoffs => {
+                let (scope_type, scope_id) = self.memory_scope_args(trimmed);
+                self.submit_memory_op(
+                    "Memory Handoffs",
+                    trimmed,
+                    Op::ReviewHandoffs {
+                        handoff_packet_id: None,
+                        scope_type,
+                        scope_id,
+                    },
+                );
+            }
+            SlashCommand::MemoryHandoffGenerate => {
+                let (scope_type, scope_id) = self.memory_scope_args(trimmed);
+                self.submit_memory_op(
+                    "Memory Handoff Generate",
+                    trimmed,
+                    Op::GenerateHandoff {
+                        scope_type,
+                        scope_id,
+                    },
+                );
+            }
             SlashCommand::Keymap => match trimmed.to_ascii_lowercase().as_str() {
                 "" => self.open_keymap_picker(),
                 "debug" => {
@@ -903,6 +1153,19 @@ impl ChatWidget {
             | SlashCommand::Stop
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate
+            | SlashCommand::MemoryRecall
+            | SlashCommand::MemoryRemember
+            | SlashCommand::MemoryLessons
+            | SlashCommand::MemoryActions
+            | SlashCommand::MemoryMissions
+            | SlashCommand::MemoryBranchOverlays
+            | SlashCommand::MemoryGuardrails
+            | SlashCommand::MemoryDecisions
+            | SlashCommand::MemoryDossiers
+            | SlashCommand::MemoryRoutineCandidates
+            | SlashCommand::MemoryHandoffs
+            | SlashCommand::MemoryHandoffGenerate
+            | SlashCommand::MemoryNext
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Plugins
