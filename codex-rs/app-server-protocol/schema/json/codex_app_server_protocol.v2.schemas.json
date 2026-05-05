@@ -6419,16 +6419,9 @@
         "preToolUse",
         "permissionRequest",
         "postToolUse",
-        "postToolUseFailure",
-        "preCompact",
         "sessionStart",
-        "subagentStart",
-        "subagentStop",
-        "notification",
-        "taskCompleted",
         "userPromptSubmit",
-        "stop",
-        "sessionEnd"
+        "stop"
       ],
       "type": "string"
     },
