@@ -3011,6 +3011,9 @@ impl ChatWidget {
         self.adaptive_chunking.reset();
         self.stream_controller = None;
         self.plan_stream_controller = None;
+        if self.active_hook_cell.take().is_some() {
+            self.bump_active_cell_revision();
+        }
         self.pending_status_indicator_restore = false;
         self.request_status_line_branch_refresh();
         self.request_status_line_git_summary_refresh();
@@ -5100,6 +5103,7 @@ impl ChatWidget {
                 } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c')
             )
             && !key_hint::ctrl(KeyCode::Char('r')).is_press(key_event)
+            && !key_hint::ctrl(KeyCode::Char('u')).is_press(key_event)
         {
             self.bottom_pane.handle_key_event(key_event);
             if self.bottom_pane.no_modal_or_popup_active() {
@@ -6719,6 +6723,7 @@ impl ChatWidget {
         self.last_rendered_user_message_display = Some(display.clone());
         if !display.message.trim().is_empty()
             || !display.text_elements.is_empty()
+            || !display.local_images.is_empty()
             || !display.remote_image_urls.is_empty()
         {
             self.record_visible_user_turn_for_copy();

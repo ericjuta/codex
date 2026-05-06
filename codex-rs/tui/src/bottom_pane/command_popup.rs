@@ -309,7 +309,28 @@ mod tests {
                 CommandItem::Builtin(cmd) => cmd.command(),
             })
             .collect();
-        assert_eq!(cmds, vec!["model", "memories", "mention", "mcp"]);
+        assert_eq!(
+            cmds,
+            vec![
+                "model",
+                "memories",
+                "mention",
+                "mcp",
+                "memory-recall",
+                "memory-remember",
+                "memory-lessons",
+                "memory-actions",
+                "memory-missions",
+                "memory-branch-overlays",
+                "memory-guardrails",
+                "memory-decisions",
+                "memory-dossiers",
+                "memory-routine-candidates",
+                "memory-handoffs",
+                "memory-handoff-generate",
+                "memory-next",
+            ]
+        );
     }
 
     #[test]

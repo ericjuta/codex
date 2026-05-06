@@ -900,11 +900,16 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn fetch_ide_context_uses_unregistered_request_route() {
+        use std::os::unix::fs::PermissionsExt;
         use std::os::unix::net::UnixListener;
         use std::thread;
 
         let tempdir = tempfile::tempdir().expect("tempdir");
-        let socket_path = tempdir.path().join("codex-ipc.sock");
+        let socket_dir = tempdir.path().join("socket-dir");
+        std::fs::create_dir(&socket_dir).expect("create socket dir");
+        std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))
+            .expect("set socket dir permissions");
+        let socket_path = socket_dir.join("codex-ipc.sock");
         let listener = UnixListener::bind(&socket_path).expect("bind socket");
 
         let server = thread::spawn(move || {

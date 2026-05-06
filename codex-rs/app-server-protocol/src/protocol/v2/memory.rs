@@ -212,9 +212,7 @@ impl ThreadMemoryOperationParams {
                 scope_type: scope_type.clone(),
                 scope_id: scope_id.clone(),
             }),
-            CoreOp::ReviewFrontier { limit } => Some(Self::Frontier {
-                limit: *limit,
-            }),
+            CoreOp::ReviewFrontier { limit } => Some(Self::Frontier { limit: *limit }),
             CoreOp::ReviewNext => Some(Self::Next),
             _ => None,
         }
@@ -239,10 +237,9 @@ impl ThreadMemoryOperationParams {
             Self::UpdateAction { action_id, status } => {
                 Some(CoreOp::UpdateAction { action_id, status })
             }
-            Self::Missions { mission_id, status } => Some(CoreOp::ReviewMissions {
-                mission_id,
-                status,
-            }),
+            Self::Missions { mission_id, status } => {
+                Some(CoreOp::ReviewMissions { mission_id, status })
+            }
             Self::Guardrails { query } => Some(CoreOp::ReviewGuardrails { query }),
             Self::Decisions { query } => Some(CoreOp::ReviewDecisions { query }),
             Self::Dossiers { file_path } => Some(CoreOp::ReviewDossiers { file_path }),
