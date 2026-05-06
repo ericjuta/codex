@@ -119,6 +119,22 @@ fn fallback_transcript_cell(item: &ThreadItem) -> Option<PlainHistoryCell> {
                 .into()
             })
             .collect::<Vec<_>>(),
+        ThreadItem::MemoryOperation {
+            summary, detail, ..
+        } => {
+            let mut line = if summary.trim().is_empty() {
+                "memory operation".to_string()
+            } else {
+                format!("memory: {}", summary.trim())
+            };
+            if let Some(detail) = detail.as_deref()
+                && !detail.trim().is_empty()
+            {
+                line.push_str(" · ");
+                line.push_str(detail.trim());
+            }
+            vec![line.dim().into()]
+        }
         ThreadItem::CommandExecution {
             command,
             status,
