@@ -205,7 +205,10 @@ fn parse_completed(
                 } else if let Some(parsed) =
                     output_parser::parse_permission_request(&run_result.stdout)
                 {
-                    if let Some(system_message) = parsed.universal.system_message {
+                    let suppress_output = parsed.universal.suppress_output;
+                    if let Some(system_message) = parsed.universal.system_message
+                        && !suppress_output
+                    {
                         entries.push(HookOutputEntry {
                             kind: HookOutputEntryKind::Warning,
                             text: system_message,
@@ -224,10 +227,12 @@ fn parse_completed(
                             }
                             output_parser::PermissionRequestDecision::Deny { message } => {
                                 status = HookRunStatus::Blocked;
-                                entries.push(HookOutputEntry {
-                                    kind: HookOutputEntryKind::Feedback,
-                                    text: message.clone(),
-                                });
+                                if !suppress_output {
+                                    entries.push(HookOutputEntry {
+                                        kind: HookOutputEntryKind::Feedback,
+                                        text: message.clone(),
+                                    });
+                                }
                                 decision = Some(PermissionRequestDecision::Deny { message });
                             }
                         }

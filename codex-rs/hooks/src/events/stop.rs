@@ -147,18 +147,22 @@ fn parse_completed(
                 let trimmed_stdout = run_result.stdout.trim();
                 if trimmed_stdout.is_empty() {
                 } else if let Some(parsed) = output_parser::parse_stop(&run_result.stdout) {
-                    if let Some(system_message) = parsed.universal.system_message {
+                    let suppress_output = parsed.universal.suppress_output;
+                    if let Some(system_message) = parsed.universal.system_message
+                        && !suppress_output
+                    {
                         entries.push(HookOutputEntry {
                             kind: HookOutputEntryKind::Warning,
                             text: system_message,
                         });
                     }
-                    let _ = parsed.universal.suppress_output;
                     if !parsed.universal.continue_processing {
                         status = HookRunStatus::Stopped;
                         should_stop = true;
                         stop_reason = parsed.universal.stop_reason.clone();
-                        if let Some(stop_reason_text) = parsed.universal.stop_reason {
+                        if let Some(stop_reason_text) = parsed.universal.stop_reason
+                            && !suppress_output
+                        {
                             entries.push(HookOutputEntry {
                                 kind: HookOutputEntryKind::Stop,
                                 text: stop_reason_text,
@@ -178,10 +182,12 @@ fn parse_completed(
                             should_block = true;
                             block_reason = Some(reason.clone());
                             continuation_prompt = Some(reason.clone());
-                            entries.push(HookOutputEntry {
-                                kind: HookOutputEntryKind::Feedback,
-                                text: reason,
-                            });
+                            if !suppress_output {
+                                entries.push(HookOutputEntry {
+                                    kind: HookOutputEntryKind::Feedback,
+                                    text: reason,
+                                });
+                            }
                         } else {
                             status = HookRunStatus::Failed;
                             entries.push(HookOutputEntry {
