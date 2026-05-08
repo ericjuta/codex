@@ -45,6 +45,66 @@ Not implemented yet:
 - Permission rewrite or interrupt semantics.
 - Additional Claude event names outside the six supported lifecycle events.
 
+## Superset Status
+
+Codex does not currently implement a hook superset. The current implementation is
+a stricter command-hook parity core with Codex-specific trust, listing, and
+operator-safety behavior.
+
+Current Codex advantages over the minimum Claude-compatible command-hook shape:
+
+- Unmanaged hooks are hash-trust gated before execution.
+- Managed, plugin, session, project, and user hook sources are surfaced through
+  the same listing model.
+- Unsupported async, prompt, and agent handlers are visible in `hooks/list`
+  instead of silently disappearing.
+- `suppressOutput` can hide hook-authored UI entries while preserving decisions
+  and model-visible context.
+- Matching command hooks execute sequentially for deterministic side effects.
+- Network approval caching is scoped to one active tool call, so repeated host
+  checks do not repeatedly prompt inside a single call.
+
+Current Claude surface that Codex does not yet cover:
+
+- Handler types: HTTP hooks, MCP tool hooks, runnable prompt hooks, runnable
+  agent hooks, and async or async-rewake command hooks.
+- Handler filters and lifecycle controls: per-handler `if`, `once`, custom
+  shells, HTTP headers and allowed environment interpolation, and MCP tool
+  handler routing.
+- Event coverage beyond the six supported command events, including setup,
+  prompt expansion, permission-denied, post-tool failure, post-tool batch,
+  notification, subagent start/stop, task created/completed, stop failure,
+  teammate idle, instructions loaded, config change, cwd/file changes, worktree
+  create/remove, compaction, session end, and elicitation events.
+- Mutation and rewrite semantics for tool input, permission updates, MCP/tool
+  output, directory watch paths, worktree paths, and elicitation responses.
+- Async lifecycle semantics such as background completion, cancellation,
+  transcript visibility, and rewake-on-failure.
+
+Use the following naming until the gaps are closed:
+
+- `command-hook parity core`: accurate for the current implementation.
+- `Claude hook parity`: only after runnable handler types, mutation semantics,
+  and the important lifecycle events are implemented.
+- `hook superset`: only after Codex implements the Claude parity surface and adds
+  additional Codex-only capabilities that are runnable, tested, and documented.
+
+Superset work should follow this order:
+
+1. Prove operator observability for the current six command events.
+2. Add durable hook ids before hook reordering or broad trust-state migration.
+3. Implement mutation semantics for `updatedInput`, `updatedPermissions`, and
+   `updatedMCPToolOutput`.
+4. Implement async command hooks with explicit cancellation, ordering, transcript,
+   and rewake semantics.
+5. Add high-value lifecycle events that map to Codex runtime surfaces:
+   `Notification`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`,
+   `SessionEnd`, `PostToolUseFailure`, and `PostToolBatch`.
+6. Add additional handler transports and runtimes: HTTP, MCP tool, prompt, and
+   agent hooks.
+7. Only then add Codex-specific events or controls that would make the system a
+   true superset.
+
 ## Non-Goals
 
 - Do not add new event names before the six supported lifecycle events are fully
