@@ -262,7 +262,48 @@ A future durable ID should be added before hooks are reordered automatically.
    - Add regression tests for JSON-vs-TOML equivalent trust hashes.
    - Add tests for invalid JSON stdout for every event.
 
-5. Deferred parity
+5. Operator validation
+
+   Before enabling more Claude parity surface, dogfood the supported command-hook
+   surface in a real Codex session with a small `~/.codex/hooks.json` smoke
+   pack:
+
+   - `SessionStart`: inject quiet model context.
+   - `UserPromptSubmit`: inject quiet model context with `suppressOutput`.
+   - `PreToolUse`: block one obvious command.
+   - `PermissionRequest`: allow one command and deny another.
+   - `PostToolUse`: add model-visible context without visible UI noise.
+   - `Stop`: block stop once with a continuation prompt.
+
+   The smoke run should prove the operator-facing behavior, not just parser
+   behavior:
+
+   - Matching hooks execute in configured order.
+   - `suppressOutput` hides hook-authored visible entries.
+   - Suppressed additional context still reaches the model.
+   - Blocked commands and denied permission requests render understandable
+     feedback.
+   - A single tool call does not repeatedly prompt for an already approved
+     network host.
+   - `hooks/list` shows unsupported async, prompt, and agent handlers as
+     unavailable with enough source/trust metadata to explain why they did not
+     run.
+
+   Treat unclear operator feedback as a product bug. The important questions for
+   the first supported command-hook release are:
+
+   - Why did or did not this hook run?
+   - Which source file and config layer did it come from?
+   - Is it enabled and trusted?
+   - Was output suppressed, or did the hook produce no output?
+   - Did the model receive hook-provided context?
+
+   Add one end-to-end `hooks/list` test that covers unsupported async, prompt,
+   and agent handler metadata. Unit tests already cover the discovery path, but
+   app-server or integration coverage is needed to protect the operator-facing
+   listing contract.
+
+6. Deferred parity
 
    - Design `async` hook handlers before enabling them. Required decisions:
      lifecycle ownership, cancellation, transcript visibility, ordering, and
