@@ -233,6 +233,33 @@ spilled by the runtime before being injected into model-visible context.
 warnings, feedback, stop text, and context entries. It does not suppress hook
 errors, and it does not discard model-visible context or hook decisions.
 
+## Operator Smoke Check
+
+The repo includes a focused smoke check for the currently runnable command-hook
+surface:
+
+```shell
+cd codex-rs
+./scripts/hooks-command-smoke.sh
+```
+
+The smoke check builds a temporary Codex home with a generated `hooks.json`,
+trusts the discovered unmanaged hooks in that temporary config, and drives a
+real test Codex session through all six supported command events.
+
+It proves:
+
+- `SessionStart` injects quiet model-visible context.
+- `UserPromptSubmit` injects quiet model-visible context with `suppressOutput`.
+- `PreToolUse` blocks a command before it runs.
+- `PermissionRequest` allows one command and denies another.
+- `PostToolUse` adds model-visible context while hiding hook-authored UI text.
+- `Stop` blocks once with a continuation prompt.
+- Matching hooks run in configured order.
+- No-output successes are quiet but still emit hook lifecycle events.
+- Suppressed additional context still reaches the model request.
+- Blocked and denied commands return operator-readable feedback.
+
 ## Runtime Integration Points
 
 Implementation ownership:
