@@ -231,6 +231,7 @@ struct ActiveNetworkApprovalCall {
 struct NetworkApprovalCallState {
     active_calls: IndexMap<String, Arc<ActiveNetworkApprovalCall>>,
     call_outcomes: HashMap<String, NetworkApprovalOutcome>,
+    approved_hosts_by_call: HashSet<(String, HostApprovalKey)>,
 }
 
 pub(crate) struct NetworkApprovalService {
@@ -349,6 +350,9 @@ impl NetworkApprovalService {
     async fn remove_call(&self, registration_id: &str) -> Option<NetworkApprovalOutcome> {
         let mut calls = self.calls.lock().await;
         calls.active_calls.shift_remove(registration_id);
+        calls
+            .approved_hosts_by_call
+            .retain(|(call_id, _)| call_id != registration_id);
         calls.call_outcomes.remove(registration_id)
     }
 
@@ -387,6 +391,26 @@ impl NetworkApprovalService {
         format!("network#{}#{}#{}", key.protocol, key.host, key.port)
     }
 
+    async fn active_call_has_host_approval(
+        &self,
+        registration_id: &str,
+        key: &HostApprovalKey,
+    ) -> bool {
+        let calls = self.calls.lock().await;
+        calls
+            .approved_hosts_by_call
+            .contains(&(registration_id.to_string(), key.clone()))
+    }
+
+    async fn approve_host_for_active_call(&self, registration_id: &str, key: HostApprovalKey) {
+        let mut calls = self.calls.lock().await;
+        if calls.active_calls.contains_key(registration_id) {
+            calls
+                .approved_hosts_by_call
+                .insert((registration_id.to_string(), key));
+        }
+    }
+
     pub(crate) async fn handle_inline_policy_request(
         &self,
         session: Arc<Session>,
@@ -414,6 +438,15 @@ impl NetworkApprovalService {
             if approved_hosts.contains(&key) {
                 return NetworkDecision::Allow;
             }
+        }
+
+        let owner_call = self.resolve_single_active_call().await;
+        if let Some(owner_call) = owner_call.as_ref()
+            && self
+                .active_call_has_host_approval(&owner_call.registration_id, &key)
+                .await
+        {
+            return NetworkDecision::Allow;
         }
 
         let (pending, is_owner) = self.get_or_create_pending_approval(key.clone()).await;
@@ -454,7 +487,6 @@ impl NetworkApprovalService {
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         }
 
-        let owner_call = self.resolve_single_active_call().await;
         let network_approval_context = NetworkApprovalContext {
             host: request.host.clone(),
             protocol,
@@ -474,6 +506,10 @@ impl NetworkApprovalService {
         {
             match permission_request_decision {
                 PermissionRequestDecision::Allow => {
+                    if let Some(owner_call) = owner_call.as_ref() {
+                        self.approve_host_for_active_call(&owner_call.registration_id, key.clone())
+                            .await;
+                    }
                     pending
                         .set_decision(PendingApprovalDecision::AllowOnce)
                         .await;
@@ -651,6 +687,13 @@ impl NetworkApprovalService {
             }
             let mut approved_hosts = self.session_approved_hosts.lock().await;
             approved_hosts.insert(key.clone());
+        }
+
+        if matches!(resolved, PendingApprovalDecision::AllowOnce)
+            && let Some(owner_call) = owner_call.as_ref()
+        {
+            self.approve_host_for_active_call(&owner_call.registration_id, key.clone())
+                .await;
         }
 
         if cache_session_deny {
