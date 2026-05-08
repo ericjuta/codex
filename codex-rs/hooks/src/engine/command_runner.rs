@@ -100,6 +100,68 @@ pub(crate) async fn run_command(
     }
 }
 
+pub(crate) async fn launch_async_command(
+    shell: &CommandShell,
+    handler: &ConfiguredHandler,
+    input_json: &str,
+    cwd: &Path,
+) -> CommandRunResult {
+    let started_at = chrono::Utc::now().timestamp();
+    let started = Instant::now();
+
+    let mut command = build_command(shell, handler);
+    command
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(false);
+
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            return CommandRunResult {
+                started_at,
+                completed_at: chrono::Utc::now().timestamp(),
+                duration_ms: started.elapsed().as_millis().try_into().unwrap_or(i64::MAX),
+                exit_code: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                error: Some(err.to_string()),
+            };
+        }
+    };
+
+    if let Some(mut stdin) = child.stdin.take()
+        && let Err(err) = stdin.write_all(input_json.as_bytes()).await
+    {
+        let _ = child.kill().await;
+        return CommandRunResult {
+            started_at,
+            completed_at: chrono::Utc::now().timestamp(),
+            duration_ms: started.elapsed().as_millis().try_into().unwrap_or(i64::MAX),
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            error: Some(format!("failed to write hook stdin: {err}")),
+        };
+    }
+
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+    });
+
+    CommandRunResult {
+        started_at,
+        completed_at: chrono::Utc::now().timestamp(),
+        duration_ms: started.elapsed().as_millis().try_into().unwrap_or(i64::MAX),
+        exit_code: Some(0),
+        stdout: String::new(),
+        stderr: String::new(),
+        error: None,
+    }
+}
+
 fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
     let mut command = if shell.program.is_empty() {
         default_shell_command()

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
+use std::time::Instant;
 
 use codex_config::AbsolutePathBuf;
 use codex_config::ConfigLayerEntry;
@@ -20,6 +22,7 @@ use codex_config::TomlValue;
 use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::HookExecutionMode;
 use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
@@ -27,6 +30,7 @@ use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
+use tokio::time::sleep;
 
 use super::ClaudeHooksEngine;
 use super::CommandShell;
@@ -256,6 +260,114 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     assert!(!outcome.should_block);
     let log_contents = fs::read_to_string(log_path).expect("read managed hook log");
     assert!(log_contents.contains("\"hook_event_name\": \"PreToolUse\""));
+}
+
+#[tokio::test]
+async fn async_command_hooks_launch_without_waiting_for_exit() {
+    let temp = tempdir().expect("create temp dir");
+    let script_path = temp.path().join("async_hook.py");
+    let marker_path = temp.path().join("async_hook_marker");
+    fs::write(
+        &script_path,
+        format!(
+            r#"import json
+from pathlib import Path
+import sys
+import time
+
+json.load(sys.stdin)
+time.sleep(1)
+Path(r"{marker_path}").write_text("done", encoding="utf-8")
+"#,
+            marker_path = marker_path.display(),
+        ),
+    )
+    .expect("write async hook script");
+
+    let managed_dir =
+        AbsolutePathBuf::try_from(temp.path().join("managed-hooks")).expect("absolute path");
+    fs::create_dir_all(managed_dir.as_path()).expect("create managed hooks dir");
+    let managed_hooks = managed_hooks_for_current_platform(
+        &managed_dir,
+        HookEventsToml {
+            pre_tool_use: vec![MatcherGroup {
+                matcher: Some("^Bash$".to_string()),
+                hooks: vec![HookHandlerConfig::Command {
+                    command: format!("python3 {}", script_path.display()),
+                    command_windows: None,
+                    timeout_sec: Some(10),
+                    r#async: true,
+                    status_message: Some("launching async hook".to_string()),
+                }],
+            }],
+            ..Default::default()
+        },
+    );
+    let config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        ConfigRequirements {
+            managed_hooks: Some(ConstrainedWithSource::new(
+                Constrained::allow_any(managed_hooks.clone()),
+                Some(RequirementSource::CloudRequirements),
+            )),
+            ..ConfigRequirements::default()
+        },
+        ConfigRequirementsToml {
+            hooks: Some(managed_hooks),
+            ..Default::default()
+        },
+    )
+    .expect("config layer stack");
+    let engine = ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        },
+    );
+
+    assert!(engine.warnings().is_empty());
+    assert_eq!(engine.handlers.len(), 1);
+    assert_eq!(engine.handlers[0].execution_mode, HookExecutionMode::Async);
+
+    let request = PreToolUseRequest {
+        session_id: ThreadId::new(),
+        turn_id: "turn-1".to_string(),
+        cwd: cwd(),
+        transcript_path: None,
+        model: "gpt-test".to_string(),
+        permission_mode: "default".to_string(),
+        tool_name: "Bash".to_string(),
+        matcher_aliases: Vec::new(),
+        tool_use_id: "tool-1".to_string(),
+        tool_input: serde_json::json!({ "command": "echo hello" }),
+    };
+    let preview = engine.preview_pre_tool_use(&request);
+    assert_eq!(preview[0].execution_mode, HookExecutionMode::Async);
+
+    let started = Instant::now();
+    let outcome = engine.run_pre_tool_use(request).await;
+    assert!(
+        started.elapsed() < Duration::from_millis(800),
+        "async hook should launch without waiting for the child to exit"
+    );
+    assert!(!outcome.should_block);
+    assert_eq!(
+        outcome.hook_events[0].run.execution_mode,
+        HookExecutionMode::Async
+    );
+    assert!(!marker_path.exists());
+
+    for _ in 0..30 {
+        if marker_path.exists() {
+            return;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    panic!("async hook child did not finish");
 }
 
 #[tokio::test]

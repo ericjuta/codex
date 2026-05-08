@@ -14,8 +14,8 @@ hooks while preserving Codex-specific safety and app-server surfaces.
   through app-server notifications and transcript history.
 - Support review, trust, enablement, diagnostics, plugin hooks, and managed hooks
   through the existing `hooks/list` and `config/batchWrite` flow.
-- Leave `prompt`, `agent`, and `async` hook handlers non-runnable until their
-  runtime semantics are explicitly designed.
+- Leave `prompt` and `agent` hook handlers non-runnable until their runtime
+  semantics are explicitly designed.
 
 ## Current Status
 
@@ -29,16 +29,16 @@ Implemented for the supported command-hook surface:
 - Runnable command hooks for `SessionStart`, `UserPromptSubmit`, `PreToolUse`,
   `PermissionRequest`, `PostToolUse`, and `Stop`.
 - Synchronous execution of matching command hooks in configured order.
+- Fire-and-forget async command handlers for `async = true`.
 - `suppressOutput` support that hides hook-authored visible entries while
   preserving hook decisions and model-visible context.
 - `hooks/list` visibility for runnable hooks, disabled/untrusted hooks, and
-  unsupported async, prompt, and agent handlers.
+  unsupported prompt and agent handlers.
 - Per-active-call network host approval caching so a single tool call does not
   repeatedly request approval for an already allowed host.
 
 Not implemented yet:
 
-- Async command hook execution.
 - Prompt or agent hook execution.
 - Durable non-positional hook ids.
 - Hook-driven tool input/output mutation.
@@ -53,8 +53,8 @@ required row remains incomplete.
 
 | Area | Current Codex support | Superset requirement |
 | --- | --- | --- |
-| Runnable handler types | `command` only | `command`, HTTP, MCP tool, prompt, agent, and async variants |
-| Parsed but non-runnable handler types | `prompt`, `agent`, and `command` with `async: true` are listed but skipped | Every parsed handler type has explicit runtime semantics or a documented permanent non-goal |
+| Runnable handler types | `command` with sync and fire-and-forget async execution | `command`, HTTP, MCP tool, prompt, agent, and richer async variants |
+| Parsed but non-runnable handler types | `prompt` and `agent` are listed but skipped | Every parsed handler type has explicit runtime semantics or a documented permanent non-goal |
 | Supported lifecycle events | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Stop` | Claude lifecycle coverage plus Codex-specific events where useful |
 | Unsupported lifecycle events | Unknown event keys are ignored by the current six-event config model | Setup, prompt expansion, permission denied, tool failure, tool batch, notifications, subagents, tasks, compaction, session end, filesystem/worktree/config/cwd changes, elicitation, and any other current Claude lifecycle events |
 | Tool input mutation | `updatedInput` is rejected as unsupported | Safe audited rewrite contract for command, HTTP, MCP tool, prompt, and agent handlers |
@@ -68,8 +68,8 @@ required row remains incomplete.
 Minimum claim bar:
 
 - `command-hook parity core`: current branch target. Six lifecycle events,
-  trusted runnable command hooks, skipped unsupported handler visibility, and
-  Codex trust/listing behavior.
+  trusted runnable sync and async command hooks, skipped unsupported handler
+  visibility, and Codex trust/listing behavior.
 - `Claude hook parity`: all major Claude handler types, lifecycle events,
   filtering controls, mutation semantics, async semantics, and output contracts
   that Codex chooses to support are implemented and tested.
@@ -87,8 +87,8 @@ Current Codex advantages over the minimum Claude-compatible command-hook shape:
 - Unmanaged hooks are hash-trust gated before execution.
 - Managed, plugin, session, project, and user hook sources are surfaced through
   the same listing model.
-- Unsupported async, prompt, and agent handlers are visible in `hooks/list`
-  instead of silently disappearing.
+- Unsupported prompt and agent handlers are visible in `hooks/list` instead of
+  silently disappearing.
 - `suppressOutput` can hide hook-authored UI entries while preserving decisions
   and model-visible context.
 - Matching command hooks execute sequentially for deterministic side effects.
@@ -98,7 +98,7 @@ Current Codex advantages over the minimum Claude-compatible command-hook shape:
 Current Claude surface that Codex does not yet cover:
 
 - Handler types: HTTP hooks, MCP tool hooks, runnable prompt hooks, runnable
-  agent hooks, and async or async-rewake command hooks.
+  agent hooks, and richer async/rewake command hooks.
 - Handler filters and lifecycle controls: per-handler `if`, `once`, custom
   shells, HTTP headers and allowed environment interpolation, and MCP tool
   handler routing.
@@ -109,8 +109,9 @@ Current Claude surface that Codex does not yet cover:
   create/remove, compaction, session end, and elicitation events.
 - Mutation and rewrite semantics for tool input, permission updates, MCP/tool
   output, directory watch paths, worktree paths, and elicitation responses.
-- Async lifecycle semantics such as background completion, cancellation,
-  transcript visibility, and rewake-on-failure.
+- Async lifecycle semantics beyond fire-and-forget launch, such as background
+  completion reporting, cancellation, transcript visibility, and
+  rewake-on-failure.
 
 Use the following naming until the gaps are closed:
 
@@ -126,8 +127,8 @@ Superset work should follow this order:
 2. Add durable hook ids before hook reordering or broad trust-state migration.
 3. Implement mutation semantics for `updatedInput`, `updatedPermissions`, and
    `updatedMCPToolOutput`.
-4. Implement async command hooks with explicit cancellation, ordering, transcript,
-   and rewake semantics.
+4. Extend async command hooks with explicit cancellation, completion reporting,
+   transcript, and rewake semantics.
 5. Add high-value lifecycle events that map to Codex runtime surfaces:
    `Notification`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`,
    `SessionEnd`, `PostToolUseFailure`, and `PostToolBatch`.
@@ -198,8 +199,11 @@ Supported fields:
 - Matcher group: optional `matcher` string plus `hooks` array.
 - Command handler: `type = "command"`, `command`, optional `timeout`, optional
   `statusMessage`, optional `async`.
-- `async = true` is accepted by config parsing but skipped with a warning until
-  asynchronous lifecycle behavior is designed.
+- `async = true` command hooks are runnable fire-and-forget handlers. Codex
+  launches the command with the same JSON stdin as sync handlers, reports the
+  hook run with `execution_mode: "async"`, and does not wait for stdout, stderr,
+  exit status, or hook-authored decisions. Async command output therefore cannot
+  block, deny, stop, inject context, or rewrite tool state.
 - `type = "prompt"` and `type = "agent"` are accepted by config parsing but
   skipped with warnings until implemented.
   These unsupported handlers remain visible in discovery/listing metadata, but
@@ -389,7 +393,7 @@ A future durable ID should be added before hooks are reordered automatically.
 
    - A single tool call does not repeatedly prompt for an already approved
      network host.
-   - `hooks/list` shows unsupported async, prompt, and agent handlers as
+   - `hooks/list` shows unsupported prompt and agent handlers as
      unavailable with enough source/trust metadata to explain why they did not
      run.
 
@@ -402,8 +406,8 @@ A future durable ID should be added before hooks are reordered automatically.
    - Was output suppressed, or did the hook produce no output?
    - Did the model receive hook-provided context?
 
-   Add one end-to-end `hooks/list` test that covers unsupported async, prompt,
-   and agent handler metadata. Unit tests already cover the discovery path, but
+   Add one end-to-end `hooks/list` test that covers unsupported prompt and
+   agent handler metadata. Unit tests already cover the discovery path, but
    app-server or integration coverage is needed to protect the operator-facing
    listing contract.
 

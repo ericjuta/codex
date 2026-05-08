@@ -9844,6 +9844,16 @@
           "eventName": {
             "$ref": "#/definitions/v2/HookEventName"
           },
+          "executionMode": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/HookExecutionMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "handlerType": {
             "$ref": "#/definitions/v2/HookHandlerType"
           },
