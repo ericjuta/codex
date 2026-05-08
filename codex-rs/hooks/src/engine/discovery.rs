@@ -440,11 +440,35 @@ fn append_matcher_groups(
                     } else {
                         command
                     };
+                    let timeout_sec = timeout_sec.unwrap_or(600).max(1);
+                    let normalized_handler = HookHandlerConfig::Command {
+                        command: command.clone(),
+                        command_windows: None,
+                        timeout_sec: Some(timeout_sec),
+                        r#async,
+                        status_message: status_message.clone(),
+                    };
+                    let current_hash = hook_hash(event_name, matcher, &group, normalized_handler);
+                    let key =
+                        crate::hook_key(&source.key_source, event_name, group_index, handler_index);
                     if r#async {
                         warnings.push(format!(
                             "skipping async hook in {}: async hooks are not supported yet",
                             source.path.display()
                         ));
+                        append_non_runnable_hook_entry(
+                            hook_entries,
+                            display_order,
+                            source,
+                            key,
+                            event_name,
+                            matcher,
+                            HookHandlerType::Command,
+                            Some(command),
+                            timeout_sec,
+                            status_message,
+                            current_hash,
+                        );
                         continue;
                     }
                     if command.trim().is_empty() {
@@ -454,20 +478,9 @@ fn append_matcher_groups(
                         ));
                         continue;
                     }
-                    let timeout_sec = timeout_sec.unwrap_or(600).max(1);
-                    let normalized_handler = HookHandlerConfig::Command {
-                        command: command.clone(),
-                        command_windows: None,
-                        timeout_sec: Some(timeout_sec),
-                        r#async,
-                        status_message: status_message.clone(),
-                    };
-                    let current_hash =
-                        command_hook_hash(event_name, matcher, &group, normalized_handler);
                     let command = source.env.iter().fold(command, |command, (key, value)| {
                         command.replace(&format!("${{{key}}}"), value)
                     });
-                    // TODO(abhinav): replace this positional suffix with a durable hook id.
                     let key =
                         crate::hook_key(&source.key_source, event_name, group_index, handler_index);
                     let state = source.hook_states.get(&key);
@@ -513,17 +526,84 @@ fn append_matcher_groups(
                     }
                     *display_order += 1;
                 }
-                HookHandlerConfig::Prompt {} => warnings.push(format!(
-                    "skipping prompt hook in {}: prompt hooks are not supported yet",
-                    source.path.display()
-                )),
-                HookHandlerConfig::Agent {} => warnings.push(format!(
-                    "skipping agent hook in {}: agent hooks are not supported yet",
-                    source.path.display()
-                )),
+                HookHandlerConfig::Prompt {} => {
+                    warnings.push(format!(
+                        "skipping prompt hook in {}: prompt hooks are not supported yet",
+                        source.path.display()
+                    ));
+                    append_non_runnable_hook_entry(
+                        hook_entries,
+                        display_order,
+                        source,
+                        crate::hook_key(&source.key_source, event_name, group_index, handler_index),
+                        event_name,
+                        matcher,
+                        HookHandlerType::Prompt,
+                        None,
+                        0,
+                        None,
+                        hook_hash(event_name, matcher, &group, HookHandlerConfig::Prompt {}),
+                    );
+                }
+                HookHandlerConfig::Agent {} => {
+                    warnings.push(format!(
+                        "skipping agent hook in {}: agent hooks are not supported yet",
+                        source.path.display()
+                    ));
+                    append_non_runnable_hook_entry(
+                        hook_entries,
+                        display_order,
+                        source,
+                        crate::hook_key(&source.key_source, event_name, group_index, handler_index),
+                        event_name,
+                        matcher,
+                        HookHandlerType::Agent,
+                        None,
+                        0,
+                        None,
+                        hook_hash(event_name, matcher, &group, HookHandlerConfig::Agent {}),
+                    );
+                }
             }
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_non_runnable_hook_entry(
+    hook_entries: &mut Vec<HookListEntry>,
+    display_order: &mut i64,
+    source: &HookHandlerSource<'_>,
+    key: String,
+    event_name: codex_protocol::protocol::HookEventName,
+    matcher: Option<&str>,
+    handler_type: HookHandlerType,
+    command: Option<String>,
+    timeout_sec: u64,
+    status_message: Option<String>,
+    current_hash: String,
+) {
+    let state = source.hook_states.get(&key);
+    let trusted_hash = hook_trusted_hash(source.is_managed, state);
+    let trust_status = hook_trust_status(source.is_managed, &current_hash, trusted_hash);
+    hook_entries.push(HookListEntry {
+        key,
+        event_name,
+        handler_type,
+        matcher: matcher.map(ToOwned::to_owned),
+        command,
+        timeout_sec,
+        status_message,
+        source_path: source.path.clone(),
+        source: source.source,
+        plugin_id: source.plugin_id.clone(),
+        display_order: *display_order,
+        enabled: false,
+        is_managed: source.is_managed,
+        current_hash,
+        trust_status,
+    });
+    *display_order += 1;
 }
 
 /// Hash a normalized, config-derived identity instead of source text so equivalent
@@ -535,7 +615,7 @@ struct NormalizedHookIdentity {
     group: MatcherGroup,
 }
 
-fn command_hook_hash(
+fn hook_hash(
     event_name: codex_protocol::protocol::HookEventName,
     matcher: Option<&str>,
     group: &MatcherGroup,
@@ -617,7 +697,9 @@ mod tests {
     use codex_config::ConfigLayerSource;
     use codex_config::HookEventsToml;
     use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookHandlerType;
     use codex_protocol::protocol::HookSource;
+    use codex_protocol::protocol::HookTrustStatus;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
@@ -866,6 +948,77 @@ mod tests {
         assert_eq!(handlers.len(), 1);
         assert_eq!(handlers[0].event_name, HookEventName::PostToolUse);
         assert_eq!(handlers[0].matcher.as_deref(), Some("Edit|Write"));
+    }
+
+    #[test]
+    fn non_runnable_hooks_remain_listed_but_do_not_run() {
+        let mut handlers = Vec::new();
+        let mut hook_entries = Vec::new();
+        let mut warnings = Vec::new();
+        let mut display_order = 0;
+        let source_path = source_path();
+        let hook_states = std::collections::HashMap::new();
+
+        append_matcher_groups(
+            &mut handlers,
+            &mut hook_entries,
+            &mut warnings,
+            &mut display_order,
+            &hook_handler_source(&source_path, &hook_states),
+            HookEventName::PreToolUse,
+            vec![MatcherGroup {
+                matcher: Some("Bash".to_string()),
+                hooks: vec![
+                    HookHandlerConfig::Command {
+                        command: "echo async".to_string(),
+                        command_windows: None,
+                        timeout_sec: Some(5),
+                        r#async: true,
+                        status_message: Some("async".to_string()),
+                    },
+                    HookHandlerConfig::Prompt {},
+                    HookHandlerConfig::Agent {},
+                ],
+            }],
+        );
+
+        assert!(handlers.is_empty());
+        assert_eq!(hook_entries.len(), 3);
+        assert_eq!(
+            hook_entries
+                .iter()
+                .map(|entry| entry.handler_type)
+                .collect::<Vec<_>>(),
+            vec![
+                HookHandlerType::Command,
+                HookHandlerType::Prompt,
+                HookHandlerType::Agent,
+            ]
+        );
+        assert!(hook_entries.iter().all(|entry| !entry.enabled));
+        assert!(hook_entries.iter().all(|entry| entry.is_managed));
+        assert!(
+            hook_entries
+                .iter()
+                .all(|entry| entry.trust_status == HookTrustStatus::Managed)
+        );
+        assert_eq!(
+            warnings,
+            vec![
+                format!(
+                    "skipping async hook in {}: async hooks are not supported yet",
+                    source_path.display()
+                ),
+                format!(
+                    "skipping prompt hook in {}: prompt hooks are not supported yet",
+                    source_path.display()
+                ),
+                format!(
+                    "skipping agent hook in {}: agent hooks are not supported yet",
+                    source_path.display()
+                ),
+            ]
+        );
     }
 
     #[test]
