@@ -47,17 +47,29 @@ fn command_hook_hash(
     timeout_sec: u64,
     status_message: Option<&str>,
 ) -> String {
+    hook_hash(
+        event_name,
+        matcher,
+        codex_config::HookHandlerConfig::Command {
+            command: command.to_string(),
+            command_windows: None,
+            timeout_sec: Some(timeout_sec),
+            r#async: false,
+            status_message: status_message.map(ToOwned::to_owned),
+        },
+    )
+}
+
+fn hook_hash(
+    event_name: &'static str,
+    matcher: Option<&str>,
+    handler: codex_config::HookHandlerConfig,
+) -> String {
     let identity = NormalizedHookIdentity {
         event_name,
         group: codex_config::MatcherGroup {
             matcher: matcher.map(ToOwned::to_owned),
-            hooks: vec![codex_config::HookHandlerConfig::Command {
-                command: command.to_string(),
-                command_windows: None,
-                timeout_sec: Some(timeout_sec),
-                r#async: false,
-                status_message: status_message.map(ToOwned::to_owned),
-            }],
+            hooks: vec![handler],
         },
     };
     let Ok(value) = codex_config::TomlValue::try_from(identity) else {
@@ -84,6 +96,34 @@ statusMessage = "running listed hook"
     Ok(())
 }
 
+fn write_unsupported_user_hook_config(codex_home: &std::path::Path) -> Result<()> {
+    std::fs::write(
+        codex_home.join("config.toml"),
+        r#"[features]
+hooks = true
+
+[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo async"
+timeout = 5
+async = true
+statusMessage = "async hook"
+
+[[hooks.PreToolUse.hooks]]
+type = "prompt"
+
+[[hooks.PreToolUse.hooks]]
+type = "agent"
+"#,
+    )?;
+    Ok(())
+}
+
 fn write_plugin_hook_config(codex_home: &std::path::Path, hooks_json: &str) -> Result<()> {
     let plugin_root = codex_home.join("plugins/cache/test/demo/local");
     std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
@@ -104,6 +144,125 @@ hooks = true
 enabled = true
 "#,
     )?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn hooks_list_shows_unsupported_hooks_as_non_runnable() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    write_unsupported_user_hook_config(codex_home.path())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_hooks_list_request(HooksListParams {
+            cwds: vec![cwd.path().to_path_buf()],
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let HooksListResponse { data } = to_response(response)?;
+    let config_path = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
+        codex_home.path().join("config.toml"),
+    )?)?;
+
+    assert_eq!(
+        data,
+        vec![HooksListEntry {
+            cwd: cwd.path().to_path_buf(),
+            hooks: vec![
+                HookMetadata {
+                    key: format!("{}:pre_tool_use:0:0", config_path.as_path().display()),
+                    event_name: HookEventName::PreToolUse,
+                    handler_type: HookHandlerType::Command,
+                    matcher: Some("Bash".to_string()),
+                    command: Some("echo async".to_string()),
+                    timeout_sec: 5,
+                    status_message: Some("async hook".to_string()),
+                    source_path: config_path.clone(),
+                    source: HookSource::User,
+                    plugin_id: None,
+                    display_order: 0,
+                    enabled: false,
+                    is_managed: false,
+                    current_hash: hook_hash(
+                        "pre_tool_use",
+                        Some("Bash"),
+                        codex_config::HookHandlerConfig::Command {
+                            command: "echo async".to_string(),
+                            command_windows: None,
+                            timeout_sec: Some(5),
+                            r#async: true,
+                            status_message: Some("async hook".to_string()),
+                        },
+                    ),
+                    trust_status: HookTrustStatus::Untrusted,
+                },
+                HookMetadata {
+                    key: format!("{}:pre_tool_use:0:1", config_path.as_path().display()),
+                    event_name: HookEventName::PreToolUse,
+                    handler_type: HookHandlerType::Prompt,
+                    matcher: Some("Bash".to_string()),
+                    command: None,
+                    timeout_sec: 0,
+                    status_message: None,
+                    source_path: config_path.clone(),
+                    source: HookSource::User,
+                    plugin_id: None,
+                    display_order: 1,
+                    enabled: false,
+                    is_managed: false,
+                    current_hash: hook_hash(
+                        "pre_tool_use",
+                        Some("Bash"),
+                        codex_config::HookHandlerConfig::Prompt {},
+                    ),
+                    trust_status: HookTrustStatus::Untrusted,
+                },
+                HookMetadata {
+                    key: format!("{}:pre_tool_use:0:2", config_path.as_path().display()),
+                    event_name: HookEventName::PreToolUse,
+                    handler_type: HookHandlerType::Agent,
+                    matcher: Some("Bash".to_string()),
+                    command: None,
+                    timeout_sec: 0,
+                    status_message: None,
+                    source_path: config_path.clone(),
+                    source: HookSource::User,
+                    plugin_id: None,
+                    display_order: 2,
+                    enabled: false,
+                    is_managed: false,
+                    current_hash: hook_hash(
+                        "pre_tool_use",
+                        Some("Bash"),
+                        codex_config::HookHandlerConfig::Agent {},
+                    ),
+                    trust_status: HookTrustStatus::Untrusted,
+                },
+            ],
+            warnings: vec![
+                format!(
+                    "skipping async hook in {}: async hooks are not supported yet",
+                    config_path.as_path().display()
+                ),
+                format!(
+                    "skipping prompt hook in {}: prompt hooks are not supported yet",
+                    config_path.as_path().display()
+                ),
+                format!(
+                    "skipping agent hook in {}: agent hooks are not supported yet",
+                    config_path.as_path().display()
+                ),
+            ],
+            errors: Vec::new(),
+        }]
+    );
     Ok(())
 }
 
