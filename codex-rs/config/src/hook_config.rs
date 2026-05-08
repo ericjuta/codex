@@ -126,7 +126,7 @@ pub enum HookHandlerConfig {
     #[serde(rename = "command")]
     Command {
         command: String,
-        #[serde(default, rename = "timeout")]
+        #[serde(default, rename = "timeout", alias = "timeout_sec")]
         timeout_sec: Option<u64>,
         #[serde(default)]
         r#async: bool,
