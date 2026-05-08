@@ -12,16 +12,19 @@ Claude-compatible `hooks.json` files:
 - `hooks.json` and inline TOML hooks load from effective config layers.
 - Trusted or managed command hooks run for `SessionStart`, `UserPromptSubmit`,
   `PreToolUse`, `PermissionRequest`, `PostToolUse`, and `Stop`.
-- Matching command hooks execute synchronously in configured order.
-- `hooks/list` returns runnable hooks plus non-runnable async, prompt, and agent
-  hooks with warnings so clients can explain why they are unavailable.
+- Matching sync command hooks execute synchronously in configured order.
+- `async = true` command hooks launch fire-and-forget with the same JSON stdin,
+  report `execution_mode: "async"`, and cannot block, stop, or inject context.
+- `hooks/list` returns runnable sync/async command hooks plus non-runnable
+  prompt and agent hooks with warnings so clients can explain why they are
+  unavailable.
 - `suppressOutput` hides hook-authored visible entries without dropping hook
   decisions or model-visible context.
 - Unsupported mutation fields fail with explicit hook errors.
 
-Full Claude Code hook parity is not claimed yet. Async execution, prompt hooks,
-agent hooks, durable hook ids, and hook-driven input/output rewrites remain
-deferred work.
+Full Claude Code hook parity is not claimed yet. Prompt hooks, agent hooks,
+durable hook ids, richer async completion/cancellation semantics, and
+hook-driven input/output rewrites remain deferred work.
 
 ## Goals
 
@@ -34,7 +37,7 @@ deferred work.
 ## Non Goals
 
 - No prompt or agent hook execution yet. These handler types may parse, but discovery must skip them with warnings until implemented.
-- No async hook execution yet. `async = true` command hooks must be skipped with warnings.
+- No async completion tracking or cancellation yet. `async = true` command hooks are fire-and-forget and their output is ignored.
 - No hook-driven tool input rewriting yet. Unsupported rewrite fields should fail closed with visible hook errors.
 - No v1 app-server API additions. New UI/API surface belongs in app-server v2.
 

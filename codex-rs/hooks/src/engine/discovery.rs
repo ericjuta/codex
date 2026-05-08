@@ -20,7 +20,6 @@ use codex_plugin::PluginHookSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
-
 use super::ConfiguredHandler;
 use super::HookListEntry;
 use crate::config_rules::hook_states_from_stack;
@@ -29,6 +28,7 @@ use crate::events::common::validate_matcher_pattern;
 use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
+use codex_protocol::protocol::HookExecutionMode;
 
 pub(crate) struct DiscoveryResult {
     pub handlers: Vec<ConfiguredHandler>,
@@ -449,28 +449,6 @@ fn append_matcher_groups(
                         status_message: status_message.clone(),
                     };
                     let current_hash = hook_hash(event_name, matcher, &group, normalized_handler);
-                    let key =
-                        crate::hook_key(&source.key_source, event_name, group_index, handler_index);
-                    if r#async {
-                        warnings.push(format!(
-                            "skipping async hook in {}: async hooks are not supported yet",
-                            source.path.display()
-                        ));
-                        append_non_runnable_hook_entry(
-                            hook_entries,
-                            display_order,
-                            source,
-                            key,
-                            event_name,
-                            matcher,
-                            HookHandlerType::Command,
-                            Some(command),
-                            timeout_sec,
-                            status_message,
-                            current_hash,
-                        );
-                        continue;
-                    }
                     if command.trim().is_empty() {
                         warnings.push(format!(
                             "skipping empty hook command in {}",
@@ -488,10 +466,16 @@ fn append_matcher_groups(
                     let trusted_hash = hook_trusted_hash(source.is_managed, state);
                     let trust_status =
                         hook_trust_status(source.is_managed, &current_hash, trusted_hash);
+                    let execution_mode = if r#async {
+                        HookExecutionMode::Async
+                    } else {
+                        HookExecutionMode::Sync
+                    };
                     hook_entries.push(HookListEntry {
                         key,
                         event_name,
                         handler_type: HookHandlerType::Command,
+                        execution_mode: Some(execution_mode),
                         matcher: matcher.map(ToOwned::to_owned),
                         command: Some(command.clone()),
                         timeout_sec,
@@ -522,6 +506,7 @@ fn append_matcher_groups(
                             source: source.source,
                             display_order: *display_order,
                             env: source.env.clone(),
+                            execution_mode,
                         });
                     }
                     *display_order += 1;
@@ -590,6 +575,7 @@ fn append_non_runnable_hook_entry(
         key,
         event_name,
         handler_type,
+        execution_mode: None,
         matcher: matcher.map(ToOwned::to_owned),
         command,
         timeout_sec,
@@ -697,6 +683,7 @@ mod tests {
     use codex_config::ConfigLayerSource;
     use codex_config::HookEventsToml;
     use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookExecutionMode;
     use codex_protocol::protocol::HookHandlerType;
     use codex_protocol::protocol::HookSource;
     use codex_protocol::protocol::HookTrustStatus;
@@ -798,6 +785,7 @@ mod tests {
                 source: hook_source(),
                 display_order: 0,
                 env: std::collections::HashMap::new(),
+                execution_mode: HookExecutionMode::Sync,
             }]
         );
     }
@@ -833,6 +821,7 @@ mod tests {
                 source: hook_source(),
                 display_order: 0,
                 env: std::collections::HashMap::new(),
+                execution_mode: HookExecutionMode::Sync,
             }]
         );
     }
@@ -951,7 +940,7 @@ mod tests {
     }
 
     #[test]
-    fn non_runnable_hooks_remain_listed_but_do_not_run() {
+    fn async_commands_are_runnable_but_prompt_and_agent_stay_listed_only() {
         let mut handlers = Vec::new();
         let mut hook_entries = Vec::new();
         let mut warnings = Vec::new();
@@ -982,7 +971,8 @@ mod tests {
             }],
         );
 
-        assert!(handlers.is_empty());
+        assert_eq!(handlers.len(), 1);
+        assert_eq!(handlers[0].execution_mode, HookExecutionMode::Async);
         assert_eq!(hook_entries.len(), 3);
         assert_eq!(
             hook_entries
@@ -995,7 +985,8 @@ mod tests {
                 HookHandlerType::Agent,
             ]
         );
-        assert!(hook_entries.iter().all(|entry| !entry.enabled));
+        assert!(hook_entries[0].enabled);
+        assert!(hook_entries[1..].iter().all(|entry| !entry.enabled));
         assert!(hook_entries.iter().all(|entry| entry.is_managed));
         assert!(
             hook_entries
@@ -1005,10 +996,6 @@ mod tests {
         assert_eq!(
             warnings,
             vec![
-                format!(
-                    "skipping async hook in {}: async hooks are not supported yet",
-                    source_path.display()
-                ),
                 format!(
                     "skipping prompt hook in {}: prompt hooks are not supported yet",
                     source_path.display()

@@ -77,7 +77,10 @@ Supported handler:
 - `command`: shell command string.
 - `timeout`: optional seconds, default `600`, minimum `1`.
 - `statusMessage`: optional user-visible running label.
-- `async`: parsed but currently skipped with a warning when true.
+- `async`: optional boolean. When true, Codex launches the command without
+  waiting for it to finish. Async handlers receive the same JSON stdin as sync
+  handlers, but their stdout and stderr are discarded and cannot block, deny,
+  stop, inject context, or rewrite output.
 
 Reserved handler types:
 
@@ -302,8 +305,8 @@ Config and discovery:
 - Parse existing `hooks.json` shape.
 - Parse inline TOML hooks.
 - Merge or warn when both config forms exist in one layer.
-- Skip invalid matcher regexes, empty commands, async handlers, prompt handlers,
-  and agent handlers with explicit warnings.
+- Skip invalid matcher regexes, empty commands, prompt handlers, and agent
+  handlers with explicit warnings.
 - Verify project hooks load only for trusted projects.
 - Verify managed hooks ignore user state.
 - Verify plugin substitutions and plugin hook warnings.

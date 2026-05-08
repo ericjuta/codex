@@ -560,6 +560,7 @@ mod tests {
             source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
             env: std::collections::HashMap::new(),
+            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
         }
     }
 

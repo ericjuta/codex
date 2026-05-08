@@ -33,6 +33,13 @@
       ],
       "type": "string"
     },
+    "HookExecutionMode": {
+      "enum": [
+        "sync",
+        "async"
+      ],
+      "type": "string"
+    },
     "HookHandlerType": {
       "enum": [
         "command",
@@ -61,6 +68,16 @@
         },
         "eventName": {
           "$ref": "#/definitions/HookEventName"
+        },
+        "executionMode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/HookExecutionMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "handlerType": {
           "$ref": "#/definitions/HookHandlerType"
