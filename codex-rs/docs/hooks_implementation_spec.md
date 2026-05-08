@@ -45,6 +45,37 @@ Not implemented yet:
 - Permission rewrite or interrupt semantics.
 - Additional Claude event names outside the six supported lifecycle events.
 
+## Coverage Matrix
+
+This table is the source of truth for current operator language. Do not describe
+the implementation as "all hooks", "full parity", or "superset" while any
+required row remains incomplete.
+
+| Area | Current Codex support | Superset requirement |
+| --- | --- | --- |
+| Runnable handler types | `command` only | `command`, HTTP, MCP tool, prompt, agent, and async variants |
+| Parsed but non-runnable handler types | `prompt`, `agent`, and `command` with `async: true` are listed but skipped | Every parsed handler type has explicit runtime semantics or a documented permanent non-goal |
+| Supported lifecycle events | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Stop` | Claude lifecycle coverage plus Codex-specific events where useful |
+| Unsupported lifecycle events | Unknown event keys are ignored by the current six-event config model | Setup, prompt expansion, permission denied, tool failure, tool batch, notifications, subagents, tasks, compaction, session end, filesystem/worktree/config/cwd changes, elicitation, and any other current Claude lifecycle events |
+| Tool input mutation | `updatedInput` is rejected as unsupported | Safe audited rewrite contract for command, HTTP, MCP tool, prompt, and agent handlers |
+| Permission mutation | `updatedPermissions` and `interrupt` are rejected as unsupported | Safe permission rewrite and interrupt contract |
+| Tool output mutation | `updatedMCPToolOutput` is rejected as unsupported | Safe post-tool output rewrite contract |
+| Handler filtering | Matcher groups only | Matcher groups plus handler-level predicates such as Claude-style `if` / `once` semantics |
+| Hook identity | Positional keys with normalized hash trust | Durable semantic ids that survive reordering |
+| Operator visibility | `hooks/list` exposes runnable, disabled, untrusted, and skipped unsupported handlers | Every hook has a clear runnable/non-runnable reason, source, trust status, and last-run visibility |
+| Trust model | Codex-specific hash trust gate for unmanaged hooks; managed hooks are trusted | Preserve or strengthen this model while adding every new handler/event type |
+
+Minimum claim bar:
+
+- `command-hook parity core`: current branch target. Six lifecycle events,
+  trusted runnable command hooks, skipped unsupported handler visibility, and
+  Codex trust/listing behavior.
+- `Claude hook parity`: all major Claude handler types, lifecycle events,
+  filtering controls, mutation semantics, async semantics, and output contracts
+  that Codex chooses to support are implemented and tested.
+- `hook superset`: Claude hook parity is implemented first, then Codex adds
+  additional runnable, tested, documented capabilities.
+
 ## Superset Status
 
 Codex does not currently implement a hook superset. The current implementation is
