@@ -11,6 +11,7 @@ use codex_protocol::protocol::HookScope;
 use super::CommandShell;
 use super::ConfiguredHandler;
 use super::command_runner::CommandRunResult;
+use super::command_runner::launch_async_command;
 use super::command_runner::run_command;
 use crate::events::common::matches_matcher;
 
@@ -66,7 +67,7 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
         id: handler.run_id(),
         event_name: handler.event_name,
         handler_type: HookHandlerType::Command,
-        execution_mode: HookExecutionMode::Sync,
+        execution_mode: handler.execution_mode,
         scope: scope_for_event(handler.event_name),
         source_path: handler.source_path.clone(),
         source: handler.source,
@@ -90,7 +91,12 @@ pub(crate) async fn execute_handlers<T>(
 ) -> Vec<ParsedHandler<T>> {
     let mut parsed = Vec::with_capacity(handlers.len());
     for handler in handlers {
-        let result = run_command(shell, &handler, &input_json, cwd).await;
+        let result = match handler.execution_mode {
+            HookExecutionMode::Sync => run_command(shell, &handler, &input_json, cwd).await,
+            HookExecutionMode::Async => {
+                launch_async_command(shell, &handler, &input_json, cwd).await
+            }
+        };
         parsed.push(parse(&handler, result, turn_id.clone()));
     }
     parsed
@@ -106,7 +112,7 @@ pub(crate) fn completed_summary(
         id: handler.run_id(),
         event_name: handler.event_name,
         handler_type: HookHandlerType::Command,
-        execution_mode: HookExecutionMode::Sync,
+        execution_mode: handler.execution_mode,
         scope: scope_for_event(handler.event_name),
         source_path: handler.source_path.clone(),
         source: handler.source,
@@ -137,6 +143,7 @@ fn scope_for_event(event_name: HookEventName) -> HookScope {
 mod tests {
     use codex_protocol::protocol::HookCompletedEvent;
     use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookExecutionMode;
     use codex_protocol::protocol::HookRunStatus;
     use codex_protocol::protocol::HookSource;
     use codex_utils_absolute_path::test_support::PathBufExt;
@@ -151,6 +158,8 @@ mod tests {
     use super::select_handlers;
     use super::select_handlers_for_matcher_inputs;
     use crate::engine::CommandShell;
+    use std::time::Duration;
+    use std::time::Instant;
 
     fn make_handler(
         event_name: HookEventName,
@@ -168,6 +177,7 @@ mod tests {
             source: HookSource::User,
             display_order,
             env: std::collections::HashMap::new(),
+            execution_mode: HookExecutionMode::Sync,
         }
     }
 
@@ -222,6 +232,51 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(log_path).expect("read hook order"),
             "firstsecond"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_handlers_launches_async_commands_without_waiting() {
+        let temp = tempdir().expect("create temp dir");
+        let log_path = temp.path().join("async-hook.log");
+        let log = log_path.display();
+        let mut handler = make_handler(
+            HookEventName::Stop,
+            /*matcher*/ None,
+            &format!("sleep 1; printf async >> {log}"),
+            /*display_order*/ 0,
+        );
+        handler.execution_mode = HookExecutionMode::Async;
+
+        let started = Instant::now();
+        let results = execute_handlers(
+            &CommandShell {
+                program: String::new(),
+                args: Vec::new(),
+            },
+            vec![handler],
+            "{}".to_string(),
+            temp.path(),
+            Some("turn-1".to_string()),
+            parsed_unit,
+        )
+        .await;
+
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "async hook launch should not wait for command completion"
+        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].completed.run.execution_mode,
+            HookExecutionMode::Async
+        );
+        assert!(!log_path.exists());
+
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert_eq!(
+            std::fs::read_to_string(log_path).expect("read async hook log"),
+            "async"
         );
     }
 

@@ -27,6 +27,7 @@ use codex_config::ConfigLayerStack;
 use codex_plugin::PluginHookSource;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookExecutionMode;
 use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookSource;
@@ -50,6 +51,7 @@ pub(crate) struct ConfiguredHandler {
     pub source: HookSource,
     pub display_order: i64,
     pub env: HashMap<String, String>,
+    pub execution_mode: HookExecutionMode,
 }
 
 impl ConfiguredHandler {
@@ -81,6 +83,7 @@ pub struct HookListEntry {
     pub key: String,
     pub event_name: HookEventName,
     pub handler_type: HookHandlerType,
+    pub execution_mode: Option<HookExecutionMode>,
     pub matcher: Option<String>,
     pub command: Option<String>,
     pub timeout_sec: u64,
