@@ -1,8 +1,5 @@
 use std::path::Path;
 
-use futures::StreamExt;
-use futures::stream::FuturesUnordered;
-
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookExecutionMode;
@@ -94,25 +91,14 @@ pub(crate) async fn execute_handlers<T>(
     turn_id: Option<String>,
     parse: fn(&ConfiguredHandler, CommandRunResult, Option<String>) -> ParsedHandler<T>,
 ) -> Vec<ParsedHandler<T>> {
-    let mut pending = FuturesUnordered::new();
-    for (configured_order, handler) in handlers.into_iter().enumerate() {
-        let input_json = input_json.clone();
-        let turn_id = turn_id.clone();
-        pending.push(async move {
-            let result = run_command(shell, &handler, &input_json, cwd).await;
-            (configured_order, parse(&handler, result, turn_id))
-        });
+    let mut parsed = Vec::with_capacity(handlers.len());
+    for (completion_order, handler) in handlers.into_iter().enumerate() {
+        let result = run_command(shell, &handler, &input_json, cwd).await;
+        let mut handler_result = parse(&handler, result, turn_id.clone());
+        handler_result.completion_order = completion_order;
+        parsed.push(handler_result);
     }
-
-    let mut completed = Vec::new();
-    let mut completion_order = 0;
-    while let Some((configured_order, mut parsed)) = pending.next().await {
-        parsed.completion_order = completion_order;
-        completion_order += 1;
-        completed.push((configured_order, parsed));
-    }
-    completed.sort_by_key(|(configured_order, _)| *configured_order);
-    completed.into_iter().map(|(_, parsed)| parsed).collect()
+    parsed
 }
 
 pub(crate) fn completed_summary(
@@ -155,14 +141,22 @@ fn scope_for_event(event_name: HookEventName) -> HookScope {
 
 #[cfg(test)]
 mod tests {
+    use codex_protocol::protocol::HookCompletedEvent;
     use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookRunStatus;
     use codex_protocol::protocol::HookSource;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
+    use tempfile::tempdir;
 
+    use super::CommandRunResult;
     use super::ConfiguredHandler;
+    use super::ParsedHandler;
+    use super::completed_summary;
+    use super::execute_handlers;
     use super::select_handlers;
     use super::select_handlers_for_matcher_inputs;
+    use crate::engine::CommandShell;
 
     fn make_handler(
         event_name: HookEventName,
@@ -181,6 +175,61 @@ mod tests {
             display_order,
             env: std::collections::HashMap::new(),
         }
+    }
+
+    fn parsed_unit(
+        handler: &ConfiguredHandler,
+        result: CommandRunResult,
+        turn_id: Option<String>,
+    ) -> ParsedHandler<()> {
+        ParsedHandler {
+            completed: HookCompletedEvent {
+                turn_id,
+                run: completed_summary(handler, &result, HookRunStatus::Completed, Vec::new()),
+            },
+            data: (),
+            completion_order: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_handlers_runs_in_declaration_order() {
+        let temp = tempdir().expect("create temp dir");
+        let log_path = temp.path().join("hook-order.log");
+        let log = log_path.display();
+        let handlers = vec![
+            make_handler(
+                HookEventName::Stop,
+                /*matcher*/ None,
+                &format!("sleep 0.2; printf first >> {log}"),
+                /*display_order*/ 0,
+            ),
+            make_handler(
+                HookEventName::Stop,
+                /*matcher*/ None,
+                &format!("printf second >> {log}"),
+                /*display_order*/ 1,
+            ),
+        ];
+
+        let results = execute_handlers(
+            &CommandShell {
+                program: String::new(),
+                args: Vec::new(),
+            },
+            handlers,
+            "{}".to_string(),
+            temp.path(),
+            Some("turn-1".to_string()),
+            parsed_unit,
+        )
+        .await;
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            std::fs::read_to_string(log_path).expect("read hook order"),
+            "firstsecond"
+        );
     }
 
     #[test]
