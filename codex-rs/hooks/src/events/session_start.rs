@@ -248,27 +248,32 @@ fn parse_completed(
                         panic!("expected start hook event, got {event_name:?}")
                     }
                 } {
-                    if let Some(system_message) = parsed.universal.system_message {
+                    let suppress_output = parsed.universal.suppress_output;
+                    if let Some(system_message) = parsed.universal.system_message
+                        && !suppress_output
+                    {
                         entries.push(HookOutputEntry {
                             kind: HookOutputEntryKind::Warning,
                             text: system_message,
                         });
                     }
                     if let Some(additional_context) = parsed.additional_context {
-                        common::append_additional_context(
+                        common::append_additional_context_with_visibility(
                             &mut entries,
                             &mut additional_contexts_for_model,
                             additional_context,
+                            suppress_output,
                         );
                     }
-                    let _ = parsed.universal.suppress_output;
                     if handler.event_name == HookEventName::SessionStart
                         && !parsed.universal.continue_processing
                     {
                         status = HookRunStatus::Stopped;
                         should_stop = true;
                         stop_reason = parsed.universal.stop_reason.clone();
-                        if let Some(stop_reason_text) = parsed.universal.stop_reason {
+                        if let Some(stop_reason_text) = parsed.universal.stop_reason
+                            && !suppress_output
+                        {
                             entries.push(HookOutputEntry {
                                 kind: HookOutputEntryKind::Stop,
                                 text: stop_reason_text,

@@ -156,7 +156,10 @@ fn parse_completed(
                 } else if let Some(parsed) =
                     output_parser::parse_user_prompt_submit(&run_result.stdout)
                 {
-                    if let Some(system_message) = parsed.universal.system_message {
+                    let suppress_output = parsed.universal.suppress_output;
+                    if let Some(system_message) = parsed.universal.system_message
+                        && !suppress_output
+                    {
                         entries.push(HookOutputEntry {
                             kind: HookOutputEntryKind::Warning,
                             text: system_message,
@@ -165,18 +168,20 @@ fn parse_completed(
                     if parsed.invalid_block_reason.is_none()
                         && let Some(additional_context) = parsed.additional_context
                     {
-                        common::append_additional_context(
+                        common::append_additional_context_with_visibility(
                             &mut entries,
                             &mut additional_contexts_for_model,
                             additional_context,
+                            suppress_output,
                         );
                     }
-                    let _ = parsed.universal.suppress_output;
                     if !parsed.universal.continue_processing {
                         status = HookRunStatus::Stopped;
                         should_stop = true;
                         stop_reason = parsed.universal.stop_reason.clone();
-                        if let Some(stop_reason_text) = parsed.universal.stop_reason {
+                        if let Some(stop_reason_text) = parsed.universal.stop_reason
+                            && !suppress_output
+                        {
                             entries.push(HookOutputEntry {
                                 kind: HookOutputEntryKind::Stop,
                                 text: stop_reason_text,
@@ -192,7 +197,9 @@ fn parse_completed(
                         status = HookRunStatus::Blocked;
                         should_stop = true;
                         stop_reason = parsed.reason.clone();
-                        if let Some(reason) = parsed.reason {
+                        if let Some(reason) = parsed.reason
+                            && !suppress_output
+                        {
                             entries.push(HookOutputEntry {
                                 kind: HookOutputEntryKind::Feedback,
                                 text: reason,

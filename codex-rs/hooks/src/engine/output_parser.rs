@@ -363,8 +363,6 @@ fn unsupported_pre_tool_use_universal(universal: &UniversalOutput) -> Option<Str
         Some("PreToolUse hook returned unsupported continue:false".to_string())
     } else if universal.stop_reason.is_some() {
         Some("PreToolUse hook returned unsupported stopReason".to_string())
-    } else if universal.suppress_output {
-        Some("PreToolUse hook returned unsupported suppressOutput".to_string())
     } else {
         None
     }
@@ -375,19 +373,13 @@ fn unsupported_permission_request_universal(universal: &UniversalOutput) -> Opti
         Some("PermissionRequest hook returned unsupported continue:false".to_string())
     } else if universal.stop_reason.is_some() {
         Some("PermissionRequest hook returned unsupported stopReason".to_string())
-    } else if universal.suppress_output {
-        Some("PermissionRequest hook returned unsupported suppressOutput".to_string())
     } else {
         None
     }
 }
 
-fn unsupported_post_tool_use_universal(universal: &UniversalOutput) -> Option<String> {
-    if universal.suppress_output {
-        Some("PostToolUse hook returned unsupported suppressOutput".to_string())
-    } else {
-        None
-    }
+fn unsupported_post_tool_use_universal(_universal: &UniversalOutput) -> Option<String> {
+    None
 }
 
 fn unsupported_permission_request_hook_specific_output(
