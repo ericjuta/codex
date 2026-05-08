@@ -355,9 +355,16 @@ A future durable ID should be added before hooks are reordered automatically.
 
 5. Operator validation
 
-   Before enabling more Claude parity surface, dogfood the supported command-hook
-   surface in a real Codex session with a small `~/.codex/hooks.json` smoke
-   pack:
+   Before enabling more Claude parity surface, keep dogfooding the supported
+   command-hook surface with the repo-local smoke runner:
+
+   ```shell
+   cd codex-rs
+   ./scripts/hooks-command-smoke.sh
+   ```
+
+   The runner creates a temporary Codex home, writes and trusts a generated
+   `hooks.json`, and drives a real test Codex session through this smoke pack:
 
    - `SessionStart`: inject quiet model context.
    - `UserPromptSubmit`: inject quiet model context with `suppressOutput`.
@@ -366,7 +373,7 @@ A future durable ID should be added before hooks are reordered automatically.
    - `PostToolUse`: add model-visible context without visible UI noise.
    - `Stop`: block stop once with a continuation prompt.
 
-   The smoke run should prove the operator-facing behavior, not just parser
+   The smoke run must prove the operator-facing behavior, not just parser
    behavior:
 
    - Matching hooks execute in configured order.
@@ -374,6 +381,12 @@ A future durable ID should be added before hooks are reordered automatically.
    - Suppressed additional context still reaches the model.
    - Blocked commands and denied permission requests render understandable
      feedback.
+   - Successful hooks with no output stay quiet while still emitting lifecycle
+     events.
+
+   Keep the remaining operator-observability cases covered by focused
+   integration tests:
+
    - A single tool call does not repeatedly prompt for an already approved
      network host.
    - `hooks/list` shows unsupported async, prompt, and agent handlers as
