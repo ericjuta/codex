@@ -1,7 +1,5 @@
 use std::path::Path;
 
-use futures::future::join_all;
-
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookExecutionMode;
@@ -90,18 +88,12 @@ pub(crate) async fn execute_handlers<T>(
     turn_id: Option<String>,
     parse: fn(&ConfiguredHandler, CommandRunResult, Option<String>) -> ParsedHandler<T>,
 ) -> Vec<ParsedHandler<T>> {
-    let results = join_all(
-        handlers
-            .iter()
-            .map(|handler| run_command(shell, handler, &input_json, cwd)),
-    )
-    .await;
-
-    handlers
-        .into_iter()
-        .zip(results)
-        .map(|(handler, result)| parse(&handler, result, turn_id.clone()))
-        .collect()
+    let mut parsed = Vec::with_capacity(handlers.len());
+    for handler in handlers {
+        let result = run_command(shell, &handler, &input_json, cwd).await;
+        parsed.push(parse(&handler, result, turn_id.clone()));
+    }
+    parsed
 }
 
 pub(crate) fn completed_summary(
@@ -143,14 +135,22 @@ fn scope_for_event(event_name: HookEventName) -> HookScope {
 
 #[cfg(test)]
 mod tests {
+    use codex_protocol::protocol::HookCompletedEvent;
     use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookRunStatus;
     use codex_protocol::protocol::HookSource;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
+    use tempfile::tempdir;
 
+    use super::CommandRunResult;
     use super::ConfiguredHandler;
+    use super::ParsedHandler;
+    use super::completed_summary;
+    use super::execute_handlers;
     use super::select_handlers;
     use super::select_handlers_for_matcher_inputs;
+    use crate::engine::CommandShell;
 
     fn make_handler(
         event_name: HookEventName,
@@ -169,6 +169,60 @@ mod tests {
             display_order,
             env: std::collections::HashMap::new(),
         }
+    }
+
+    fn parsed_unit(
+        handler: &ConfiguredHandler,
+        result: CommandRunResult,
+        turn_id: Option<String>,
+    ) -> ParsedHandler<()> {
+        ParsedHandler {
+            completed: HookCompletedEvent {
+                turn_id,
+                run: completed_summary(handler, &result, HookRunStatus::Completed, Vec::new()),
+            },
+            data: (),
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_handlers_runs_in_declaration_order() {
+        let temp = tempdir().expect("create temp dir");
+        let log_path = temp.path().join("hook-order.log");
+        let log = log_path.display();
+        let handlers = vec![
+            make_handler(
+                HookEventName::Stop,
+                /*matcher*/ None,
+                &format!("sleep 0.2; printf first >> {log}"),
+                /*display_order*/ 0,
+            ),
+            make_handler(
+                HookEventName::Stop,
+                /*matcher*/ None,
+                &format!("printf second >> {log}"),
+                /*display_order*/ 1,
+            ),
+        ];
+
+        let results = execute_handlers(
+            &CommandShell {
+                program: String::new(),
+                args: Vec::new(),
+            },
+            handlers,
+            "{}".to_string(),
+            temp.path(),
+            Some("turn-1".to_string()),
+            parsed_unit,
+        )
+        .await;
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            std::fs::read_to_string(log_path).expect("read hook order"),
+            "firstsecond"
+        );
     }
 
     #[test]
