@@ -30,10 +30,26 @@ pub(crate) fn append_additional_context(
     additional_contexts_for_model: &mut Vec<String>,
     additional_context: String,
 ) {
-    entries.push(HookOutputEntry {
-        kind: HookOutputEntryKind::Context,
-        text: additional_context.clone(),
-    });
+    append_additional_context_with_visibility(
+        entries,
+        additional_contexts_for_model,
+        additional_context,
+        /*suppress_output*/ false,
+    );
+}
+
+pub(crate) fn append_additional_context_with_visibility(
+    entries: &mut Vec<HookOutputEntry>,
+    additional_contexts_for_model: &mut Vec<String>,
+    additional_context: String,
+    suppress_output: bool,
+) {
+    if !suppress_output {
+        entries.push(HookOutputEntry {
+            kind: HookOutputEntryKind::Context,
+            text: additional_context.clone(),
+        });
+    }
     additional_contexts_for_model.push(additional_context);
 }
 
