@@ -330,10 +330,10 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
             thread_settings: Default::default(),
         })
         .await?;
-    wait_for_turn_complete(&codex).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex.submit(Op::Compact).await?;
-    wait_for_turn_complete(&codex).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
         .submit(Op::UserInput {
@@ -2005,10 +2005,10 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
             thread_settings: Default::default(),
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    wait_for_turn_complete(&codex).await;
 
     codex.submit(Op::Compact).await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    wait_for_turn_complete(&codex).await;
 
     codex.submit(Op::Shutdown).await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
@@ -3231,6 +3231,91 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
     assert!(
         error_message.to_lowercase().contains("context window"),
         "expected context window failure to surface, got {error_message}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_sampling_context_window_exceeded_compacts_and_retries() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(200_000);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "REMOTE_FIRST_REPLY"),
+                responses::ev_completed_with_tokens("r1", /*total_tokens*/ 100),
+            ]),
+            responses::sse_failed(
+                "r2",
+                "context_length_exceeded",
+                "Your input exceeds the context window of this model. Please adjust your input and try again.",
+            ),
+            responses::sse(vec![
+                responses::ev_assistant_message("m3", "REMOTE_RECOVERED_REPLY"),
+                responses::ev_completed_with_tokens("r3", /*total_tokens*/ 120),
+            ]),
+        ],
+    )
+    .await;
+    let compact_mock = responses::mount_compact_user_history_with_summary_once(
+        harness.server(),
+        &summary_with_prefix("REMOTE_OVERFLOW_RECOVERY_SUMMARY"),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let requests = responses_mock.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected first request, overflowing request, and post-compact retry"
+    );
+    let retry_body = requests[2].body_json().to_string();
+    assert!(
+        retry_body.contains("USER_TWO"),
+        "post-compact retry should preserve the active user turn"
+    );
+    assert!(
+        retry_body.contains("REMOTE_OVERFLOW_RECOVERY_SUMMARY"),
+        "post-compact retry should include the compacted summary"
     );
 
     Ok(())

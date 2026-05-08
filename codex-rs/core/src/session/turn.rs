@@ -116,6 +116,8 @@ use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
 
+const MAX_CONTEXT_WINDOW_COMPACTION_RETRIES_PER_TURN: u8 = 3;
+
 /// Takes initial turn input and runs a loop where, at each sampling request,
 /// the model replies with either:
 ///
@@ -940,6 +942,7 @@ async fn run_sampling_request(
         .await;
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
+    let mut context_window_compaction_retries = 0;
     let mut initial_input = Some(input);
     loop {
         let prompt_input = if let Some(input) = initial_input.take() {
@@ -973,7 +976,26 @@ async fn run_sampling_request(
             }
             Err(CodexErr::ContextWindowExceeded) => {
                 sess.set_total_tokens_full(&turn_context).await;
-                return Err(CodexErr::ContextWindowExceeded);
+                if context_window_compaction_retries
+                    >= MAX_CONTEXT_WINDOW_COMPACTION_RETRIES_PER_TURN
+                {
+                    return Err(CodexErr::ContextWindowExceeded);
+                }
+                context_window_compaction_retries += 1;
+                let reset_client_session = run_auto_compact(
+                    &sess,
+                    &turn_context,
+                    client_session,
+                    InitialContextInjection::BeforeLastUserMessage,
+                    CompactionReason::ContextLimit,
+                    CompactionPhase::MidTurn,
+                )
+                .await?;
+                if reset_client_session {
+                    client_session.reset_websocket_session();
+                }
+                retries = 0;
+                continue;
             }
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
