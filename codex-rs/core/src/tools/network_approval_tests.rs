@@ -278,6 +278,40 @@ async fn active_call_preserves_triggering_command_context() {
 }
 
 #[tokio::test]
+async fn active_call_host_approval_is_scoped_to_registered_call() {
+    let service = NetworkApprovalService::default();
+    register_call_with_default_shell_trigger(&service, "registration-1").await;
+    let key = HostApprovalKey {
+        host: "example.com".to_string(),
+        protocol: "https",
+        port: 443,
+    };
+
+    service
+        .approve_host_for_active_call("registration-1", key.clone())
+        .await;
+
+    assert!(
+        service
+            .active_call_has_host_approval("registration-1", &key)
+            .await
+    );
+    assert!(
+        !service
+            .active_call_has_host_approval("registration-2", &key)
+            .await
+    );
+
+    service.unregister_call("registration-1").await;
+
+    assert!(
+        !service
+            .active_call_has_host_approval("registration-1", &key)
+            .await
+    );
+}
+
+#[tokio::test]
 async fn record_blocked_request_sets_policy_outcome_for_owner_call() {
     let service = NetworkApprovalService::default();
     let cancellation_token =
