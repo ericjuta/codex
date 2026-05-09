@@ -1308,7 +1308,7 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
+async fn multi_agent_v2_completion_wakes_direct_parent() {
     let harness = AgentControlHarness::new().await;
     let (_root_thread_id, root_thread) = harness.start_thread().await;
     let (worker_thread_id, _worker_thread) = harness.start_thread().await;
@@ -1367,7 +1367,7 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
                 worker_path.clone(),
                 Vec::new(),
                 expected_message.clone(),
-                /*trigger_turn*/ false,
+                /*trigger_turn*/ true,
             ),
         },
     );
@@ -1402,7 +1402,7 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
             AgentPath::root(),
             Vec::new(),
             expected_message,
-            /*trigger_turn*/ false,
+            /*trigger_turn*/ true,
         )
     ));
 }
