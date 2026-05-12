@@ -479,6 +479,7 @@ mod tests {
                 should_block: true,
                 block_reason: Some("do not run that".to_string()),
                 additional_contexts_for_model: vec!["quiet context".to_string()],
+                updated_input: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
