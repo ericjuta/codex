@@ -166,9 +166,14 @@ fn build_code_mode_executors(
             executor.spec()
         })
         .collect::<Vec<_>>();
-    let namespace_descriptions = code_mode_namespace_descriptions(&code_mode_nested_tool_specs);
+    let mut code_mode_prompt_tool_specs = handlers
+        .iter()
+        .filter(|handler| handler.exposure() == ToolExposure::Direct)
+        .filter_map(|handler| handler.spec())
+        .collect::<Vec<_>>();
+    let namespace_descriptions = code_mode_namespace_descriptions(&code_mode_prompt_tool_specs);
     let mut enabled_tools =
-        collect_code_mode_exec_prompt_tool_definitions(code_mode_nested_tool_specs.iter());
+        collect_code_mode_exec_prompt_tool_definitions(code_mode_prompt_tool_specs.iter());
     enabled_tools
         .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
 
