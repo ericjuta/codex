@@ -166,10 +166,10 @@ fn build_code_mode_executors(
             executor.spec()
         })
         .collect::<Vec<_>>();
-    let mut code_mode_prompt_tool_specs = handlers
+    let code_mode_prompt_tool_specs = executors
         .iter()
-        .filter(|handler| handler.exposure() == ToolExposure::Direct)
-        .filter_map(|handler| handler.spec())
+        .filter(|executor| executor.exposure() == ToolExposure::Direct)
+        .filter_map(|executor| executor.spec())
         .collect::<Vec<_>>();
     let namespace_descriptions = code_mode_namespace_descriptions(&code_mode_prompt_tool_specs);
     let mut enabled_tools =

@@ -2279,6 +2279,46 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
 }
 
 #[test]
+fn code_mode_only_exec_description_omits_deferred_tools() {
+    let model_info = search_capable_model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::CodeModeOnly);
+    features.enable(Feature::ToolSearch);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (tools, registry) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        Some(vec![deferred_mcp_tool(
+            "echo",
+            "mcp__rmcp__",
+            "rmcp",
+            /*connector_name*/ None,
+            Some("Deferred RMCP tool."),
+        )]),
+        &[],
+    );
+    let ToolSpec::Freeform(FreeformTool { description, .. }) = find_tool(&tools, "exec") else {
+        panic!("expected freeform tool");
+    };
+
+    assert!(!description.contains("mcp__rmcp__echo"));
+    assert!(!description.contains("Deferred RMCP tool."));
+    assert!(registry.has_handler(&ToolName::namespaced("mcp__rmcp__", "echo")));
+}
+
+#[test]
 fn code_mode_only_exec_description_includes_extension_tool_details() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
