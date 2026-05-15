@@ -132,22 +132,12 @@ pub(crate) async fn launch_async_command(
         }
     };
 
-    if let Some(mut stdin) = child.stdin.take()
-        && let Err(err) = stdin.write_all(input_json.as_bytes()).await
-    {
-        let _ = child.kill().await;
-        return CommandRunResult {
-            started_at,
-            completed_at: chrono::Utc::now().timestamp(),
-            duration_ms: started.elapsed().as_millis().try_into().unwrap_or(i64::MAX),
-            exit_code: None,
-            stdout: String::new(),
-            stderr: String::new(),
-            error: Some(format!("failed to write hook stdin: {err}")),
-        };
-    }
-
+    let stdin = child.stdin.take();
+    let input_json = input_json.to_string();
     tokio::spawn(async move {
+        if let Some(mut stdin) = stdin {
+            let _ = stdin.write_all(input_json.as_bytes()).await;
+        }
         let _ = child.wait().await;
     });
 
@@ -193,5 +183,58 @@ fn default_shell_command() -> Command {
         let mut command = Command::new(shell);
         command.arg("-lc");
         command
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookExecutionMode;
+    use codex_protocol::protocol::HookSource;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use pretty_assertions::assert_eq;
+    use tokio::time::timeout;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn async_command_returns_without_waiting_for_stdin_write() {
+        #[cfg(windows)]
+        let command = "ping -n 2 127.0.0.1 > NUL";
+        #[cfg(not(windows))]
+        let command = "sleep 1";
+
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let handler = ConfiguredHandler {
+            event_name: HookEventName::PreToolUse,
+            matcher: None,
+            command: command.to_string(),
+            timeout_sec: 10,
+            status_message: None,
+            source_path: AbsolutePathBuf::try_from(temp.path().to_path_buf())
+                .expect("absolute path"),
+            source: HookSource::User,
+            display_order: 0,
+            env: HashMap::new(),
+            execution_mode: HookExecutionMode::Async,
+        };
+        let shell = CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        };
+        let input_json = "x".repeat(/*n*/ 16 * 1024 * 1024);
+
+        let result = timeout(
+            Duration::from_millis(/*millis*/ 200),
+            launch_async_command(&shell, &handler, &input_json, temp.path()),
+        )
+        .await
+        .expect("async command launch should not wait for stdin to drain");
+
+        assert_eq!(result.error, None);
+        assert_eq!(result.exit_code, Some(0));
     }
 }

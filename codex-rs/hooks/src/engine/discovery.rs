@@ -698,7 +698,6 @@ mod tests {
     use codex_config::HookStateToml;
     use codex_config::MatcherGroup;
     use codex_config::TomlValue;
-    use codex_protocol::protocol::HookTrustStatus;
 
     fn source_path() -> AbsolutePathBuf {
         test_path_buf("/tmp/hooks.json").abs()

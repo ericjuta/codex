@@ -320,6 +320,7 @@ Path(r"{marker_path}").write_text("done", encoding="utf-8")
     .expect("config layer stack");
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
