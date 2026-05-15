@@ -2,6 +2,11 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+use super::ConfiguredHandler;
+use super::HookListEntry;
+use crate::config_rules::hook_states_from_stack;
+use crate::events::common::matcher_pattern_for_event;
+use crate::events::common::validate_matcher_pattern;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
@@ -17,18 +22,13 @@ use codex_config::RequirementSource;
 use codex_config::TomlValue;
 use codex_config::version_for_toml;
 use codex_plugin::PluginHookSource;
-use codex_utils_absolute_path::AbsolutePathBuf;
-use serde::Deserialize;
-use serde::Serialize;
-use super::ConfiguredHandler;
-use super::HookListEntry;
-use crate::config_rules::hook_states_from_stack;
-use crate::events::common::matcher_pattern_for_event;
-use crate::events::common::validate_matcher_pattern;
+use codex_protocol::protocol::HookExecutionMode;
 use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
-use codex_protocol::protocol::HookExecutionMode;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use serde::Deserialize;
+use serde::Serialize;
 
 pub(crate) struct DiscoveryResult {
     pub handlers: Vec<ConfiguredHandler>,
