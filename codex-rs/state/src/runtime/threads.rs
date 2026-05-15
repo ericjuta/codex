@@ -756,12 +756,12 @@ ON CONFLICT(id) DO UPDATE SET
     reasoning_effort = excluded.reasoning_effort,
     cwd = excluded.cwd,
     cli_version = excluded.cli_version,
-    title = excluded.title,
+    title = COALESCE(NULLIF(excluded.title, ''), threads.title),
     preview = COALESCE(NULLIF(excluded.preview, ''), threads.preview),
     sandbox_policy = excluded.sandbox_policy,
     approval_mode = excluded.approval_mode,
     tokens_used = excluded.tokens_used,
-    first_user_message = excluded.first_user_message,
+    first_user_message = COALESCE(NULLIF(excluded.first_user_message, ''), threads.first_user_message),
     archived = excluded.archived,
     archived_at = excluded.archived_at,
     git_sha = COALESCE(threads.git_sha, excluded.git_sha),
@@ -1095,7 +1095,9 @@ pub(super) fn push_thread_filters<'a>(
     } else {
         builder.push(" AND threads.archived = 0");
     }
-    builder.push(" AND threads.preview <> ''");
+    builder.push(
+        " AND (threads.preview <> '' OR threads.first_user_message <> '' OR threads.title <> '' OR threads.tokens_used > 0)",
+    );
     if !allowed_sources.is_empty() {
         builder.push(" AND threads.source IN (");
         let mut separated = builder.separated(", ");
@@ -1122,7 +1124,9 @@ pub(super) fn push_thread_filters<'a>(
             builder.push(" AND threads.cwd IN (");
             let mut separated = builder.separated(", ");
             for cwd in cwd_filters {
-                separated.push_bind(cwd.display().to_string());
+                for cwd_value in cwd_filter_values(cwd) {
+                    separated.push_bind(cwd_value);
+                }
             }
             separated.push_unseparated(")");
         }
@@ -1132,6 +1136,8 @@ pub(super) fn push_thread_filters<'a>(
         builder.push(" AND (instr(threads.title, ");
         builder.push_bind(search_term);
         builder.push(") > 0 OR instr(threads.preview, ");
+        builder.push_bind(search_term);
+        builder.push(") > 0 OR instr(threads.first_user_message, ");
         builder.push_bind(search_term);
         builder.push(") > 0)");
     }
@@ -1175,6 +1181,31 @@ pub(super) fn push_thread_order_and_limit(
     builder.push(order_direction);
     builder.push(" LIMIT ");
     builder.push_bind(limit as i64);
+}
+
+fn cwd_filter_values(cwd: &Path) -> Vec<String> {
+    let display = cwd.display().to_string();
+    let mut values = vec![display.clone()];
+    if let Some(stripped) = display.strip_prefix(r"\\?\") {
+        push_unique(&mut values, stripped.to_string());
+    } else if looks_like_windows_drive_path(display.as_str()) {
+        push_unique(&mut values, format!(r"\\?\{display}"));
+    }
+    values
+}
+
+fn push_unique(values: &mut Vec<String>, candidate: String) {
+    if !values.iter().any(|value| value == &candidate) {
+        values.push(candidate);
+    }
+}
+
+fn looks_like_windows_drive_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 3
+        && bytes[1] == b':'
+        && (bytes[0] as char).is_ascii_alphabetic()
+        && matches!(bytes[2], b'\\' | b'/')
 }
 
 fn metadata_preview(metadata: &crate::ThreadMetadata) -> &str {
@@ -1394,6 +1425,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_threads_matches_windows_verbatim_cwd_variants() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000104").expect("valid thread id");
+        let stored_cwd = PathBuf::from(r"\\?\C:\Users\example\projects\repo");
+        let filter_cwd = PathBuf::from(r"C:\Users\example\projects\repo");
+        let metadata = test_thread_metadata(&codex_home, thread_id, stored_cwd);
+
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("thread insert should succeed");
+
+        let page = runtime
+            .list_threads(
+                /*page_size*/ 10,
+                ThreadFilterOptions {
+                    archived_only: false,
+                    allowed_sources: &[],
+                    model_providers: None,
+                    cwd_filters: Some(std::slice::from_ref(&filter_cwd)),
+                    anchor: None,
+                    sort_key: SortKey::UpdatedAt,
+                    sort_direction: SortDirection::Desc,
+                    search_term: None,
+                },
+            )
+            .await
+            .expect("list should succeed");
+
+        let ids = page.items.iter().map(|item| item.id).collect::<Vec<_>>();
+        assert_eq!(ids, vec![thread_id]);
+    }
+
+    #[tokio::test]
+    async fn list_threads_keeps_token_only_recovered_rows() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let kept_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000105").expect("valid thread id");
+        let hidden_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000106").expect("valid thread id");
+
+        let mut kept = test_thread_metadata(&codex_home, kept_id, codex_home.clone());
+        kept.first_user_message = None;
+        kept.preview = None;
+        kept.title = String::new();
+        kept.tokens_used = 42;
+        runtime
+            .upsert_thread(&kept)
+            .await
+            .expect("kept thread insert should succeed");
+
+        let mut hidden = test_thread_metadata(&codex_home, hidden_id, codex_home.clone());
+        hidden.first_user_message = None;
+        hidden.preview = None;
+        hidden.title = String::new();
+        hidden.tokens_used = 0;
+        runtime
+            .upsert_thread(&hidden)
+            .await
+            .expect("hidden thread insert should succeed");
+
+        let page = runtime
+            .list_threads(
+                /*page_size*/ 10,
+                ThreadFilterOptions {
+                    archived_only: false,
+                    allowed_sources: &[],
+                    model_providers: None,
+                    cwd_filters: None,
+                    anchor: None,
+                    sort_key: SortKey::UpdatedAt,
+                    sort_direction: SortDirection::Desc,
+                    search_term: None,
+                },
+            )
+            .await
+            .expect("list should succeed");
+
+        let ids = page.items.iter().map(|item| item.id).collect::<Vec<_>>();
+        assert!(ids.contains(&kept_id));
+        assert!(!ids.contains(&hidden_id));
+    }
+
+    #[tokio::test]
     async fn apply_rollout_items_restores_memory_mode_from_session_meta() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
@@ -1561,7 +1683,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upsert_thread_preserves_existing_preview_when_incoming_preview_is_empty() {
+    async fn upsert_thread_preserves_existing_user_facing_text_when_incoming_text_is_empty() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -1569,7 +1691,8 @@ mod tests {
         let thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000459").expect("valid thread id");
         let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
-        metadata.first_user_message = None;
+        metadata.title = "migrated title".to_string();
+        metadata.first_user_message = Some("migrated first message".to_string());
         metadata.preview = Some("migrated goal preview".to_string());
 
         runtime
@@ -1578,6 +1701,8 @@ mod tests {
             .expect("initial upsert should succeed");
 
         let mut rollout_metadata = metadata.clone();
+        rollout_metadata.title = String::new();
+        rollout_metadata.first_user_message = None;
         rollout_metadata.preview = None;
 
         runtime
@@ -1590,6 +1715,11 @@ mod tests {
             .await
             .expect("thread should load")
             .expect("thread should exist");
+        assert_eq!(persisted.title, "migrated title");
+        assert_eq!(
+            persisted.first_user_message.as_deref(),
+            Some("migrated first message")
+        );
         assert_eq!(persisted.preview.as_deref(), Some("migrated goal preview"));
     }
 
