@@ -30,9 +30,12 @@ app-server-test-client *args:
     cargo build -p codex-cli
     cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex "$@"
 
-# Format Rust and Python SDK code.
-fmt:
+# Format Rust code.
+fmt-rust:
     cargo fmt -- --config imports_granularity=Item 2>/dev/null
+
+# Format Rust and Python SDK code.
+fmt: fmt-rust
     uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python
     uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python
 
