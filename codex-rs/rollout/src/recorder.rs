@@ -1671,11 +1671,21 @@ impl From<codex_state::ThreadsPage> for ThreadsPage {
 }
 
 fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadItem {
+    let preview = item
+        .preview
+        .clone()
+        .or_else(|| item.first_user_message.clone())
+        .or_else(|| {
+            (item.tokens_used > 0).then(|| {
+                let id = item.id.to_string();
+                format!("Recovered session {}", &id[..8])
+            })
+        });
     ThreadItem {
         path: item.rollout_path,
         thread_id: Some(item.id),
         first_user_message: item.first_user_message,
-        preview: item.preview,
+        preview,
         cwd: Some(item.cwd),
         git_branch: item.git_branch,
         git_sha: item.git_sha,
