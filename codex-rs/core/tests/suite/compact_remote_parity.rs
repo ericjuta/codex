@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::Result;
 use codex_features::Feature;
@@ -20,6 +21,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -115,34 +117,56 @@ const FULL_MIX: &[Step] = &[
     Step::Assistant,
 ];
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_compaction_parity_manual_transcripts() -> Result<()> {
-    skip_if_no_network!(Ok(()));
+#[test]
+fn remote_compaction_parity_manual_transcripts() -> Result<()> {
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+    const WORKER_THREADS: usize = 2;
 
-    let scenarios = [
-        Scenario {
-            name: "assistant_only",
-            steps: ASSISTANT_ONLY,
-        },
-        Scenario {
-            name: "reasoning_image",
-            steps: REASONING_IMAGE,
-        },
-        Scenario {
-            name: "tool_mix",
-            steps: TOOL_MIX,
-        },
-        Scenario {
-            name: "full_mix",
-            steps: FULL_MIX,
-        },
-    ];
+    let handle = std::thread::Builder::new()
+        .name("remote_compaction_parity_manual_transcripts".to_string())
+        .stack_size(TEST_STACK_SIZE_BYTES)
+        .spawn(|| -> Result<()> {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(WORKER_THREADS)
+                .thread_stack_size(TEST_STACK_SIZE_BYTES)
+                .enable_all()
+                .build()?;
+            runtime.block_on(async {
+                skip_if_no_network!(Ok(()));
 
-    for scenario in scenarios {
-        compare_manual_scenario(&scenario, RunSettings::default()).await?;
+                let scenarios = [
+                    Scenario {
+                        name: "assistant_only",
+                        steps: ASSISTANT_ONLY,
+                    },
+                    Scenario {
+                        name: "reasoning_image",
+                        steps: REASONING_IMAGE,
+                    },
+                    Scenario {
+                        name: "tool_mix",
+                        steps: TOOL_MIX,
+                    },
+                    Scenario {
+                        name: "full_mix",
+                        steps: FULL_MIX,
+                    },
+                ];
+
+                for scenario in scenarios {
+                    compare_manual_scenario(&scenario, RunSettings::default()).await?;
+                }
+
+                Ok(())
+            })
+        })?;
+
+    match handle.join() {
+        Ok(result) => result,
+        Err(_) => Err(anyhow::anyhow!(
+            "remote_compaction_parity_manual_transcripts thread panicked"
+        )),
     }
-
-    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -615,7 +639,14 @@ async fn submit_user_input(codex: &codex_core::CodexThread, items: Vec<UserInput
 }
 
 async fn wait_for_turn_complete(codex: &codex_core::CodexThread) {
-    wait_for_event(codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    const PARITY_EVENT_TIMEOUT_SECS: u64 = 30;
+
+    wait_for_event_with_timeout(
+        codex,
+        |ev| matches!(ev, EventMsg::TurnComplete(_)),
+        Duration::from_secs(PARITY_EVENT_TIMEOUT_SECS),
+    )
+    .await;
 }
 
 fn user_input_for_step(scenario_name: &str, idx: usize, step: Step) -> Vec<UserInput> {

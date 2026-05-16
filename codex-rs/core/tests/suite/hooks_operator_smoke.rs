@@ -272,24 +272,23 @@ async fn submit_smoke_turn(
         turn_permission_fields(permission_profile, test.config.cwd.as_path());
     let session_model = test.session_configured.model.clone();
     test.codex
-        .submit(Op::UserTurn {
+        .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
                 text: prompt.to_string(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: test.config.cwd.to_path_buf(),
-            approval_policy,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(test.config.cwd.to_path_buf()),
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: None,
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                model: Some(session_model),
+                ..Default::default()
+            },
         })
         .await?;
 

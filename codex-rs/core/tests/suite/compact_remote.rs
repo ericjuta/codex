@@ -3284,6 +3284,7 @@ async fn remote_sampling_context_window_exceeded_compacts_and_retries() -> Resul
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_turn_complete(&codex).await;
@@ -3297,6 +3298,7 @@ async fn remote_sampling_context_window_exceeded_compacts_and_retries() -> Resul
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_turn_complete(&codex).await;
