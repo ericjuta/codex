@@ -337,6 +337,7 @@ Path(r"{marker_path}").write_text("done", encoding="utf-8")
     let request = PreToolUseRequest {
         session_id: ThreadId::new(),
         turn_id: "turn-1".to_string(),
+        subagent: None,
         cwd: cwd(),
         transcript_path: None,
         model: "gpt-test".to_string(),

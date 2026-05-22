@@ -982,7 +982,7 @@ async fn run_sampling_request(
                     return Err(CodexErr::ContextWindowExceeded);
                 }
                 context_window_compaction_retries += 1;
-                let reset_client_session = run_auto_compact(
+                run_auto_compact(
                     &sess,
                     &turn_context,
                     client_session,
@@ -991,9 +991,6 @@ async fn run_sampling_request(
                     CompactionPhase::MidTurn,
                 )
                 .await?;
-                if reset_client_session {
-                    client_session.reset_websocket_session();
-                }
                 retries = 0;
                 continue;
             }

@@ -111,6 +111,7 @@ fn hook_command_timeout_accepts_timeout_sec_alias() {
         parsed.hooks.pre_tool_use[0].hooks[0],
         HookHandlerConfig::Command {
             command: "python3 /tmp/pre.py".to_string(),
+            command_windows: None,
             timeout_sec: Some(12),
             r#async: false,
             status_message: None,
