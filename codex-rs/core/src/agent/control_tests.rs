@@ -9,6 +9,7 @@ use crate::config::ConfigBuilder;
 use crate::context::ContextualUserFragment;
 use crate::context::SubagentNotification;
 use crate::init_state_db;
+use crate::thread_manager::StartThreadOptions;
 use assert_matches::assert_matches;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -20,6 +21,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -1702,6 +1704,86 @@ async fn multi_agent_v2_completion_wakes_direct_parent() {
             /*trigger_turn*/ true,
         )
     ));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_terminal_turn_event_wakes_direct_parent() {
+    let harness = AgentControlHarness::new().await;
+    let (worker_thread_id, _worker_thread) = harness.start_thread().await;
+    let mut tester_config = harness.config.clone();
+    let _ = tester_config.features.enable(Feature::MultiAgentV2);
+    let worker_path = AgentPath::root().join("worker_a").expect("worker path");
+    let tester_path = worker_path.join("tester").expect("tester path");
+    let tester_thread = harness
+        .manager
+        .start_thread_with_options(StartThreadOptions {
+            config: tester_config,
+            initial_history: InitialHistory::New,
+            session_source: Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: worker_thread_id,
+                depth: 2,
+                agent_path: Some(tester_path.clone()),
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: Vec::new(),
+        })
+        .await
+        .expect("tester thread should start")
+        .thread;
+    let tester_turn = tester_thread.codex.session.new_default_turn().await;
+    tester_thread
+        .codex
+        .session
+        .send_event(
+            tester_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: tester_turn.sub_id.clone(),
+                last_agent_message: Some("done".to_string()),
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        )
+        .await;
+
+    let expected_message = crate::session_prefix::format_subagent_notification_message(
+        tester_path.as_str(),
+        &AgentStatus::Completed(Some("done".to_string())),
+    );
+    let expected = (
+        worker_thread_id,
+        Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                tester_path,
+                worker_path,
+                Vec::new(),
+                expected_message,
+                /*trigger_turn*/ true,
+            ),
+        },
+    );
+
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let captured = harness
+                .manager
+                .captured_ops()
+                .into_iter()
+                .find(|entry| *entry == expected);
+            if captured == Some(expected.clone()) {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("terminal turn event should wake the direct parent");
 }
 
 #[tokio::test]
