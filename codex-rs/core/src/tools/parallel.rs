@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use std::time::Instant;
 
 use tokio::sync::RwLock;
@@ -26,6 +27,8 @@ use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouter;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseInputItem;
+
+const TOOL_CANCELLATION_CLEANUP_GRACE: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 pub(crate) struct ToolCallRuntime {
@@ -140,22 +143,27 @@ impl ToolCallRuntime {
                     } else {
                         let secs = started.elapsed().as_secs_f32().max(0.1);
                         abort_dispatch_span.record("aborted", true);
-                        handle.abort();
-                        match handle.await {
-                            Ok(result) => result,
-                            Err(err) if err.is_cancelled() => {
-                                let response = Self::aborted_response(&call, secs);
-                                notify_tool_aborted(
-                                    abort_session.as_ref(),
-                                    abort_turn.as_ref(),
-                                    call.call_id.as_str(),
-                                    &call.tool_name,
-                                    abort_source,
-                                )
-                                .await;
-                                Ok(response)
+                        match tokio::time::timeout(TOOL_CANCELLATION_CLEANUP_GRACE, &mut handle).await {
+                            Ok(result) => result.map_err(Self::tool_task_join_error)?,
+                            Err(_) => {
+                                handle.abort();
+                                match handle.await {
+                                    Ok(result) => result,
+                                    Err(err) if err.is_cancelled() => {
+                                        let response = Self::aborted_response(&call, secs);
+                                        notify_tool_aborted(
+                                            abort_session.as_ref(),
+                                            abort_turn.as_ref(),
+                                            call.call_id.as_str(),
+                                            &call.tool_name,
+                                            abort_source,
+                                        )
+                                        .await;
+                                        Ok(response)
+                                    }
+                                    Err(err) => Err(Self::tool_task_join_error(err)),
+                                }
                             }
-                            Err(err) => Err(Self::tool_task_join_error(err)),
                         }
                     }
                 },

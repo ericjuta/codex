@@ -35,6 +35,7 @@ use codex_utils_output_truncation::TruncationPolicy;
 use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
@@ -74,14 +75,26 @@ pub(crate) struct UnifiedExecContext {
     pub session: Arc<Session>,
     pub turn: Arc<TurnContext>,
     pub call_id: String,
+    pub cancellation_token: CancellationToken,
 }
 
 impl UnifiedExecContext {
+    #[cfg(test)]
     pub fn new(session: Arc<Session>, turn: Arc<TurnContext>, call_id: String) -> Self {
+        Self::new_with_cancellation(session, turn, call_id, CancellationToken::new())
+    }
+
+    pub fn new_with_cancellation(
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        call_id: String,
+        cancellation_token: CancellationToken,
+    ) -> Self {
         Self {
             session,
             turn,
             call_id,
+            cancellation_token,
         }
     }
 }

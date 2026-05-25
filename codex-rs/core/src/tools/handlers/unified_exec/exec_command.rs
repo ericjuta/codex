@@ -95,6 +95,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
         let ToolInvocation {
             session,
             turn,
+            cancellation_token,
             tracker,
             call_id,
             payload,
@@ -111,7 +112,12 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
         };
 
         let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
-        let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
+        let context = UnifiedExecContext::new_with_cancellation(
+            session.clone(),
+            turn.clone(),
+            call_id.clone(),
+            cancellation_token,
+        );
         let environment_args: ExecCommandEnvironmentArgs = parse_arguments(&arguments)?;
         let Some(turn_environment) =
             resolve_tool_environment(turn.as_ref(), environment_args.environment_id.as_deref())?

@@ -1,4 +1,3 @@
-use std::thread;
 use std::time::Duration;
 
 use super::RuntimeCommand;
@@ -33,11 +32,12 @@ pub(super) fn schedule_timeout(
     let timeout_id = state.next_timeout_id;
     state.next_timeout_id = state.next_timeout_id.saturating_add(1);
     let runtime_command_tx = state.runtime_command_tx.clone();
+    let runtime_handle = state.runtime_handle.clone();
     state
         .pending_timeouts
         .insert(timeout_id, ScheduledTimeout { callback });
-    thread::spawn(move || {
-        thread::sleep(Duration::from_millis(delay_ms));
+    runtime_handle.spawn(async move {
+        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
         let _ = runtime_command_tx.send(RuntimeCommand::TimeoutFired { id: timeout_id });
     });
 

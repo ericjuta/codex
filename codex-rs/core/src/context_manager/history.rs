@@ -101,13 +101,38 @@ impl ContextManager {
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
     {
+        let mut code_mode_call_ids = Vec::new();
         for item in items {
             let item_ref = item.deref();
             if !is_api_message(item_ref) {
                 continue;
             }
 
-            let processed = self.process_item(item_ref, policy);
+            if let ResponseItem::CustomToolCall { call_id, name, .. } = item_ref
+                && name == codex_code_mode::PUBLIC_TOOL_NAME
+            {
+                code_mode_call_ids.push(call_id.clone());
+            }
+
+            let preserve_code_mode_output = match item_ref {
+                ResponseItem::CustomToolCallOutput { call_id, name, .. } => {
+                    name.as_deref() == Some(codex_code_mode::PUBLIC_TOOL_NAME)
+                        || code_mode_call_ids
+                            .iter()
+                            .any(|code_mode_id| code_mode_id == call_id)
+                        || self.items.iter().rev().any(|history_item| {
+                            matches!(
+                                history_item,
+                                ResponseItem::CustomToolCall { call_id: history_call_id, name, .. }
+                                    if name == codex_code_mode::PUBLIC_TOOL_NAME
+                                        && history_call_id == call_id
+                            )
+                        })
+                }
+                _ => false,
+            };
+
+            let processed = self.process_item(item_ref, policy, preserve_code_mode_output);
             self.items.push(processed);
         }
     }
@@ -374,7 +399,12 @@ impl ContextManager {
         normalize::strip_images_when_unsupported(input_modalities, &mut self.items);
     }
 
-    fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
+    fn process_item(
+        &self,
+        item: &ResponseItem,
+        policy: TruncationPolicy,
+        preserve_code_mode_output: bool,
+    ) -> ResponseItem {
         let policy_with_serialization_budget = policy * 1.2;
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
@@ -393,7 +423,11 @@ impl ContextManager {
             } => ResponseItem::CustomToolCallOutput {
                 call_id: call_id.clone(),
                 name: name.clone(),
-                output: truncate_function_output_payload(output, policy_with_serialization_budget),
+                output: if preserve_code_mode_output {
+                    output.clone()
+                } else {
+                    truncate_function_output_payload(output, policy_with_serialization_budget)
+                },
             },
             ResponseItem::Message { .. }
             | ResponseItem::Reasoning { .. }

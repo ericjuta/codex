@@ -102,7 +102,7 @@ impl CodeModeService {
         let tool_runtime =
             ToolCallRuntime::new(router, Arc::clone(session), Arc::clone(turn), tracker);
         let host = Arc::new(CoreTurnHost { exec, tool_runtime });
-        Some(self.inner.start_turn_worker(host))
+        Some(self.inner.start_turn_worker(host).await)
     }
 }
 

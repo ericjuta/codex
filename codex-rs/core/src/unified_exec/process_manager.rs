@@ -328,6 +328,21 @@ fn terminate_process_on_network_denial(
     });
 }
 
+fn terminate_process_on_invocation_cancellation(
+    process: Arc<UnifiedExecProcess>,
+    cancellation_token: CancellationToken,
+) {
+    let process_exited = process.cancellation_token();
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = cancellation_token.cancelled() => {
+                process.terminate();
+            }
+            _ = process_exited.cancelled() => {}
+        }
+    });
+}
+
 impl UnifiedExecProcessManager {
     pub(crate) async fn allocate_process_id(&self) -> i32 {
         loop {
@@ -392,6 +407,10 @@ impl UnifiedExecProcessManager {
                 deferred.clone(),
             );
         }
+        terminate_process_on_invocation_cancellation(
+            Arc::clone(&process),
+            context.cancellation_token.clone(),
+        );
 
         let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
         let event_ctx = ToolEventCtx::new(
@@ -1093,7 +1112,7 @@ impl UnifiedExecProcessManager {
         mut pause_state: Option<watch::Receiver<bool>>,
         mut deadline: Instant,
     ) -> Vec<u8> {
-        const POST_EXIT_CLOSE_WAIT_CAP: Duration = Duration::from_millis(50);
+        const POST_EXIT_CLOSE_WAIT_CAP: Duration = Duration::from_secs(1);
 
         let mut collected: Vec<u8> = Vec::with_capacity(4096);
         let mut exit_signal_received = cancellation_token.is_cancelled();

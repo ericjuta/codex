@@ -209,11 +209,14 @@ pub(crate) fn spawn_runtime(
         .iter()
         .map(enabled_tool_metadata)
         .collect::<Vec<_>>();
+    let runtime_handle = tokio::runtime::Handle::try_current()
+        .map_err(|_| "failed to access Tokio runtime for code mode".to_string())?;
     let config = RuntimeConfig {
         tool_call_id: request.tool_call_id,
         enabled_tools,
         source: request.source,
         stored_values,
+        runtime_handle,
     };
 
     thread::spawn(move || {
@@ -240,6 +243,7 @@ struct RuntimeConfig {
     enabled_tools: Vec<EnabledToolMetadata>,
     source: String,
     stored_values: HashMap<String, JsonValue>,
+    runtime_handle: tokio::runtime::Handle,
 }
 
 pub(super) struct RuntimeState {
@@ -253,6 +257,7 @@ pub(super) struct RuntimeState {
     next_timeout_id: u64,
     tool_call_id: String,
     runtime_command_tx: std_mpsc::Sender<RuntimeCommand>,
+    runtime_handle: tokio::runtime::Handle,
     exit_requested: bool,
 }
 
@@ -311,6 +316,7 @@ fn run_runtime(
         next_timeout_id: 1,
         tool_call_id: config.tool_call_id,
         runtime_command_tx,
+        runtime_handle: config.runtime_handle,
         exit_requested: false,
     });
 
