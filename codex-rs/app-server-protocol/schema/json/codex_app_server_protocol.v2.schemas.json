@@ -6665,6 +6665,16 @@
         "eventName": {
           "$ref": "#/definitions/HookEventName"
         },
+        "executionMode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/HookExecutionMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "handlerType": {
           "$ref": "#/definitions/HookHandlerType"
         },

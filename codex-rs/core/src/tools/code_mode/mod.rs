@@ -321,8 +321,10 @@ fn build_freeform_tool_payload(
 #[cfg(test)]
 mod tests {
     use super::build_nested_tool_payload;
+    use super::truncate_code_mode_result;
     use crate::tools::context::ToolPayload;
     use codex_code_mode::CodeModeToolKind;
+    use codex_protocol::models::FunctionCallOutputContentItem;
     use codex_tools::ToolName;
     use serde_json::json;
 
@@ -358,5 +360,25 @@ mod tests {
             }
             other => panic!("expected freeform payload, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn truncate_code_mode_result_bounds_text_items() {
+        let original = "notification output ".repeat(1_000);
+        let items = truncate_code_mode_result(
+            vec![FunctionCallOutputContentItem::InputText {
+                text: original.clone(),
+            }],
+            Some(10),
+        );
+
+        let [FunctionCallOutputContentItem::InputText { text }] = items.as_slice() else {
+            panic!("expected a single text item");
+        };
+        assert_ne!(text, &original);
+        assert!(
+            text.contains("tokens truncated"),
+            "expected token truncation marker, got {text}"
+        );
     }
 }

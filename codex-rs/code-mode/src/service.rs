@@ -93,6 +93,7 @@ pub trait CodeModeSessionDelegate: Send + Sync {
         call_id: String,
         cell_id: CellId,
         text: String,
+        max_output_tokens: Option<usize>,
         cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a>;
 
@@ -119,6 +120,7 @@ impl CodeModeSessionDelegate for NoopCodeModeSessionDelegate {
         _call_id: String,
         _cell_id: CellId,
         _text: String,
+        _max_output_tokens: Option<usize>,
         _cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a> {
         Box::pin(async { Ok(()) })
@@ -642,7 +644,11 @@ async fn run_cell_control(
                         yield_timer = None;
                         send_yield_response(&cell_id, &mut content_items, &mut response_tx);
                     }
-                    RuntimeEvent::Notify { call_id, text } => {
+                    RuntimeEvent::Notify {
+                        call_id,
+                        text,
+                        max_output_tokens,
+                    } => {
                         let delegate = Arc::clone(&inner.delegate);
                         let cell_id = cell_id.clone();
                         let cancellation_token = cancellation_token.child_token();
@@ -652,6 +658,7 @@ async fn run_cell_control(
                                     call_id,
                                     cell_id.clone(),
                                     text,
+                                    max_output_tokens,
                                     cancellation_token.clone(),
                                 ) => {
                                     if let Err(err) = result {

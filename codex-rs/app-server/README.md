@@ -1670,6 +1670,7 @@ For unmanaged hooks, `currentHash` and `trustStatus` describe whether the curren
         "key": "/Users/me/.codex/config.toml:pre_tool_use:0:0",
         "eventName": "pre_tool_use",
         "handlerType": "command",
+        "executionMode": "sync",
         "isManaged": false,
         "matcher": "Bash",
         "command": "python3 /Users/me/hook.py",

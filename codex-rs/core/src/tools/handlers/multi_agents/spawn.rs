@@ -196,6 +196,10 @@ async fn handle_spawn_agent(
         )
         .await;
     let new_thread_id = result?.thread_id;
+    session
+        .input_queue
+        .accept_mailbox_delivery_for_current_turn(&session.active_turn, &turn.sub_id)
+        .await;
     let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
     turn.session_telemetry.counter(
         "codex.multi_agent.spawn",

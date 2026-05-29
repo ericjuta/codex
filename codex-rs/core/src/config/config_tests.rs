@@ -4631,6 +4631,25 @@ async fn default_zsh_path_sets_runtime_zsh_path() -> std::io::Result<()> {
 }
 
 #[tokio::test]
+async fn configured_zsh_path_sets_runtime_zsh_path() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let configured_zsh_path = codex_home.path().join("configured-zsh");
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            zsh_path: Some(configured_zsh_path.abs()),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+    assert_eq!(config.zsh_path, Some(configured_zsh_path));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config = Config::load_from_base_config_with_overrides(

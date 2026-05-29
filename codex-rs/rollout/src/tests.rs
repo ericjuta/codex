@@ -422,6 +422,74 @@ fn write_goal_started_session_file(
     Ok(())
 }
 
+fn write_response_item_user_session_file(
+    root: &Path,
+    ts_str: &str,
+    uuid: Uuid,
+    message: &str,
+) -> std::io::Result<()> {
+    write_response_item_user_session_file_with_messages(root, ts_str, uuid, &[message])
+}
+
+fn write_response_item_user_session_file_with_messages(
+    root: &Path,
+    ts_str: &str,
+    uuid: Uuid,
+    messages: &[&str],
+) -> std::io::Result<()> {
+    let format: &[FormatItem] =
+        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+    let dt = PrimitiveDateTime::parse(ts_str, format)
+        .unwrap()
+        .assume_utc();
+    let dir = root
+        .join("sessions")
+        .join(format!("{:04}", dt.year()))
+        .join(format!("{:02}", u8::from(dt.month())))
+        .join(format!("{:02}", dt.day()));
+    fs::create_dir_all(&dir)?;
+
+    let filename = format!("rollout-{ts_str}-{uuid}.jsonl");
+    let file_path = dir.join(filename);
+    let mut file = File::create(file_path)?;
+
+    let meta = serde_json::json!({
+        "timestamp": ts_str,
+        "type": "session_meta",
+        "payload": {
+            "id": uuid,
+            "timestamp": ts_str,
+            "cwd": ".",
+            "originator": "test_originator",
+            "cli_version": "test_version",
+            "source": "vscode",
+            "model_provider": "test-provider",
+            "base_instructions": null,
+        },
+    });
+    writeln!(file, "{meta}")?;
+
+    for message in messages {
+        let response_item = RolloutLine {
+            timestamp: ts_str.to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: (*message).to_string(),
+                }],
+                phase: None,
+            }),
+        };
+        let response_item = serde_json::to_string(&response_item).map_err(std::io::Error::other)?;
+        writeln!(file, "{response_item}")?;
+    }
+
+    let times = FileTimes::new().set_modified(dt.into());
+    file.set_times(times)?;
+    Ok(())
+}
+
 fn write_session_file_with_delayed_user_event(
     root: &Path,
     ts_str: &str,
@@ -967,6 +1035,81 @@ async fn test_list_threads_uses_goal_objective_as_preview() {
     assert_eq!(item.thread_id, Some(thread_id_from_uuid(uuid)));
     assert_eq!(item.preview.as_deref(), Some("optimize the benchmark"));
     assert_eq!(item.first_user_message, None);
+}
+
+#[tokio::test]
+async fn test_list_threads_uses_response_item_user_message_as_preview() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let uuid = Uuid::from_u128(403);
+    let ts = "2025-04-03T12-00-00";
+    write_response_item_user_session_file(home, ts, uuid, "continue the saved task").unwrap();
+
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_threads(
+        home,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
+        Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(page.items.len(), 1);
+    let item = &page.items[0];
+    assert_eq!(item.thread_id, Some(thread_id_from_uuid(uuid)));
+    assert_eq!(item.preview.as_deref(), Some("continue the saved task"));
+    assert_eq!(
+        item.first_user_message.as_deref(),
+        Some("continue the saved task")
+    );
+}
+
+#[tokio::test]
+async fn test_list_threads_skips_contextual_response_item_user_message() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let uuid = Uuid::from_u128(404);
+    let ts = "2025-04-03T13-00-00";
+    write_response_item_user_session_file_with_messages(
+        home,
+        ts,
+        uuid,
+        &[
+            "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>",
+            "continue the saved task",
+        ],
+    )
+    .unwrap();
+
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_threads(
+        home,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
+        Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(page.items.len(), 1);
+    let item = &page.items[0];
+    assert_eq!(item.thread_id, Some(thread_id_from_uuid(uuid)));
+    assert_eq!(item.preview.as_deref(), Some("continue the saved task"));
+    assert_eq!(
+        item.first_user_message.as_deref(),
+        Some("continue the saved task")
+    );
 }
 
 #[tokio::test]

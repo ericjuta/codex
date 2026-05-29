@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use std::time::Instant;
 
 use tokio::sync::RwLock;
@@ -26,6 +27,8 @@ use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouter;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseInputItem;
+
+const TOOL_CANCELLATION_CLEANUP_GRACE: Duration = Duration::from_secs(/*secs*/ 1);
 
 #[derive(Clone)]
 pub(crate) struct ToolCallRuntime {
@@ -153,11 +156,21 @@ impl ToolCallRuntime {
                                 Err(err) => return Err(Self::tool_task_join_error(err)),
                             }
                         } else {
-                            handle.abort();
-                            match handle.await {
-                                Ok(result) => return result,
-                                Err(err) if err.is_cancelled() => {}
-                                Err(err) => return Err(Self::tool_task_join_error(err)),
+                            match tokio::time::timeout(
+                                TOOL_CANCELLATION_CLEANUP_GRACE,
+                                &mut handle,
+                            )
+                            .await
+                            {
+                                Ok(result) => return result.map_err(Self::tool_task_join_error)?,
+                                Err(_) => {
+                                    handle.abort();
+                                    match handle.await {
+                                        Ok(result) => return result,
+                                        Err(err) if err.is_cancelled() => {}
+                                        Err(err) => return Err(Self::tool_task_join_error(err)),
+                                    }
+                                }
                             }
                         }
                         let response = Self::aborted_response(&call, secs);

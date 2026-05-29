@@ -143,7 +143,7 @@ pub enum HookHandlerConfig {
         command: String,
         #[serde(default, rename = "commandWindows", alias = "command_windows")]
         command_windows: Option<String>,
-        #[serde(default, rename = "timeout")]
+        #[serde(default, rename = "timeout", alias = "timeout_sec")]
         timeout_sec: Option<u64>,
         #[serde(default)]
         r#async: bool,

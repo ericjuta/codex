@@ -377,7 +377,7 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
             .get(index)
             .and_then(rewritten_output_for_context_window)
         else {
-            break;
+            continue;
         };
         let mut items = history.raw_items().to_vec();
         items[index] = rewritten_item;

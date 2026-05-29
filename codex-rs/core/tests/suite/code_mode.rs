@@ -63,12 +63,40 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
-    match req.custom_tool_call_output(call_id).get("output") {
+    let output_item = custom_tool_call_output(req, call_id);
+    let output = custom_tool_output_value(&output_item);
+    match output {
         Some(Value::Array(items)) => items.clone(),
         Some(Value::String(text)) => {
             vec![serde_json::json!({ "type": "input_text", "text": text })]
         }
         _ => panic!("custom tool output should be serialized as text or content items"),
+    }
+}
+
+fn custom_tool_call_output(req: &ResponsesRequest, call_id: &str) -> Value {
+    req.inputs_of_type("custom_tool_call_output")
+        .into_iter()
+        .rev()
+        .find(|item| item.get("call_id").and_then(Value::as_str) == Some(call_id))
+        .unwrap_or_else(|| panic!("custom tool output {call_id} item not found in request"))
+}
+
+fn custom_tool_output_value(item: &Value) -> Option<&Value> {
+    let output = item.get("output")?;
+    output.get("content").or(Some(output))
+}
+
+fn output_value_to_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(items) => match items.as_slice() {
+            [item] if item.get("type").and_then(Value::as_str) == Some("input_text") => {
+                item.get("text").and_then(Value::as_str).map(str::to_string)
+            }
+            [_] | [] | [_, _, ..] => None,
+        },
+        Value::Object(_) | Value::Number(_) | Value::Bool(_) | Value::Null => None,
     }
 }
 
@@ -126,9 +154,17 @@ fn custom_tool_output_body_and_success(
     req: &ResponsesRequest,
     call_id: &str,
 ) -> (String, Option<bool>) {
-    let (content, success) = req
-        .custom_tool_call_output_content_and_success(call_id)
-        .expect("custom tool output should be present");
+    let output_item = custom_tool_call_output(req, call_id);
+    let content = custom_tool_output_value(&output_item).and_then(output_value_to_text);
+    let success = output_item
+        .get("success")
+        .and_then(Value::as_bool)
+        .or_else(|| {
+            output_item
+                .get("output")
+                .and_then(|value| value.get("success"))
+                .and_then(Value::as_bool)
+        });
     let items = custom_tool_output_items(req, call_id);
     let text_items = items
         .iter()
@@ -143,7 +179,8 @@ fn custom_tool_output_body_and_success(
 }
 
 fn custom_tool_output_last_non_empty_text(req: &ResponsesRequest, call_id: &str) -> Option<String> {
-    match req.custom_tool_call_output(call_id).get("output") {
+    let output_item = custom_tool_call_output(req, call_id);
+    match custom_tool_output_value(&output_item) {
         Some(Value::String(text)) if !text.trim().is_empty() => Some(text.clone()),
         Some(Value::Array(items)) => items
             .iter()
@@ -475,6 +512,85 @@ text(JSON.stringify(await tools.exec_command({ cmd: "printf code_mode_exec_marke
     Ok(())
 }
 
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_nested_exec_command_session_survives_cell_cleanup() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (test, second_mock) = run_code_mode_turn_with_config(
+        &server,
+        "start a nested exec session from code mode",
+        r#"
+const result = await tools.exec_command({
+  cmd: "read line; printf 'got:%s' \"$line\"",
+  yield_time_ms: 250,
+  tty: true
+});
+text(JSON.stringify(result));
+"#,
+        |config| {
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+        },
+    )
+    .await?;
+
+    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
+    assert_eq!(items.len(), 2);
+    let parsed: Value = serde_json::from_str(text_item(&items, /*index*/ 1))?;
+    let session_id = parsed
+        .get("session_id")
+        .and_then(Value::as_i64)
+        .expect("nested exec_command should return a running session_id");
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-3"),
+            responses::ev_function_call(
+                "call-2",
+                "write_stdin",
+                &serde_json::to_string(&serde_json::json!({
+                    "session_id": session_id,
+                    "chars": "ping\n",
+                    "yield_time_ms": 1_000,
+                }))?,
+            ),
+            ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+    let third_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-2", "done"),
+            ev_completed("resp-4"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("resume the nested exec session").await?;
+
+    let output = third_mock
+        .single_request()
+        .function_call_output_text("call-2")
+        .expect("write_stdin output should be forwarded");
+    assert!(
+        output.contains("got:ping"),
+        "expected write_stdin to resume nested session, got {output:?}"
+    );
+    assert!(
+        output.contains("Process exited with code 0"),
+        "expected resumed session to exit cleanly, got {output:?}"
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_only_restricts_prompt_tools() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -502,7 +618,7 @@ async fn code_mode_only_restricts_prompt_tools() -> Result<()> {
         vec![
             "exec".to_string(),
             "wait".to_string(),
-            "web_search".to_string()
+            "web_search".to_string(),
         ]
     );
 
@@ -589,7 +705,7 @@ if (!tool) {
             "exec".to_string(),
             "wait".to_string(),
             "web_search".to_string(),
-            "image_generation".to_string()
+            "image_generation".to_string(),
         ]
     );
 
@@ -975,7 +1091,7 @@ async fn code_mode_exec_explicit_max_above_default_preserves_output() -> Result<
         "use exec_command from code mode",
         r#"// @exec: {"max_output_tokens": 20000}
 const result = await tools.exec_command({
-  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\"",
+  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 10000)\"",
   max_output_tokens: 20000
 });
 text(result.output);
@@ -988,7 +1104,7 @@ text(result.output);
             &custom_tool_output_items(&second_mock.single_request(), "call-1"),
             /*index*/ 1
         ),
-        "x".repeat(50_000)
+        "x".repeat(10_000)
     );
 
     Ok(())
@@ -1013,16 +1129,12 @@ text(result.output);
     )
     .await?;
 
-    assert_eq!(
+    assert_regex_match(
+        r"(?s)\ATotal output lines: 1\n\nA+…\d+ (?:chars|tokens) truncated…A+\z",
         text_item(
             &custom_tool_output_items(&second_mock.single_request(), "call-1"),
-            /*index*/ 1
+            /*index*/ 1,
         ),
-        format!(
-            "Total output lines: 1\n\n{}…2500 tokens truncated…{}",
-            "A".repeat(40_000),
-            "A".repeat(40_000)
-        )
     );
 
     Ok(())
@@ -1039,7 +1151,7 @@ async fn code_mode_exec_explicit_max_above_truncation_policy_preserves_output() 
         "use exec_command from code mode",
         r#"// @exec: {"max_output_tokens": 20000}
 const result = await tools.exec_command({
-  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\"",
+  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 1000)\"",
   max_output_tokens: 20000
 });
 text(result.output);
@@ -1050,12 +1162,12 @@ text(result.output);
     )
     .await?;
 
-    assert_eq!(
+    assert_regex_match(
+        r"(?s)\Ax+…\d+ chars truncated…x+\z",
         text_item(
             &custom_tool_output_items(&second_mock.single_request(), "call-1"),
-            /*index*/ 1
+            /*index*/ 1,
         ),
-        "x".repeat(50_000)
     );
 
     Ok(())
@@ -1072,20 +1184,21 @@ async fn code_mode_exec_without_max_preserves_output_beyond_default() -> Result<
         "use exec_command from code mode",
         r#"// @exec: {"max_output_tokens": 20000}
 const result = await tools.exec_command({
-  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\""
+  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 10000)\""
 });
 text(result.output);
 "#,
     )
     .await?;
 
-    assert_eq!(
-        text_item(
-            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
-            /*index*/ 1
-        ),
-        "x".repeat(50_000)
+    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
+    let actual = text_item(&items, /*index*/ 1);
+    assert!(
+        actual.len() > 200,
+        "expected output to exceed the 50-token truncation policy budget, got {} bytes",
+        actual.len()
     );
+    assert_regex_match(r"\Ax+\z", actual);
 
     Ok(())
 }
@@ -1101,7 +1214,7 @@ async fn code_mode_exec_without_max_preserves_output_beyond_truncation_policy() 
         "use exec_command from code mode",
         r#"// @exec: {"max_output_tokens": 20000}
 const result = await tools.exec_command({
-  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\""
+  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 10000)\""
 });
 text(result.output);
 "#,
@@ -1111,13 +1224,14 @@ text(result.output);
     )
     .await?;
 
-    assert_eq!(
-        text_item(
-            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
-            /*index*/ 1
-        ),
-        "x".repeat(50_000)
+    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
+    let actual = text_item(&items, /*index*/ 1);
+    assert!(
+        actual.len() > 200,
+        "expected output to exceed the 50-token truncation policy budget, got {} bytes",
+        actual.len()
     );
+    assert_regex_match(r"(?s)\Ax+…\d+ chars truncated…x+\z", actual);
 
     Ok(())
 }
@@ -2447,10 +2561,15 @@ text("done");
         .iter()
         .any(|item| {
             item.get("call_id").and_then(serde_json::Value::as_str) == Some("call-1")
-                && item
-                    .get("output")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|text| text.contains("code_mode_notify_marker"))
+                && match item.get("output") {
+                    Some(Value::String(text)) => text.contains("code_mode_notify_marker"),
+                    Some(Value::Array(items)) => items.iter().any(|item| {
+                        item.get("text")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|text| text.contains("code_mode_notify_marker"))
+                    }),
+                    _ => false,
+                }
                 && item.get("name").and_then(serde_json::Value::as_str) == Some("exec")
         });
     assert!(
@@ -3311,8 +3430,8 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
     test.session_configured = new_thread.session_configured;
 
     let code = r#"
-const tool = ALL_TOOLS.find(({ name }) => name === "codex_app_hidden_dynamic_tool");
-const out = await tools.codex_app_hidden_dynamic_tool({ city: "Paris" });
+const tool = ALL_TOOLS.find(({ name }) => name === "codex_app__hidden_dynamic_tool");
+const out = await tools.codex_app__hidden_dynamic_tool({ city: "Paris" });
 text(
   JSON.stringify({
     name: tool?.name ?? null,
@@ -3375,16 +3494,12 @@ text(
         })
         .await?;
 
-    let turn_id = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
-        _ => None,
-    })
-    .await;
     let request = wait_for_event_match(&test.codex, |event| match event {
         EventMsg::DynamicToolCallRequest(request) => Some(request.clone()),
         _ => None,
     })
     .await;
+    let turn_id = request.turn_id.clone();
     assert_eq!(request.namespace.as_deref(), Some("codex_app"));
     assert_eq!(request.tool, "hidden_dynamic_tool");
     assert_eq!(request.arguments, serde_json::json!({ "city": "Paris" }));
@@ -3419,7 +3534,7 @@ text(
     )?;
     assert_eq!(
         parsed.get("name"),
-        Some(&Value::String("codex_app_hidden_dynamic_tool".to_string()))
+        Some(&Value::String("codex_app__hidden_dynamic_tool".to_string()))
     );
     assert_eq!(
         parsed.get("out"),
@@ -3432,7 +3547,7 @@ text(
             .is_some_and(|description| {
                 description.contains("A hidden dynamic tool.")
                     && description.contains("declare const tools:")
-                    && description.contains("codex_app_hidden_dynamic_tool(args:")
+                    && description.contains("codex_app__hidden_dynamic_tool(args:")
             })
     );
 

@@ -123,7 +123,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1337.0"
 # Track the edition for all workspace crates in one place. Individual
 # crates can still override this value, but keeping it here means new
 # crates created with `cargo new -w ...` automatically inherit the 2024
@@ -507,18 +507,20 @@ debug = "none"
 strip = "symbols"
 
 [profile.release]
-lto = "thin"
-debug = "line-tables-only"
-split-debuginfo = "off"
-# Keep release binaries symbolicateable until packaging has archived the
-# sidecar symbols and stripped the binaries.
-strip = false
-
-# See https://github.com/openai/codex/issues/1411 for details.
-codegen-units = 1
+# Favor fast local release builds over LTO-heavy, size-optimized artifacts.
+opt-level = 1
+lto = false
+codegen-units = 256
+incremental = true
+debug = "none"
+strip = "none"
 
 [profile.profiling]
 inherits = "release"
+opt-level = 3
+codegen-units = 1
+incremental = false
+split-debuginfo = "off"
 debug = "full"
 lto = false
 strip = false

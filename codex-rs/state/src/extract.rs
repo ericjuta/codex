@@ -1,4 +1,6 @@
 use crate::model::ThreadMetadata;
+use codex_protocol::items::is_contextual_user_message_content;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
@@ -36,9 +38,8 @@ pub fn rollout_item_affects_thread_metadata(item: &RolloutItem) -> bool {
         RolloutItem::EventMsg(
             EventMsg::TokenCount(_) | EventMsg::UserMessage(_) | EventMsg::ThreadGoalUpdated(_),
         ) => true,
-        RolloutItem::EventMsg(_) | RolloutItem::ResponseItem(_) | RolloutItem::Compacted(_) => {
-            false
-        }
+        RolloutItem::ResponseItem(item) => response_item_user_preview(item).is_some(),
+        RolloutItem::EventMsg(_) | RolloutItem::Compacted(_) => false,
     }
 }
 
@@ -111,7 +112,31 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
     }
 }
 
-fn apply_response_item(_metadata: &mut ThreadMetadata, _item: &ResponseItem) {}
+fn apply_response_item(metadata: &mut ThreadMetadata, item: &ResponseItem) {
+    let Some(preview) = response_item_user_preview(item) else {
+        return;
+    };
+    if metadata.first_user_message.is_none() {
+        metadata.first_user_message = Some(preview.clone());
+    }
+    set_preview_if_empty(metadata, Some(preview.clone()));
+    if metadata.title.is_empty() {
+        metadata.title = preview;
+    }
+}
+
+fn response_item_user_preview(item: &ResponseItem) -> Option<String> {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return None;
+    };
+    if role != "user" {
+        return None;
+    }
+    if is_contextual_user_message_content(content) {
+        return None;
+    }
+    content_item_preview(content.as_slice())
+}
 
 fn set_preview_if_empty(metadata: &mut ThreadMetadata, preview: Option<String>) {
     if metadata.preview.is_none() {
@@ -142,6 +167,21 @@ fn user_message_preview(user: &UserMessageEvent) -> Option<String> {
     None
 }
 
+fn content_item_preview(content: &[ContentItem]) -> Option<String> {
+    for item in content {
+        if let ContentItem::InputText { text } = item {
+            let message = strip_user_message_prefix(text.as_str());
+            if !message.is_empty() {
+                return Some(message.to_string());
+            }
+        }
+    }
+    content
+        .iter()
+        .any(|item| matches!(item, ContentItem::InputImage { .. }))
+        .then(|| IMAGE_ONLY_USER_MESSAGE_PLACEHOLDER.to_string())
+}
+
 pub(crate) fn enum_to_string<T: Serialize>(value: &T) -> String {
     match serde_json::to_value(value) {
         Ok(Value::String(s)) => s,
@@ -153,6 +193,7 @@ pub(crate) fn enum_to_string<T: Serialize>(value: &T) -> String {
 #[cfg(test)]
 mod tests {
     use super::apply_rollout_item;
+    use super::rollout_item_affects_thread_metadata;
     use crate::model::ThreadMetadata;
     use chrono::DateTime;
     use chrono::Utc;
@@ -180,7 +221,7 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
-    fn response_item_user_messages_do_not_set_title_or_first_user_message() {
+    fn response_item_user_messages_set_fallback_metadata() {
         let mut metadata = metadata_for_test();
         let item = RolloutItem::ResponseItem(ResponseItem::Message {
             id: None,
@@ -193,9 +234,52 @@ mod tests {
 
         apply_rollout_item(&mut metadata, &item, "test-provider");
 
+        assert_eq!(
+            metadata.first_user_message.as_deref(),
+            Some("hello from response item")
+        );
+        assert_eq!(
+            metadata.preview.as_deref(),
+            Some("hello from response item")
+        );
+        assert_eq!(metadata.title, "hello from response item");
+    }
+
+    #[test]
+    fn contextual_user_response_items_do_not_set_fallback_metadata() {
+        let mut metadata = metadata_for_test();
+        let contextual_item = RolloutItem::ResponseItem(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>".to_string(),
+            }],
+            phase: None,
+        });
+
+        assert!(!rollout_item_affects_thread_metadata(&contextual_item));
+        apply_rollout_item(&mut metadata, &contextual_item, "test-provider");
+
         assert_eq!(metadata.first_user_message, None);
         assert_eq!(metadata.preview, None);
         assert_eq!(metadata.title, "");
+
+        let user_item = RolloutItem::ResponseItem(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "actual user request".to_string(),
+            }],
+            phase: None,
+        });
+        apply_rollout_item(&mut metadata, &user_item, "test-provider");
+
+        assert_eq!(
+            metadata.first_user_message.as_deref(),
+            Some("actual user request")
+        );
+        assert_eq!(metadata.preview.as_deref(), Some("actual user request"));
+        assert_eq!(metadata.title, "actual user request");
     }
 
     #[test]

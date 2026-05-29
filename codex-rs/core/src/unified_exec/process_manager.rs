@@ -341,6 +341,21 @@ fn terminate_process_on_network_denial(
     });
 }
 
+fn terminate_process_on_invocation_cancellation(
+    process: Arc<UnifiedExecProcess>,
+    cancellation_token: CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    let process_exited = process.cancellation_token();
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = cancellation_token.cancelled() => {
+                process.terminate();
+            }
+            _ = process_exited.cancelled() => {}
+        }
+    })
+}
+
 impl UnifiedExecProcessManager {
     pub(crate) async fn allocate_process_id(&self) -> i32 {
         loop {
@@ -405,6 +420,10 @@ impl UnifiedExecProcessManager {
                 deferred.clone(),
             );
         }
+        let invocation_cancellation_watcher = terminate_process_on_invocation_cancellation(
+            Arc::clone(&process),
+            context.cancellation_token.clone(),
+        );
 
         let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
         let event_ctx = ToolEventCtx::new(
@@ -609,6 +628,7 @@ impl UnifiedExecProcessManager {
             hook_command: Some(request.hook_command.clone()),
         };
 
+        invocation_cancellation_watcher.abort();
         Ok(response)
     }
 
