@@ -48,6 +48,7 @@ pub(crate) trait CellHost: Send + Sync + 'static {
         &self,
         call_id: String,
         text: String,
+        max_output_tokens: Option<usize>,
         cancellation_token: CancellationToken,
     ) -> impl Future<Output = Result<(), String>> + Send;
 

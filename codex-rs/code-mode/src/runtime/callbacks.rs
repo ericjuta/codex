@@ -266,6 +266,7 @@ pub(super) fn notify_callback(
         let _ = state.event_tx.send(RuntimeEvent::Notify {
             call_id: state.tool_call_id.clone(),
             text,
+            max_output_tokens: state.max_output_tokens,
         });
     }
     retval.set(v8::undefined(scope).into());

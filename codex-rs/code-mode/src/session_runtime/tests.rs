@@ -31,6 +31,7 @@ impl SessionRuntimeDelegate for RecordingDelegate {
         _call_id: String,
         _cell_id: CellId,
         _text: String,
+        _max_output_tokens: Option<usize>,
         _cancellation_token: CancellationToken,
     ) -> Result<(), String> {
         Ok(())
@@ -150,6 +151,7 @@ async fn termination_rejects_a_waiting_store_commit_before_the_next_cell_can_loa
             CreateCellRequest {
                 tool_call_id: "reader".to_string(),
                 enabled_tools: Vec::new(),
+                max_output_tokens: None,
                 source: r#"text(String(load("candidate")));"#.to_string(),
             },
             ObserveMode::YieldAfter(Duration::from_secs(1)),
@@ -172,6 +174,7 @@ fn execute_request(source: &str) -> CreateCellRequest {
     CreateCellRequest {
         tool_call_id: "call-1".to_string(),
         enabled_tools: Vec::new(),
+        max_output_tokens: None,
         source: source.to_string(),
     }
 }

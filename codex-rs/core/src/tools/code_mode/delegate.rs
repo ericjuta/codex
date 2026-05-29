@@ -7,6 +7,7 @@ use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSessionDelegate;
 use codex_code_mode::NotificationFuture;
 use codex_code_mode::ToolInvocationFuture;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use serde_json::Value as JsonValue;
@@ -18,6 +19,7 @@ use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
 use super::call_nested_tool;
 use crate::session::step_context::StepContext;
+use super::truncate_code_mode_result;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
@@ -73,6 +75,7 @@ impl CodeModeDispatchBroker {
                         call_id,
                         cell_id,
                         text,
+                        max_output_tokens,
                         cancellation_token,
                         response_tx,
                     } => {
@@ -83,7 +86,7 @@ impl CodeModeDispatchBroker {
                         )
                         .await
                         {
-                            host.notify(call_id, cell_id, text).await
+                            host.notify(call_id, cell_id, text, max_output_tokens).await
                         } else {
                             remove_dispatch_gate(&dispatch_gates, &cell_id);
                             Err("code mode notification cancelled".to_string())
@@ -210,6 +213,7 @@ impl CodeModeSessionDelegate for CodeModeDispatchBroker {
         call_id: String,
         cell_id: CellId,
         text: String,
+        max_output_tokens: Option<usize>,
         cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a> {
         Box::pin(async move {
@@ -222,6 +226,7 @@ impl CodeModeSessionDelegate for CodeModeDispatchBroker {
                     call_id,
                     cell_id,
                     text,
+                    max_output_tokens,
                     cancellation_token: cancellation_token.clone(),
                     response_tx,
                 })
@@ -252,6 +257,7 @@ enum DispatchMessage {
         call_id: String,
         cell_id: CellId,
         text: String,
+        max_output_tokens: Option<usize>,
         cancellation_token: CancellationToken,
         response_tx: oneshot::Sender<Result<(), String>>,
     },
@@ -290,18 +296,28 @@ impl CoreTurnHost {
         .map_err(|error| error.to_string())
     }
 
-    async fn notify(&self, call_id: String, cell_id: CellId, text: String) -> Result<(), String> {
+    async fn notify(
+        &self,
+        call_id: String,
+        cell_id: CellId,
+        text: String,
+        max_output_tokens: Option<usize>,
+    ) -> Result<(), String> {
         if text.trim().is_empty() {
             return Ok(());
         }
+        let output = FunctionCallOutputPayload::from_content_items(truncate_code_mode_result(
+            vec![FunctionCallOutputContentItem::InputText { text }],
+            max_output_tokens,
+        ));
         self.exec
             .session
             .inject_if_running(vec![ResponseItem::CustomToolCallOutput {
                 id: None,
                 call_id,
                 name: Some(PUBLIC_TOOL_NAME.to_string()),
-                output: FunctionCallOutputPayload::from_text(text),
-                internal_chat_message_metadata_passthrough: None,
+                output,
+                metadata: None,
             }])
             .await
             .map_err(|_| {

@@ -20,6 +20,7 @@ use crate::token_usage::TokenUsageInfo;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_models_cache;
+use crate::version::CODEX_CLI_VERSION;
 use chrono::Duration as ChronoDuration;
 use chrono::Local;
 use chrono::TimeZone;
@@ -206,6 +207,43 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+fn sanitize_cli_version(rendered: String) -> String {
+    pad_box_lines(rendered.replace(
+        &format!("OpenAI Codex (v{CODEX_CLI_VERSION})"),
+        "OpenAI Codex (v0.0.0)",
+    ))
+}
+
+fn pad_box_lines(rendered: String) -> String {
+    let frame_width = rendered
+        .lines()
+        .find(|line| line.starts_with('╭'))
+        .map(UnicodeWidthStr::width);
+    let Some(frame_width) = frame_width else {
+        return rendered;
+    };
+
+    rendered
+        .lines()
+        .map(|line| {
+            let width = UnicodeWidthStr::width(line);
+            if line.starts_with('│') && line.ends_with('│') && width < frame_width {
+                let mut line = line.to_string();
+                let insert_at = line.len() - '│'.len_utf8();
+                line.insert_str(insert_at, &" ".repeat(frame_width - width));
+                line
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn sanitize_status_snapshot(rendered_lines: Vec<String>) -> String {
+    sanitize_cli_version(sanitize_directory(rendered_lines).join("\n"))
+}
+
 fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) -> i64 {
     (*captured_at + ChronoDuration::seconds(seconds))
         .with_timezone(&Utc)
@@ -318,7 +356,7 @@ async fn status_snapshot_includes_reasoning_details() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_status_snapshot(rendered_lines);
     assert_snapshot!(sanitized);
 }
 
@@ -694,7 +732,7 @@ async fn status_snapshot_shows_active_user_defined_profile() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_status_snapshot(rendered_lines);
     assert_snapshot!(sanitized);
 }
 
@@ -849,7 +887,7 @@ async fn status_snapshot_shows_auto_review_permissions() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_status_snapshot(rendered_lines);
     assert_snapshot!(sanitized);
 }
 
@@ -949,7 +987,7 @@ async fn status_snapshot_includes_forked_from() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_status_snapshot(rendered_lines);
     assert_snapshot!(sanitized);
 }
 
@@ -1013,7 +1051,7 @@ async fn status_snapshot_includes_monthly_limit() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_status_snapshot(rendered_lines);
     assert_snapshot!(sanitized);
 }
 
@@ -1077,7 +1115,7 @@ async fn status_snapshot_includes_enterprise_monthly_credit_limit() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_status_snapshot(rendered_lines);
     assert_snapshot!(sanitized);
 
     let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 46));
@@ -1086,7 +1124,7 @@ async fn status_snapshot_includes_enterprise_monthly_credit_limit() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_status_snapshot(rendered_lines);
     assert_snapshot!(
         "status_snapshot_wraps_enterprise_monthly_credit_details_in_narrow_terminal",
         sanitized
@@ -1157,7 +1195,7 @@ async fn status_snapshot_uses_generic_limit_labels_for_unsupported_windows() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_status_snapshot(rendered_lines);
     assert_snapshot!(sanitized);
 }
 
@@ -1469,7 +1507,7 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_status_snapshot(rendered_lines);
 
     assert_snapshot!(sanitized);
 }
@@ -1518,7 +1556,7 @@ async fn status_snapshot_shows_missing_limits_message() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_status_snapshot(rendered_lines);
     assert_snapshot!(sanitized);
 }
 
@@ -1574,7 +1612,7 @@ async fn status_snapshot_uses_default_reasoning_when_config_empty() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_status_snapshot(rendered_lines);
     assert_snapshot!(sanitized);
 }
 
@@ -1640,7 +1678,7 @@ async fn status_snapshot_shows_refreshing_limits_notice() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_status_snapshot(rendered_lines);
     assert_snapshot!(sanitized);
 }
 
@@ -1711,7 +1749,7 @@ async fn status_snapshot_includes_credits_and_limits() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_status_snapshot(rendered_lines);
     assert_snapshot!(sanitized);
 }
 
@@ -1770,7 +1808,7 @@ async fn status_snapshot_shows_unavailable_limits_message() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_status_snapshot(rendered_lines);
     assert_snapshot!(sanitized);
 }
 
@@ -1829,7 +1867,7 @@ async fn status_snapshot_treats_refreshing_empty_limits_as_unavailable() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_status_snapshot(rendered_lines);
     assert_snapshot!(sanitized);
 }
 
@@ -1897,7 +1935,7 @@ async fn status_snapshot_shows_stale_limits_message() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_status_snapshot(rendered_lines);
     assert_snapshot!(sanitized);
 }
 
@@ -1969,7 +2007,7 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_status_snapshot(rendered_lines);
     assert_snapshot!(sanitized);
 }
 

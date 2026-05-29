@@ -196,6 +196,9 @@ pub struct ConfigToml {
     #[serde(default = "default_allow_login_shell")]
     pub allow_login_shell: Option<bool>,
 
+    /// Optional absolute path to patched zsh used by the shell_zsh_fork feature.
+    pub zsh_path: Option<AbsolutePathBuf>,
+
     /// Sandbox mode to use.
     pub sandbox_mode: Option<SandboxMode>,
 

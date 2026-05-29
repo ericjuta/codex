@@ -5521,6 +5521,14 @@
       ],
       "default": null,
       "description": "Windows-specific configuration."
+    },
+    "zsh_path": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Optional absolute path to patched zsh used by the shell_zsh_fork feature."
     }
   },
   "title": "ConfigToml",

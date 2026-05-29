@@ -262,11 +262,18 @@ impl<D: SessionRuntimeDelegate> CellHost for RuntimeCellHost<D> {
         &self,
         call_id: String,
         text: String,
+        max_output_tokens: Option<usize>,
         cancellation_token: CancellationToken,
     ) -> Result<(), String> {
         self.inner
             .delegate
-            .notify(call_id, self.cell_id.clone(), text, cancellation_token)
+            .notify(
+                call_id,
+                self.cell_id.clone(),
+                text,
+                max_output_tokens,
+                cancellation_token,
+            )
             .await
     }
 

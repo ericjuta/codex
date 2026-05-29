@@ -150,6 +150,15 @@ fn is_thread_settings_update_unsupported(source: &JSONRPCErrorError) -> bool {
             && source.message.contains(THREAD_SETTINGS_UPDATE_METHOD))
 }
 
+fn thread_goal_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
+    match err {
+        TypedRequestError::Server { source, .. } => {
+            color_eyre::eyre::eyre!("{}", source.message)
+        }
+        err => color_eyre::eyre::eyre!("{context}: {err}"),
+    }
+}
+
 /// Data collected during the TUI bootstrap phase that the main event loop
 /// needs to configure the UI, telemetry, and initial rate-limit prefetch.
 ///
@@ -933,7 +942,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("thread/goal/get failed in TUI")
+            .map_err(|err| thread_goal_request_error("thread/goal/get failed in TUI", err))
     }
 
     pub(crate) async fn thread_goal_set(
@@ -955,7 +964,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("thread/goal/set failed in TUI")
+            .map_err(|err| thread_goal_request_error("thread/goal/set failed in TUI", err))
     }
 
     pub(crate) async fn thread_goal_clear(
@@ -971,7 +980,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("thread/goal/clear failed in TUI")
+            .map_err(|err| thread_goal_request_error("thread/goal/clear failed in TUI", err))
     }
 
     pub(crate) async fn logout_account(&mut self) -> Result<()> {
@@ -1790,6 +1799,36 @@ mod tests {
     use codex_utils_path_uri::LegacyAppPathString;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
+
+    #[test]
+    fn thread_goal_request_error_surfaces_server_message() {
+        let error = TypedRequestError::Server {
+            method: "thread/goal/get".to_string(),
+            source: JSONRPCErrorError {
+                code: -32600,
+                message: "ephemeral thread does not support goals: thr_123".to_string(),
+                data: None,
+            },
+        };
+
+        assert_eq!(
+            thread_goal_request_error("thread/goal/get failed in TUI", error).to_string(),
+            "ephemeral thread does not support goals: thr_123"
+        );
+    }
+
+    #[test]
+    fn thread_goal_request_error_keeps_transport_context() {
+        let error = TypedRequestError::Transport {
+            method: "thread/goal/get".to_string(),
+            source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, "broken pipe"),
+        };
+
+        assert_eq!(
+            thread_goal_request_error("thread/goal/get failed in TUI", error).to_string(),
+            "thread/goal/get failed in TUI: thread/goal/get transport error: broken pipe"
+        );
+    }
 
     async fn build_config(temp_dir: &TempDir) -> Config {
         ConfigBuilder::default()

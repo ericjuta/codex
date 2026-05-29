@@ -22,12 +22,15 @@ pub(super) fn spawn_notification<H: CellHost>(
     host: Arc<H>,
     call_id: String,
     text: String,
+    max_output_tokens: Option<usize>,
     cancellation_token: CancellationToken,
     task_failure_handler: Option<TaskFailureHandler>,
 ) {
     tasks.spawn(async move {
         let callback =
-            AssertUnwindSafe(async move { host.notify(call_id, text, cancellation_token).await })
+            AssertUnwindSafe(async move { host
+                .notify(call_id, text, max_output_tokens, cancellation_token)
+                .await })
                 .catch_unwind()
                 .await;
         match callback {

@@ -186,7 +186,10 @@ fn parse_completed(
                 if trimmed_stdout.is_empty() {
                 } else if let Some(parsed) = output_parser::parse_post_tool_use(&run_result.stdout)
                 {
-                    if let Some(system_message) = parsed.universal.system_message {
+                    let suppress_output = parsed.universal.suppress_output;
+                    if let Some(system_message) = parsed.universal.system_message
+                        && !suppress_output
+                    {
                         entries.push(HookOutputEntry {
                             kind: HookOutputEntryKind::Warning,
                             text: system_message,
@@ -196,28 +199,31 @@ fn parse_completed(
                         && parsed.invalid_block_reason.is_none()
                         && let Some(additional_context) = parsed.additional_context
                     {
-                        common::append_additional_context(
+                        common::append_additional_context_with_visibility(
                             &mut entries,
                             &mut additional_contexts_for_model,
                             additional_context,
+                            suppress_output,
                         );
                     }
                     if !parsed.universal.continue_processing {
                         status = HookRunStatus::Stopped;
-                        let stop_text = parsed
-                            .universal
-                            .stop_reason
-                            .unwrap_or_else(|| "PostToolUse hook stopped execution".to_string());
-                        entries.push(HookOutputEntry {
-                            kind: HookOutputEntryKind::Stop,
-                            text: stop_text.clone(),
-                        });
+                        let stop_text =
+                            parsed.universal.stop_reason.clone().unwrap_or_else(|| {
+                                "PostToolUse hook stopped execution".to_string()
+                            });
                         let model_feedback = parsed
                             .reason
                             .as_deref()
                             .and_then(common::trimmed_non_empty)
-                            .unwrap_or(stop_text);
+                            .unwrap_or_else(|| stop_text.clone());
                         feedback_messages_for_model.push(model_feedback);
+                        if !suppress_output {
+                            entries.push(HookOutputEntry {
+                                kind: HookOutputEntryKind::Stop,
+                                text: stop_text,
+                            });
+                        }
                     } else if let Some(invalid_reason) = parsed.invalid_reason {
                         status = HookRunStatus::Failed;
                         entries.push(HookOutputEntry {
@@ -234,10 +240,12 @@ fn parse_completed(
                         status = HookRunStatus::Blocked;
                         should_block = true;
                         if let Some(reason) = parsed.reason {
-                            entries.push(HookOutputEntry {
-                                kind: HookOutputEntryKind::Feedback,
-                                text: reason.clone(),
-                            });
+                            if !suppress_output {
+                                entries.push(HookOutputEntry {
+                                    kind: HookOutputEntryKind::Feedback,
+                                    text: reason.clone(),
+                                });
+                            }
                             feedback_messages_for_model.push(reason);
                         }
                     }
@@ -568,6 +576,7 @@ mod tests {
             source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
             env: std::collections::HashMap::new(),
+            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
         }
     }
 

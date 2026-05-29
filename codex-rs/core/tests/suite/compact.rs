@@ -3636,6 +3636,31 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
         body_contains_text(&auto_compact_body, SUMMARIZATION_PROMPT),
         "mid-turn auto compact request should include the summarization prompt after exceeding 95% (limit {limit})"
     );
+    let first_turn_metadata: Value = serde_json::from_str(
+        &first_turn_mock
+            .single_request()
+            .header("x-codex-turn-metadata")
+            .expect("first request should include turn metadata"),
+    )
+    .expect("first turn metadata should be valid json");
+    let post_auto_compact_metadata: Value = serde_json::from_str(
+        &post_auto_compact_mock
+            .single_request()
+            .header("x-codex-turn-metadata")
+            .expect("post-compaction request should include turn metadata"),
+    )
+    .expect("post-compaction turn metadata should be valid json");
+    assert_ne!(
+        first_turn_metadata["window_id"], post_auto_compact_metadata["window_id"],
+        "post-compaction continuation request should refresh turn metadata for the new context window"
+    );
+    assert_eq!(
+        post_auto_compact_metadata["window_id"].as_str(),
+        post_auto_compact_mock
+            .single_request()
+            .header("x-codex-window-id")
+            .as_deref()
+    );
 
     insta::assert_snapshot!(
         "mid_turn_compaction_shapes",

@@ -448,4 +448,23 @@ mod tests {
         assert!(error.contains("failed to spawn code-mode host"));
         service.shutdown().await.expect("shutdown unused service");
     }
+    #[test]
+    fn truncate_code_mode_result_bounds_text_items() {
+        let original = "notification output ".repeat(1_000);
+        let items = truncate_code_mode_result(
+            vec![FunctionCallOutputContentItem::InputText {
+                text: original.clone(),
+            }],
+            Some(10),
+        );
+
+        let [FunctionCallOutputContentItem::InputText { text }] = items.as_slice() else {
+            panic!("expected a single text item");
+        };
+        assert_ne!(text, &original);
+        assert!(
+            text.contains("tokens truncated"),
+            "expected token truncation marker, got {text}"
+        );
+    }
 }

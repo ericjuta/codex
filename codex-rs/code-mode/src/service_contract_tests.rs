@@ -68,6 +68,7 @@ impl CodeModeSessionDelegate for HeldNotificationDelegate {
         _call_id: String,
         _cell_id: CellId,
         _text: String,
+        _max_output_tokens: Option<usize>,
         cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a> {
         Box::pin(async move {
@@ -132,6 +133,7 @@ impl CodeModeSessionDelegate for BlockingDelegate {
         _call_id: String,
         _cell_id: CellId,
         _text: String,
+        _max_output_tokens: Option<usize>,
         cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a> {
         Box::pin(async move {

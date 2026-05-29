@@ -27,7 +27,6 @@ use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
-use codex_protocol::error::CodexErr;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -42,6 +41,7 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -299,6 +299,23 @@ async fn non_openai_responses_requests_omit_item_passthrough_metadata() {
             item.get("id").is_none(),
             "input item should omit generated IDs: {item}"
         );
+    }
+}
+
+#[derive(Debug)]
+struct SamplingTurnBodyContains(&'static str);
+
+impl wiremock::Match for SamplingTurnBodyContains {
+    fn matches(&self, request: &wiremock::Request) -> bool {
+        let Some(turn_metadata) = request
+            .headers
+            .get("x-codex-turn-metadata")
+            .and_then(|value| value.to_str().ok())
+        else {
+            return false;
+        };
+        turn_metadata.contains(r#""request_kind":"turn""#)
+            && String::from_utf8_lossy(&request.body).contains(self.0)
     }
 }
 
@@ -2157,7 +2174,7 @@ async fn skills_use_aliases_in_developer_message_under_budget_pressure() {
         "expected root alias for {expected_root_str}: {developer_messages:?}"
     );
     assert!(
-        developer_text.contains("- s00: d (file: r0/s00/SKILL.md)"),
+        developer_text.contains("- s00:") && developer_text.contains("(file: r0/s00/SKILL.md)"),
         "expected skill path to use root alias: {developer_messages:?}"
     );
     assert!(
@@ -3301,17 +3318,20 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
     let server = MockServer::start().await;
 
     const EFFECTIVE_CONTEXT_WINDOW: i64 = (272_000 * 95) / 100;
+    const CONTEXT_WINDOW_COMPACTION_RETRIES_PER_TURN: usize = 3;
 
-    mount_sse_once_match(
-        &server,
-        body_string_contains("trigger context window"),
-        sse_failed(
-            "resp_context_window",
-            "context_length_exceeded",
-            "Your input exceeds the context window of this model. Please adjust your input and try again.",
-        ),
-    )
-    .await;
+    for attempt in 0..=CONTEXT_WINDOW_COMPACTION_RETRIES_PER_TURN {
+        mount_sse_once_match(
+            &server,
+            SamplingTurnBodyContains("trigger context window"),
+            sse_failed(
+                &format!("resp_context_window_{attempt}"),
+                "context_length_exceeded",
+                "Your input exceeds the context window of this model. Please adjust your input and try again.",
+            ),
+        )
+        .await;
+    }
 
     mount_sse_once_match(
         &server,
@@ -3322,6 +3342,26 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
         ]),
     )
     .await;
+
+    for attempt in 0..CONTEXT_WINDOW_COMPACTION_RETRIES_PER_TURN {
+        mount_sse_once_match(
+            &server,
+            header_regex("x-codex-turn-metadata", r#""request_kind":"compaction""#),
+            sse(vec![
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": format!(
+                            "compact before context window failure {attempt}"
+                        ),
+                    }
+                }),
+                ev_completed(&format!("compact_context_window_{attempt}")),
+            ]),
+        )
+        .await;
+    }
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
@@ -3386,11 +3426,11 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
     );
 
     let error_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
-    let expected_context_window_message = CodexErr::ContextWindowExceeded.to_string();
     assert!(
         matches!(
             error_event,
-            EventMsg::Error(ref err) if err.message == expected_context_window_message
+            EventMsg::Error(ref err)
+                if err.codex_error_info.as_ref() == Some(&CodexErrorInfo::ContextWindowExceeded)
         ),
         "expected context window error; got {error_event:?}"
     );

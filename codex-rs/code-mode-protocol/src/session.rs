@@ -97,6 +97,7 @@ pub trait CodeModeSessionDelegate: Send + Sync {
         call_id: String,
         cell_id: CellId,
         text: String,
+        max_output_tokens: Option<usize>,
         cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a>;
 

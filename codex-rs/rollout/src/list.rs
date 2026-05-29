@@ -22,6 +22,9 @@ use crate::protocol::EventMsg;
 use crate::state_db;
 use codex_file_search as file_search;
 use codex_protocol::ThreadId;
+use codex_protocol::items::is_contextual_user_message_content;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
@@ -1167,7 +1170,20 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     summary.saw_session_meta = true;
                 }
             }
-            RolloutItem::ResponseItem(_) | RolloutItem::InterAgentCommunication(_) => {
+            RolloutItem::ResponseItem(item) => {
+                summary
+                    .created_at
+                    .get_or_insert_with(|| rollout_line.timestamp.clone());
+                if let Some(preview) = response_item_preview(&item) {
+                    if summary.preview.is_none() {
+                        summary.preview = Some(preview.clone());
+                    }
+                    if summary.first_user_message.is_none() {
+                        summary.first_user_message = Some(preview);
+                    }
+                }
+            }
+            RolloutItem::InterAgentCommunication(_) => {
                 summary
                     .created_at
                     .get_or_insert_with(|| rollout_line.timestamp.clone());
@@ -1280,6 +1296,30 @@ fn event_msg_preview(event: &EventMsg) -> Option<String> {
         }
         _ => None,
     }
+}
+
+fn response_item_preview(item: &ResponseItem) -> Option<String> {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return None;
+    };
+    if role != "user" {
+        return None;
+    }
+    if is_contextual_user_message_content(content) {
+        return None;
+    }
+    for item in content {
+        if let ContentItem::InputText { text } = item {
+            let message = strip_user_message_prefix(text.as_str());
+            if !message.is_empty() {
+                return Some(message.to_string());
+            }
+        }
+    }
+    content
+        .iter()
+        .any(|item| matches!(item, ContentItem::InputImage { .. }))
+        .then(|| "[Image]".to_string())
 }
 
 /// Read the SessionMetaLine from the head of a rollout file for reuse by

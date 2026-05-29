@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use crate::SkillInjections;
 use crate::build_skill_injections;
@@ -124,6 +126,9 @@ use tracing::instrument;
 use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
+
+const MAX_CONTEXT_WINDOW_COMPACTION_RETRIES_PER_TURN: u8 = 3;
+const IN_FLIGHT_DRAIN_CANCEL_GRACE: Duration = Duration::from_secs(/*secs*/ 2);
 
 /// Takes initial turn input and runs a loop where, at each sampling request,
 /// the model replies with either:
@@ -276,7 +281,7 @@ pub(crate) async fn run_turn(
             .instrument(trace_span!("run_turn.prepare_sampling_request_input"))
             .await;
 
-            let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
+            let _responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
                 sess.installation_id.clone(),
                 window_id,
                 CodexResponsesRequestKind::Turn,
@@ -287,7 +292,6 @@ pub(crate) async fn run_turn(
                 Arc::clone(&turn_extension_data),
                 Arc::clone(&turn_diff_tracker),
                 &mut client_session,
-                &responses_metadata,
                 sampling_request_input,
                 cancellation_token.child_token(),
             )
@@ -1075,7 +1079,6 @@ async fn run_sampling_request(
     turn_store: Arc<codex_extension_api::ExtensionData>,
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
-    responses_metadata: &CodexResponsesMetadata,
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<(SamplingRequestResult, Vec<ResponseItem>)> {
@@ -1098,6 +1101,7 @@ async fn run_sampling_request(
     );
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
+    let mut context_window_compaction_retries = 0;
     let mut initial_input = Some(input);
     let mut original_input = None;
     loop {
@@ -1114,13 +1118,19 @@ async fn run_sampling_request(
             turn_context.as_ref(),
             base_instructions.clone(),
         );
+        let window_id = sess.current_window_id().await;
+        let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
+            sess.installation_id.clone(),
+            window_id,
+            CodexResponsesRequestKind::Turn,
+        );
         let err = match try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_store),
             client_session,
-            responses_metadata,
+            &responses_metadata,
             Arc::clone(&turn_diff_tracker),
             &prompt,
             cancellation_token.child_token(),
@@ -1132,7 +1142,23 @@ async fn run_sampling_request(
             }
             Err(CodexErr::ContextWindowExceeded) => {
                 sess.set_total_tokens_full(&turn_context).await;
-                return Err(CodexErr::ContextWindowExceeded);
+                if context_window_compaction_retries
+                    >= MAX_CONTEXT_WINDOW_COMPACTION_RETRIES_PER_TURN
+                {
+                    return Err(CodexErr::ContextWindowExceeded);
+                }
+                context_window_compaction_retries += 1;
+                run_auto_compact(
+                    &sess,
+                    &turn_context,
+                    client_session,
+                    InitialContextInjection::BeforeLastUserMessage,
+                    CompactionReason::ContextLimit,
+                    CompactionPhase::MidTurn,
+                )
+                .await?;
+                retries = 0;
+                continue;
             }
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
@@ -1852,10 +1878,30 @@ async fn handle_assistant_item_done_in_plan_mode(
 #[instrument(level = "trace", skip_all)]
 async fn drain_in_flight(
     in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
+    wait_for_cancelled_drain: &mut VecDeque<bool>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    cancellation_token: &CancellationToken,
 ) -> CodexResult<()> {
-    while let Some(res) = in_flight.next().await {
+    loop {
+        let res = if cancellation_token.is_cancelled() {
+            if !wait_for_cancelled_drain.front().copied().unwrap_or(true) {
+                break;
+            }
+            tokio::time::timeout(IN_FLIGHT_DRAIN_CANCEL_GRACE, in_flight.next())
+                .await
+                .ok()
+                .flatten()
+        } else {
+            tokio::select! {
+                res = in_flight.next() => res,
+                _ = cancellation_token.cancelled() => continue,
+            }
+        };
+        let Some(res) = res else {
+            break;
+        };
+        wait_for_cancelled_drain.pop_front();
         match res {
             Ok(response_input) => {
                 let response_item = response_input.into();
@@ -1925,6 +1971,7 @@ async fn try_run_sampling_request(
         .await??;
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
+    let mut wait_for_cancelled_drain: VecDeque<bool> = VecDeque::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
@@ -2066,6 +2113,7 @@ async fn try_run_sampling_request(
                     };
                 if let Some(tool_future) = output_result.tool_future {
                     in_flight.push_back(tool_future);
+                    wait_for_cancelled_drain.push_back(output_result.wait_for_cancelled_drain);
                 }
                 if let Some(agent_message) = output_result.last_agent_message {
                     last_agent_message = Some(agent_message);
@@ -2361,7 +2409,14 @@ async fn try_run_sampling_request(
     } else {
         Some(turn_context.turn_timing_state.begin_tool_blocking())
     };
-    drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+    drain_in_flight(
+        &mut in_flight,
+        &mut wait_for_cancelled_drain,
+        sess.clone(),
+        turn_context.clone(),
+        &cancellation_token,
+    )
+    .await?;
     drop(tool_blocking_timing_guard);
 
     if should_emit_token_count {

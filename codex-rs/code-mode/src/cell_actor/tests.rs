@@ -36,6 +36,7 @@ impl CellHost for TestHost {
         &self,
         _call_id: String,
         _text: String,
+        _max_output_tokens: Option<usize>,
         _cancellation_token: CancellationToken,
     ) -> Result<(), String> {
         Ok(())

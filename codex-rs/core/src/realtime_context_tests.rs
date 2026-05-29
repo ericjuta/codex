@@ -243,6 +243,7 @@ fn fixed_section_budgets_apply_per_section_without_total_blob_truncation() {
 #[tokio::test]
 async fn workspace_section_requires_meaningful_structure() {
     let cwd = TempDir::new().expect("tempdir");
+    fs::write(cwd.path().join(".git"), "gitdir: not-a-worktree\n").expect("write git barrier");
     assert_eq!(
         build_workspace_section_with_user_root(&cwd.path().abs(), /*user_root*/ None).await,
         None
@@ -305,6 +306,7 @@ async fn recent_work_section_groups_threads_by_cwd() {
     fs::create_dir_all(&workspace_a).expect("create workspace a");
     fs::create_dir_all(&workspace_b).expect("create workspace b");
     fs::create_dir_all(&outside).expect("create outside dir");
+    fs::write(outside.join(".git"), "gitdir: not-a-worktree\n").expect("write git barrier");
 
     let recent_threads = vec![
         stored_thread(

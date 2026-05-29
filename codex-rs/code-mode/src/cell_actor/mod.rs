@@ -386,12 +386,17 @@ async fn run_cell<H: CellHost>(
                             );
                         }
                     }
-                    RuntimeEvent::Notify { call_id, text } => {
+                    RuntimeEvent::Notify {
+                        call_id,
+                        text,
+                        max_output_tokens,
+                    } => {
                         spawn_notification(
                             &mut notification_tasks,
                             Arc::clone(&host),
                             call_id,
                             text,
+                            max_output_tokens,
                             callback_cancellation_token.child_token(),
                             task_failure_handler.clone(),
                         );

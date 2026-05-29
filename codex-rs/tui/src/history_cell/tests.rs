@@ -7,6 +7,7 @@ use crate::exec_cell::ExecCell;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::session_state::ThreadSessionState;
+use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::word_wrap_lines;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::McpAuthStatus;
@@ -30,6 +31,7 @@ use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::Tool;
 use rmcp::model::Content;
+use unicode_width::UnicodeWidthStr;
 
 const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 async fn test_config() -> Config {
@@ -45,6 +47,36 @@ fn test_cwd() -> PathBuf {
     // These tests only need a stable absolute cwd; using temp_dir() avoids baking Unix- or
     // Windows-specific root semantics into the fixtures.
     std::env::temp_dir()
+}
+
+fn pad_box_lines(rendered: String) -> String {
+    let frame_width = rendered
+        .lines()
+        .find(|line| line.starts_with('╭'))
+        .map(UnicodeWidthStr::width);
+    let Some(frame_width) = frame_width else {
+        return rendered;
+    };
+
+    rendered
+        .lines()
+        .map(|line| {
+            let width = UnicodeWidthStr::width(line);
+            if line.starts_with('│') && line.ends_with('│') && width < frame_width {
+                let mut line = line.to_string();
+                let insert_at = line.len() - '│'.len_utf8();
+                line.insert_str(insert_at, &" ".repeat(frame_width - width));
+                line
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn sanitize_cli_version(rendered: String) -> String {
+    pad_box_lines(rendered.replace(CODEX_CLI_VERSION, "0.0.0"))
 }
 
 #[test]
@@ -636,7 +668,7 @@ async fn session_info_availability_nux_tooltip_snapshot() {
         /*show_fast_status*/ false,
     );
 
-    let rendered = render_transcript(&cell).join("\n");
+    let rendered = sanitize_cli_version(render_transcript(&cell).join("\n"));
     insta::assert_snapshot!(rendered);
 }
 
@@ -1123,7 +1155,8 @@ fn web_search_history_cell_snapshot() {
 fn standalone_unix_update_available_history_cell_snapshot() {
     let cell =
         UpdateAvailableHistoryCell::new("9.9.9".to_string(), Some(UpdateAction::StandaloneUnix));
-    let rendered = render_lines(&cell.display_lines(/*width*/ 110)).join("\n");
+    let rendered =
+        sanitize_cli_version(render_lines(&cell.display_lines(/*width*/ 110)).join("\n"));
 
     insta::assert_snapshot!(rendered);
 }
@@ -1132,7 +1165,8 @@ fn standalone_unix_update_available_history_cell_snapshot() {
 fn standalone_windows_update_available_history_cell_snapshot() {
     let cell =
         UpdateAvailableHistoryCell::new("9.9.9".to_string(), Some(UpdateAction::StandaloneWindows));
-    let rendered = render_lines(&cell.display_lines(/*width*/ 110)).join("\n");
+    let rendered =
+        sanitize_cli_version(render_lines(&cell.display_lines(/*width*/ 110)).join("\n"));
 
     insta::assert_snapshot!(rendered);
 }

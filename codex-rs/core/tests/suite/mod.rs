@@ -61,6 +61,8 @@ mod guardian_review;
 mod hooks;
 #[cfg(not(target_os = "windows"))]
 mod hooks_mcp;
+#[cfg(not(target_os = "windows"))]
+mod hooks_operator_smoke;
 mod image_rollout;
 mod items;
 mod json_result;

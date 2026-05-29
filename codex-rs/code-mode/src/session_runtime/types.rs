@@ -78,6 +78,7 @@ pub(crate) enum ImageDetail {
 pub(crate) struct CreateCellRequest {
     pub(crate) tool_call_id: String,
     pub(crate) enabled_tools: Vec<ToolDefinition>,
+    pub(crate) max_output_tokens: Option<usize>,
     pub(crate) source: String,
 }
 
@@ -128,6 +129,7 @@ pub(crate) trait SessionRuntimeDelegate: Send + Sync + 'static {
         call_id: String,
         cell_id: CellId,
         text: String,
+        max_output_tokens: Option<usize>,
         cancellation_token: CancellationToken,
     ) -> impl Future<Output = Result<(), String>> + Send;
 

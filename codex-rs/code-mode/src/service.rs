@@ -48,6 +48,7 @@ impl CodeModeSessionDelegate for NoopCodeModeSessionDelegate {
         _call_id: String,
         _cell_id: CellId,
         _text: String,
+        _max_output_tokens: Option<usize>,
         _cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a> {
         Box::pin(async { Ok(()) })
@@ -283,6 +284,7 @@ impl runtime::SessionRuntimeDelegate for ProtocolDelegate {
         call_id: String,
         cell_id: runtime::CellId,
         text: String,
+        max_output_tokens: Option<usize>,
         cancellation_token: CancellationToken,
     ) -> Result<(), String> {
         self.delegate
@@ -290,6 +292,7 @@ impl runtime::SessionRuntimeDelegate for ProtocolDelegate {
                 call_id,
                 protocol_cell_id(&cell_id),
                 text,
+                max_output_tokens,
                 cancellation_token,
             )
             .await
@@ -319,6 +322,7 @@ fn runtime_request(request: ExecuteRequest) -> runtime::CreateCellRequest {
                 },
             })
             .collect(),
+        max_output_tokens: request.max_output_tokens,
         source: request.source,
     }
 }

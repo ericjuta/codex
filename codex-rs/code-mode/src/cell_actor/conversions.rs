@@ -33,7 +33,7 @@ pub(super) fn runtime_request(request: CellRequest) -> ExecuteRequest {
             .collect(),
         source: request.source,
         yield_time_ms: None,
-        max_output_tokens: None,
+        max_output_tokens: request.max_output_tokens,
     }
 }
 

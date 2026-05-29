@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::Result;
 use codex_features::Feature;
@@ -18,6 +19,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -114,34 +116,66 @@ const FULL_MIX: &[Step] = &[
     Step::Assistant,
 ];
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_compaction_parity_manual_transcripts() -> Result<()> {
-    skip_if_no_network!(Ok(()));
+#[test]
+fn remote_compaction_parity_manual_transcript_assistant_only() -> Result<()> {
+    run_manual_transcript_scenario(Scenario {
+        name: "assistant_only",
+        steps: ASSISTANT_ONLY,
+    })
+}
 
-    let scenarios = [
-        Scenario {
-            name: "assistant_only",
-            steps: ASSISTANT_ONLY,
-        },
-        Scenario {
-            name: "reasoning_image",
-            steps: REASONING_IMAGE,
-        },
-        Scenario {
-            name: "tool_mix",
-            steps: TOOL_MIX,
-        },
-        Scenario {
-            name: "full_mix",
-            steps: FULL_MIX,
-        },
-    ];
+#[test]
+fn remote_compaction_parity_manual_transcript_reasoning_image() -> Result<()> {
+    run_manual_transcript_scenario(Scenario {
+        name: "reasoning_image",
+        steps: REASONING_IMAGE,
+    })
+}
 
-    for scenario in scenarios {
-        compare_manual_scenario(&scenario, RunSettings::default()).await?;
+#[test]
+fn remote_compaction_parity_manual_transcript_tool_mix() -> Result<()> {
+    run_manual_transcript_scenario(Scenario {
+        name: "tool_mix",
+        steps: TOOL_MIX,
+    })
+}
+
+#[test]
+fn remote_compaction_parity_manual_transcript_full_mix() -> Result<()> {
+    run_manual_transcript_scenario(Scenario {
+        name: "full_mix",
+        steps: FULL_MIX,
+    })
+}
+
+fn run_manual_transcript_scenario(scenario: Scenario) -> Result<()> {
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+    const WORKER_THREADS: usize = 2;
+    let scenario_name = scenario.name;
+    let thread_name = format!("remote_compaction_parity_manual_transcript_{scenario_name}");
+
+    let handle = std::thread::Builder::new()
+        .name(thread_name)
+        .stack_size(TEST_STACK_SIZE_BYTES)
+        .spawn(move || -> Result<()> {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(WORKER_THREADS)
+                .thread_stack_size(TEST_STACK_SIZE_BYTES)
+                .enable_all()
+                .build()?;
+            runtime.block_on(async {
+                skip_if_no_network!(Ok(()));
+                compare_manual_scenario(&scenario, RunSettings::default()).await?;
+                Ok(())
+            })
+        })?;
+
+    match handle.join() {
+        Ok(result) => result,
+        Err(_) => Err(anyhow::anyhow!(
+            "remote_compaction_parity_manual_transcript {scenario_name} thread panicked"
+        )),
     }
-
-    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -617,7 +651,14 @@ async fn submit_user_input(codex: &codex_core::CodexThread, items: Vec<UserInput
 }
 
 async fn wait_for_turn_complete(codex: &codex_core::CodexThread) {
-    wait_for_event(codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    const PARITY_EVENT_TIMEOUT_SECS: u64 = 30;
+
+    wait_for_event_with_timeout(
+        codex,
+        |ev| matches!(ev, EventMsg::TurnComplete(_)),
+        Duration::from_secs(PARITY_EVENT_TIMEOUT_SECS),
+    )
+    .await;
 }
 
 fn user_input_for_step(scenario_name: &str, idx: usize, step: Step) -> Vec<UserInput> {
@@ -994,6 +1035,7 @@ fn normalize_tmp_prefix_before_marker(text: &mut String, marker: &str) {
             .or_else(|| prefix.rfind("/var/folders/"))
             .or_else(|| prefix.rfind("/private/tmp/.tmp"))
             .or_else(|| prefix.rfind("/tmp/.tmp"))
+            .or_else(|| prefix.rfind("/var/tmp/"))
             .or(windows_appdata_temp_start);
         if let Some(start_index) = start {
             text.replace_range(start_index..marker_index, "<CODEX_HOME>");
@@ -1008,12 +1050,14 @@ fn normalize_tmp_prefix_before_marker(text: &mut String, marker: &str) {
 fn normalize_string_rewrites_linux_temp_skill_paths() {
     let text = normalize_string(
         "file: /tmp/.tmp5YYdK3/skills/.system/imagegen/SKILL.md and \
-         /private/tmp/.tmpw3wqF9/skills/custom/SKILL.md",
+         /private/tmp/.tmpw3wqF9/skills/custom/SKILL.md and \
+         /var/tmp/codex-rebase-core-rerun/.tmp7d92Tc/skills/custom/SKILL.md",
     );
 
     assert_eq!(
         text,
         "file: <CODEX_HOME>/skills/.system/imagegen/SKILL.md and \
+         <CODEX_HOME>/skills/custom/SKILL.md and \
          <CODEX_HOME>/skills/custom/SKILL.md"
     );
 }

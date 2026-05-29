@@ -62,6 +62,7 @@ pub(crate) enum RuntimeEvent {
     Notify {
         call_id: String,
         text: String,
+        max_output_tokens: Option<usize>,
     },
     Result {
         stored_value_writes: HashMap<String, JsonValue>,
@@ -99,6 +100,7 @@ pub(crate) fn spawn_runtime(
         tool_call_id: request.tool_call_id,
         enabled_tools,
         source: request.source,
+        max_output_tokens: request.max_output_tokens,
         stored_values,
     };
 
@@ -140,6 +142,7 @@ struct RuntimeConfig {
     tool_call_id: String,
     enabled_tools: Vec<EnabledToolMetadata>,
     source: String,
+    max_output_tokens: Option<usize>,
     stored_values: HashMap<String, JsonValue>,
 }
 
@@ -153,6 +156,7 @@ pub(super) struct RuntimeState {
     next_tool_call_id: u64,
     next_timeout_id: u64,
     tool_call_id: String,
+    max_output_tokens: Option<usize>,
     runtime_command_tx: std_mpsc::Sender<RuntimeCommand>,
     exit_requested: bool,
 }
@@ -211,6 +215,7 @@ fn run_runtime(
         next_tool_call_id: 1,
         next_timeout_id: 1,
         tool_call_id: config.tool_call_id,
+        max_output_tokens: config.max_output_tokens,
         runtime_command_tx,
         exit_requested: false,
     });

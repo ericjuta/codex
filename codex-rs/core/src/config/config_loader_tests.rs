@@ -2739,6 +2739,7 @@ async fn codex_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::R
     let home_dir = tmp.path().join("home");
     let codex_home = home_dir.join(".codex");
     tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::create_dir_all(home_dir.join(".git")).await?;
     tokio::fs::write(
         codex_home.join(CONFIG_TOML_FILE),
         r#"foo = "user"
@@ -2857,6 +2858,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     let project_root = tmp.path().join("project");
     let nested = project_root.join("child");
     tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::create_dir_all(project_root.join(".git")).await?;
     tokio::fs::write(
         nested.join(".codex").join(CONFIG_TOML_FILE),
         r#"foo = "child"

@@ -153,6 +153,10 @@ async fn handle_spawn_agent(
             .into(),
         )
         .await;
+    session
+        .input_queue
+        .accept_mailbox_delivery_for_current_turn(&session.active_turn, &turn.sub_id)
+        .await;
     let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
     turn.session_telemetry.counter(
         "codex.multi_agent.spawn",
@@ -199,12 +203,18 @@ impl SpawnAgentArgs {
             ));
         }
 
-        let fork_turns = self
+        let explicit_fork_turns = self
             .fork_turns
             .as_deref()
             .map(str::trim)
-            .filter(|fork_turns| !fork_turns.is_empty())
-            .unwrap_or("all");
+            .filter(|fork_turns| !fork_turns.is_empty());
+        let fork_turns = explicit_fork_turns.unwrap_or_else(|| {
+            if self.has_child_config_override() {
+                "none"
+            } else {
+                "all"
+            }
+        });
 
         if fork_turns.eq_ignore_ascii_case("none") {
             return Ok(None);
@@ -225,6 +235,19 @@ impl SpawnAgentArgs {
         }
 
         Ok(Some(SpawnAgentForkMode::LastNTurns(last_n_turns)))
+    }
+
+    fn has_child_config_override(&self) -> bool {
+        self.agent_type
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|agent_type| !agent_type.is_empty())
+            || self
+                .model
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|model| !model.is_empty())
+            || self.reasoning_effort.is_some()
     }
 }
 
