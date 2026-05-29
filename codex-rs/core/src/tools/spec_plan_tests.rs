@@ -939,6 +939,34 @@ async fn excluded_deferred_namespaces_do_not_enable_nested_tool_guidance() {
         "tool_search",
     ]);
 }
+#[tokio::test]
+async fn code_mode_only_exec_description_omits_deferred_tools() {
+    let plan = probe_with(
+        |turn| {
+            turn.model_info.supports_search_tool = true;
+            set_features(
+                turn,
+                &[
+                    Feature::CodeMode,
+                    Feature::CodeModeOnly,
+                    Feature::ToolSearch,
+                ],
+            );
+        },
+        ToolPlanInputs {
+            deferred_mcp_tools: Some(vec![mcp_tool("echo", "mcp__rmcp__", "echo")]),
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    let ToolSpec::Freeform(exec_tool) = plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME) else {
+        panic!("expected freeform exec tool");
+    };
+    assert!(!exec_tool.description.contains("mcp__rmcp__echo"));
+    assert!(!exec_tool.description.contains("MCP tool echo"));
+    plan.assert_registered_contains(&["mcp__rmcp__echo"]);
+}
 
 #[tokio::test]
 async fn multi_agent_feature_selects_one_agent_tool_family() {

@@ -3280,7 +3280,9 @@ impl Config {
         )
         .await?;
         let compact_prompt = compact_prompt.or(file_compact_prompt);
-        let zsh_path = default_zsh_path
+        let zsh_path = cfg
+            .zsh_path
+            .or(default_zsh_path)
             .or_else(|| InstallContext::current().bundled_zsh_path())
             .map(AbsolutePathBuf::into_path_buf);
 

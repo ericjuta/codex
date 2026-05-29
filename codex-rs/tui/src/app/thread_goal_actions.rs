@@ -12,6 +12,7 @@ use crate::goal_display::goal_usage_summary;
 use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_protocol::ThreadId;
+use color_eyre::Report;
 
 const EPHEMERAL_THREAD_GOAL_ERROR_MESSAGE: &str = concat!(
     "Goals need a saved session. This session is temporary.\n",
@@ -62,7 +63,11 @@ impl App {
         let response = match result {
             Ok(response) => response,
             Err(err) => {
-                tracing::warn!("failed to read thread goal after resume: {err}");
+                if is_ephemeral_thread_goal_error(&err) {
+                    tracing::debug!("skipping resume goal prompt for ephemeral thread: {err}");
+                } else {
+                    tracing::warn!("failed to read thread goal after resume: {err}");
+                }
                 return;
             }
         };
@@ -287,15 +292,17 @@ impl App {
     }
 }
 
-fn thread_goal_error_message(action: &str, err: &color_eyre::Report) -> String {
+fn thread_goal_error_message(action: &str, err: &Report) -> String {
     if is_ephemeral_thread_goal_error(err) {
-        EPHEMERAL_THREAD_GOAL_ERROR_MESSAGE.to_string()
-    } else {
-        format!("Failed to {action} thread goal: {err}")
+        return EPHEMERAL_THREAD_GOAL_ERROR_MESSAGE.to_string();
     }
+    if err.to_string().contains("goals feature is disabled") {
+        return "Goals are not enabled for this session.".to_string();
+    }
+    format!("Failed to {action} thread goal: {err}")
 }
 
-fn is_ephemeral_thread_goal_error(err: &color_eyre::Report) -> bool {
+fn is_ephemeral_thread_goal_error(err: &Report) -> bool {
     err.chain().any(|cause| {
         let message = cause.to_string();
         message.contains("ephemeral thread does not support goals")

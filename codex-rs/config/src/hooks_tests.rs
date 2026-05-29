@@ -87,6 +87,39 @@ statusMessage = "checking"
 }
 
 #[test]
+fn hook_command_timeout_accepts_timeout_sec_alias() {
+    let parsed: HooksFile = serde_json::from_str(
+        r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /tmp/pre.py",
+            "timeout_sec": 12
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+    )
+    .expect("hooks.json should deserialize timeout_sec alias");
+
+    assert_eq!(
+        parsed.hooks.pre_tool_use[0].hooks[0],
+        HookHandlerConfig::Command {
+            command: "python3 /tmp/pre.py".to_string(),
+            command_windows: None,
+            timeout_sec: Some(12),
+            r#async: false,
+            status_message: None,
+        }
+    );
+}
+
+#[test]
 fn hooks_toml_deserializes_inline_events_and_state_map() {
     let parsed: HooksToml = toml::from_str(
         r#"

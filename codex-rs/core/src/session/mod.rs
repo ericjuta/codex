@@ -1780,7 +1780,7 @@ impl Session {
             parent_agent_path,
             Vec::new(),
             message,
-            /*trigger_turn*/ false,
+            /*trigger_turn*/ true,
         );
         if let Err(err) = self
             .services

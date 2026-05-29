@@ -16,6 +16,7 @@ use crate::function_tool::FunctionCallError;
 use crate::parse_turn_item;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::tools::handlers::request_user_input_spec::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
 use codex_memories_read::citations::parse_memory_citation;
@@ -311,6 +312,7 @@ pub(crate) struct OutputItemResult {
     pub last_agent_message: Option<String>,
     pub needs_follow_up: bool,
     pub tool_future: Option<InFlightFuture<'static>>,
+    pub wait_for_cancelled_drain: bool,
 }
 
 pub(crate) struct HandleOutputCtx {
@@ -433,6 +435,8 @@ pub(crate) async fn handle_output_item_done(
                 .await;
 
             let cancellation_token = ctx.cancellation_token.child_token();
+            output.wait_for_cancelled_drain = call.tool_name.namespace.is_some()
+                || call.tool_name.name != REQUEST_USER_INPUT_TOOL_NAME;
             let tool_future: InFlightFuture<'static> = Box::pin(
                 ctx.tool_runtime
                     .clone()

@@ -35,6 +35,108 @@ use std::path::PathBuf;
 use std::time::Duration;
 use ts_rs::TS;
 
+const CONTEXTUAL_USER_MARKERS: &[(&str, &str)] = &[
+    ("# AGENTS.md instructions for ", "</INSTRUCTIONS>"),
+    (
+        crate::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG,
+        crate::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG,
+    ),
+    ("<skill>", "</skill>"),
+    ("<user_shell_command>", "</user_shell_command>"),
+    ("<turn_aborted>", "</turn_aborted>"),
+    ("<subagent_notification>", "</subagent_notification>"),
+    ("<goal_context>", "</goal_context>"),
+];
+
+const INTERNAL_CONTEXT_START_MARKER: &str = "<codex_internal_context";
+const INTERNAL_CONTEXT_END_MARKER: &str = "</codex_internal_context>";
+const INTERNAL_CONTEXT_SOURCE_ATTR_START: &str = " source=\"";
+const INTERNAL_CONTEXT_SOURCE_ATTR_END: &str = "\">";
+
+const LEGACY_CONTEXTUAL_USER_PREFIXES: &[&str] = &[
+    "Warning: The maximum number of unified exec processes you can keep open is",
+    "Warning: Your account was flagged for potentially high-risk cyber activity",
+];
+
+pub fn is_contextual_user_message_content(message: &[ContentItem]) -> bool {
+    message.iter().any(is_contextual_user_fragment)
+}
+
+pub fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
+    let ContentItem::InputText { text } = content_item else {
+        return false;
+    };
+    parse_hook_prompt_fragment(text).is_some()
+        || is_standard_contextual_user_text(text)
+        || is_legacy_contextual_user_text(text)
+}
+
+fn is_standard_contextual_user_text(text: &str) -> bool {
+    matches_internal_model_context_text(text)
+        || CONTEXTUAL_USER_MARKERS
+            .iter()
+            .any(|(start, end)| matches_marked_text(start, end, text))
+        || matches_additional_context_user_text(text)
+}
+
+fn matches_internal_model_context_text(text: &str) -> bool {
+    let trimmed = text.trim();
+    let Some(rest) = trimmed.strip_prefix(INTERNAL_CONTEXT_START_MARKER) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix(INTERNAL_CONTEXT_SOURCE_ATTR_START) else {
+        return false;
+    };
+    let Some((source, body_and_close)) = rest.split_once(INTERNAL_CONTEXT_SOURCE_ATTR_END) else {
+        return false;
+    };
+
+    is_valid_internal_context_source(source)
+        && body_and_close.ends_with(INTERNAL_CONTEXT_END_MARKER)
+}
+
+fn is_valid_internal_context_source(source: &str) -> bool {
+    let mut chars = source.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_lowercase()
+        && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+}
+
+fn matches_marked_text(start_marker: &str, end_marker: &str, text: &str) -> bool {
+    let trimmed_start = text.trim_start();
+    let starts_with_marker = trimmed_start
+        .get(..start_marker.len())
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(start_marker));
+    let trimmed = trimmed_start.trim_end();
+    let ends_with_marker = trimmed
+        .get(trimmed.len().saturating_sub(end_marker.len())..)
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(end_marker));
+    starts_with_marker && ends_with_marker
+}
+
+fn matches_additional_context_user_text(text: &str) -> bool {
+    let trimmed = text.trim();
+    let Some(rest) = trimmed.strip_prefix("<external_") else {
+        return false;
+    };
+    let Some((key, value_and_close)) = rest.split_once('>') else {
+        return false;
+    };
+
+    value_and_close.ends_with(&format!("</external_{key}>"))
+}
+
+fn is_legacy_contextual_user_text(text: &str) -> bool {
+    let trimmed = text.trim();
+    LEGACY_CONTEXTUAL_USER_PREFIXES
+        .iter()
+        .any(|prefix| trimmed.starts_with(prefix))
+        || (trimmed.starts_with("Warning: apply_patch was requested via ")
+            && trimmed.ends_with("Use the apply_patch tool instead of exec_command."))
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 #[serde(tag = "type")]
@@ -642,5 +744,23 @@ mod tests {
                 hook_run_id: "hook-run-1".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn detects_contextual_user_message_content() {
+        let content = vec![ContentItem::InputText {
+            text: "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>".to_string(),
+        }];
+
+        assert!(is_contextual_user_message_content(&content));
+    }
+
+    #[test]
+    fn ignores_regular_user_message_content() {
+        let content = vec![ContentItem::InputText {
+            text: "please inspect the diff".to_string(),
+        }];
+
+        assert!(!is_contextual_user_message_content(&content));
     }
 }

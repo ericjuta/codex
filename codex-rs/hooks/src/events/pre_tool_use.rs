@@ -210,7 +210,10 @@ fn parse_completed(
                 let trimmed_stdout = run_result.stdout.trim();
                 if trimmed_stdout.is_empty() {
                 } else if let Some(parsed) = output_parser::parse_pre_tool_use(&run_result.stdout) {
-                    if let Some(system_message) = parsed.universal.system_message {
+                    let suppress_output = parsed.universal.suppress_output;
+                    if let Some(system_message) = parsed.universal.system_message
+                        && !suppress_output
+                    {
                         entries.push(HookOutputEntry {
                             kind: HookOutputEntryKind::Warning,
                             text: system_message,
@@ -224,20 +227,23 @@ fn parse_completed(
                         });
                     } else {
                         if let Some(additional_context) = parsed.additional_context {
-                            common::append_additional_context(
+                            common::append_additional_context_with_visibility(
                                 &mut entries,
                                 &mut additional_contexts_for_model,
                                 additional_context,
+                                suppress_output,
                             );
                         }
                         if let Some(reason) = parsed.block_reason {
                             status = HookRunStatus::Blocked;
                             should_block = true;
                             block_reason = Some(reason.clone());
-                            entries.push(HookOutputEntry {
-                                kind: HookOutputEntryKind::Feedback,
-                                text: reason,
-                            });
+                            if !suppress_output {
+                                entries.push(HookOutputEntry {
+                                    kind: HookOutputEntryKind::Feedback,
+                                    text: reason,
+                                });
+                            }
                         }
                         if !should_block {
                             updated_input = parsed.updated_input;
@@ -458,6 +464,31 @@ mod tests {
                 text: "PreToolUse hook returned unsupported permissionDecision:allow".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn suppress_output_hides_feedback_but_keeps_decision() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(
+                Some(0),
+                r#"{"suppressOutput":true,"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"do not run that","additionalContext":"quiet context"}}"#,
+                "",
+            ),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(
+            parsed.data,
+            PreToolUseHandlerData {
+                should_block: true,
+                block_reason: Some("do not run that".to_string()),
+                additional_contexts_for_model: vec!["quiet context".to_string()],
+                updated_input: None,
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
+        assert_eq!(parsed.completed.run.entries, Vec::new());
     }
 
     #[test]
@@ -749,6 +780,7 @@ mod tests {
             source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
             env: std::collections::HashMap::new(),
+            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
         }
     }
 

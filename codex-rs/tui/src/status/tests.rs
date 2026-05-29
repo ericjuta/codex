@@ -17,6 +17,7 @@ use crate::test_support::PathBufExt;
 use crate::test_support::test_path_buf;
 use crate::token_usage::TokenUsage;
 use crate::token_usage::TokenUsageInfo;
+use crate::version::CODEX_CLI_VERSION;
 use chrono::Duration as ChronoDuration;
 use chrono::Local;
 use chrono::TimeZone;
@@ -202,6 +203,13 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+fn sanitize_cli_version(rendered: String) -> String {
+    rendered.replace(
+        &format!("OpenAI Codex (v{CODEX_CLI_VERSION})"),
+        "OpenAI Codex (v0.0.0)",
+    )
+}
+
 fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) -> i64 {
     (*captured_at + ChronoDuration::seconds(seconds))
         .with_timezone(&Utc)
@@ -314,7 +322,7 @@ async fn status_snapshot_includes_reasoning_details() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_cli_version(sanitize_directory(rendered_lines).join("\n"));
     assert_snapshot!(sanitized);
 }
 

@@ -211,8 +211,6 @@ mod updates;
 mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;
-mod width;
-mod workspace_command;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 mod voice {
@@ -270,6 +268,8 @@ mod voice {
         pub(crate) fn clear(&self) {}
     }
 }
+mod width;
+mod workspace_command;
 
 mod wrapping;
 
@@ -909,6 +909,17 @@ fn can_reuse_implicit_local_daemon(
         && !has_non_replayable_launch_overrides
 }
 
+fn remote_cwd_override_for_app_server_target(
+    cli_cwd: Option<PathBuf>,
+    app_server_target: &AppServerTarget,
+) -> Option<PathBuf> {
+    if app_server_target.uses_remote_workspace() {
+        cli_cwd
+    } else {
+        None
+    }
+}
+
 pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
@@ -982,10 +993,8 @@ pub async fn run_main(
         default_daemon,
         reuse_implicit_local_daemon,
     );
-    let remote_cwd_override = cli
-        .cwd
-        .clone()
-        .filter(|_| app_server_target.uses_remote_workspace());
+    let remote_cwd_override =
+        remote_cwd_override_for_app_server_target(cli.cwd.clone(), &app_server_target);
 
     let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
         arg0_paths.codex_self_exe.clone(),
@@ -2728,6 +2737,50 @@ mod tests {
             config_cwd_for_app_server_target(Some(remote_only_cwd), &target, &environment_manager)?;
 
         assert_eq!(config_cwd, None);
+        Ok(())
+    }
+
+    #[test]
+    fn remote_cwd_override_omits_cwd_for_explicit_remote_without_cli_cd() -> std::io::Result<()> {
+        let target = AppServerTarget::Remote {
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            },
+        };
+
+        let remote_cwd = remote_cwd_override_for_app_server_target(/*cli_cwd*/ None, &target);
+
+        assert_eq!(remote_cwd, None);
+        Ok(())
+    }
+
+    #[test]
+    fn remote_cwd_override_prefers_cli_cd_for_explicit_remote_sessions() -> std::io::Result<()> {
+        let target = AppServerTarget::Remote {
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            },
+        };
+        let cli_cwd = PathBuf::from("repo/on/server");
+
+        let remote_cwd = remote_cwd_override_for_app_server_target(Some(cli_cwd.clone()), &target);
+
+        assert_eq!(remote_cwd, Some(cli_cwd));
+        Ok(())
+    }
+
+    #[test]
+    fn remote_cwd_override_omits_cwd_for_local_daemon() -> std::io::Result<()> {
+        let target = AppServerTarget::LocalDaemon {
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            },
+        };
+
+        let remote_cwd =
+            remote_cwd_override_for_app_server_target(Some(PathBuf::from("local/repo")), &target);
+
+        assert_eq!(remote_cwd, None);
         Ok(())
     }
 

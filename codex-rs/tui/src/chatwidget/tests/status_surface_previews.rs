@@ -129,6 +129,7 @@ async fn status_line_setup_popup_live_only_snapshot() {
 #[tokio::test]
 async fn status_surface_preview_lines_hardcoded_only_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    cache_project_root(&mut chat, "my-project");
 
     let snapshot = combined_preview_snapshot(
         &mut chat,
@@ -168,6 +169,7 @@ async fn thread_title_falls_back_to_thread_id_when_unnamed() {
 #[tokio::test]
 async fn status_line_setup_popup_hardcoded_only_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    cache_project_root(&mut chat, "my-project");
     chat.config.tui_status_line = Some(vec![
         "project-name".to_string(),
         "git-branch".to_string(),
@@ -183,6 +185,7 @@ async fn status_line_setup_popup_hardcoded_only_snapshot() {
 #[tokio::test]
 async fn status_surface_preview_lines_mixed_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    cache_project_root(&mut chat, "my-project");
     chat.status_line_branch = Some("feature/mixed-preview".to_string());
     chat.thread_name = Some("Mixed preview thread".to_string());
 
@@ -280,6 +283,7 @@ async fn status_line_setup_popup_rate_limits_snapshot() {
 #[tokio::test]
 async fn status_line_setup_popup_mixed_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    cache_project_root(&mut chat, "my-project");
     chat.status_line_branch = Some("feature/mixed-preview".to_string());
     chat.thread_name = Some("Mixed preview thread".to_string());
     chat.config.tui_status_line = Some(vec![
@@ -332,6 +336,7 @@ async fn terminal_title_setup_popup_hardcoded_only_snapshot() {
 #[tokio::test]
 async fn terminal_title_setup_popup_mixed_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    cache_project_root(&mut chat, "project");
     chat.thread_name = Some("Mixed preview thread".to_string());
     chat.config.tui_terminal_title = Some(vec![
         "project-name".to_string(),
