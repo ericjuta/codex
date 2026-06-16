@@ -116,6 +116,25 @@ use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 
+fn with_runtime_readable_entries(
+    config: &Config,
+    mut entries: Vec<FileSystemSandboxEntry>,
+) -> Vec<FileSystemSandboxEntry> {
+    entries.extend(
+        permissions::get_readable_roots_required_for_codex_runtime(
+            config.codex_home.as_path(),
+            config.zsh_path.as_ref(),
+            config.main_execve_wrapper_exe.as_ref(),
+        )
+        .into_iter()
+        .map(|path| FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path },
+            access: FileSystemAccessMode::Read,
+        }),
+    );
+    entries
+}
+
 fn stdio_mcp(command: &str) -> McpServerConfig {
     stdio_mcp_with_args(command, &[])
 }
@@ -1900,26 +1919,29 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
     let cwd_root = cwd.path().abs();
     assert_eq!(
         config.permissions.file_system_sandbox_policy(),
-        FileSystemSandboxPolicy::restricted(vec![
-            FileSystemSandboxEntry {
-                path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::Minimal,
+        FileSystemSandboxPolicy::restricted(with_runtime_readable_entries(
+            &config,
+            vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Minimal,
+                    },
+                    access: FileSystemAccessMode::Read,
                 },
-                access: FileSystemAccessMode::Read,
-            },
-            FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: cwd_root.clone(),
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: cwd_root.clone(),
+                    },
+                    access: FileSystemAccessMode::Write,
                 },
-                access: FileSystemAccessMode::Write,
-            },
-            FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: cwd_root.join("docs"),
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: cwd_root.join("docs"),
+                    },
+                    access: FileSystemAccessMode::Read,
                 },
-                access: FileSystemAccessMode::Read,
-            },
-        ]),
+            ],
+        )),
     );
     assert_eq!(
         &config.legacy_sandbox_policy(),
@@ -3307,15 +3329,18 @@ async fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<(
 
     assert_eq!(
         config.permissions.file_system_sandbox_policy(),
-        FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-            path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::unknown(
-                    ":future_special_path",
-                    /*subpath*/ None
-                ),
-            },
-            access: FileSystemAccessMode::Read,
-        }]),
+        FileSystemSandboxPolicy::restricted(with_runtime_readable_entries(
+            &config,
+            vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::unknown(
+                        ":future_special_path",
+                        /*subpath*/ None,
+                    ),
+                },
+                access: FileSystemAccessMode::Read,
+            }],
+        )),
     );
     assert_eq!(
         &config.legacy_sandbox_policy(),
@@ -3356,12 +3381,18 @@ async fn permissions_profiles_allow_unknown_special_paths_with_nested_entries()
 
     assert_eq!(
         config.permissions.file_system_sandbox_policy(),
-        FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-            path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::unknown(":future_special_path", Some("docs".into())),
-            },
-            access: FileSystemAccessMode::Read,
-        }]),
+        FileSystemSandboxPolicy::restricted(with_runtime_readable_entries(
+            &config,
+            vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::unknown(
+                        ":future_special_path",
+                        Some("docs".into()),
+                    ),
+                },
+                access: FileSystemAccessMode::Read,
+            }],
+        )),
     );
     assert!(
         config.startup_warnings.iter().any(|warning| warning.contains(
@@ -3386,7 +3417,7 @@ async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io
 
     assert_eq!(
         config.permissions.file_system_sandbox_policy(),
-        FileSystemSandboxPolicy::restricted(Vec::new())
+        FileSystemSandboxPolicy::restricted(with_runtime_readable_entries(&config, Vec::new()))
     );
     assert_eq!(
         &config.legacy_sandbox_policy(),
@@ -3420,7 +3451,7 @@ async fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::
 
     assert_eq!(
         config.permissions.file_system_sandbox_policy(),
-        FileSystemSandboxPolicy::restricted(Vec::new())
+        FileSystemSandboxPolicy::restricted(with_runtime_readable_entries(&config, Vec::new()))
     );
     assert!(
         config.startup_warnings.iter().any(|warning| warning.contains(

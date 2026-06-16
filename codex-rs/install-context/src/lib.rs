@@ -12,6 +12,7 @@ const RELEASES_DIRNAME: &str = "releases";
 const RESOURCES_DIRNAME: &str = "codex-resources";
 const STANDALONE_PACKAGES_DIRNAME: &str = "standalone";
 const ZSH_DIRNAME: &str = "zsh";
+const MANAGED_PACKAGE_ROOT_ENV_VAR: &str = "CODEX_MANAGED_PACKAGE_ROOT";
 static INSTALL_CONTEXT: OnceLock<InstallContext> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73,15 +74,19 @@ impl InstallContext {
         managed_by_bun: bool,
     ) -> Self {
         let codex_home = codex_utils_home_dir::find_codex_home().ok();
-        Self::from_exe_with_codex_home(
+        let managed_package_root =
+            std::env::var_os(MANAGED_PACKAGE_ROOT_ENV_VAR).map(PathBuf::from);
+        Self::from_exe_with_context(
             is_macos,
             current_exe,
             managed_by_npm,
             managed_by_bun,
             codex_home.as_deref(),
+            managed_package_root.as_deref(),
         )
     }
 
+    #[cfg(test)]
     fn from_exe_with_codex_home(
         is_macos: bool,
         current_exe: Option<&Path>,
@@ -89,7 +94,29 @@ impl InstallContext {
         managed_by_bun: bool,
         codex_home: Option<&Path>,
     ) -> Self {
-        let package_layout = current_exe.and_then(CodexPackageLayout::from_exe);
+        Self::from_exe_with_context(
+            is_macos,
+            current_exe,
+            managed_by_npm,
+            managed_by_bun,
+            codex_home,
+            None,
+        )
+    }
+
+    fn from_exe_with_context(
+        is_macos: bool,
+        current_exe: Option<&Path>,
+        managed_by_npm: bool,
+        managed_by_bun: bool,
+        codex_home: Option<&Path>,
+        managed_package_root: Option<&Path>,
+    ) -> Self {
+        let mut package_layout = current_exe.and_then(CodexPackageLayout::from_exe);
+        if package_layout.is_none() && (managed_by_npm || managed_by_bun) {
+            package_layout =
+                managed_package_root.and_then(CodexPackageLayout::from_managed_package_root);
+        }
         let method = if managed_by_npm {
             InstallMethod::Npm
         } else if managed_by_bun {
@@ -187,15 +214,39 @@ impl CodexPackageLayout {
         let exe_dir = canonical_exe.parent()?;
         match exe_dir.file_name() {
             Some(name) if name == OsStr::new(BIN_DIRNAME) => Self::from_package_bin_dir(exe_dir),
-            Some(_) | None => None,
+            Some(_) | None => Self::from_package_dir(exe_dir.as_path()),
         }
     }
 
-    fn from_package_bin_dir(bin_dir: AbsolutePathBuf) -> Option<Self> {
-        let package_dir = bin_dir.parent()?;
+    fn from_managed_package_root(package_root: &Path) -> Option<Self> {
+        let mut candidates = vec![package_root.to_path_buf()];
+        if let Some((platform_package_dirname, target_triple)) = native_package_layout_parts() {
+            candidates.push(package_root.join("vendor").join(target_triple));
+            if let Some(package_parent) = package_root.parent() {
+                candidates.push(
+                    package_parent
+                        .join(platform_package_dirname)
+                        .join("vendor")
+                        .join(target_triple),
+                );
+            }
+        }
+
+        candidates
+            .into_iter()
+            .find_map(|package_dir| Self::from_package_dir(&package_dir))
+    }
+
+    fn from_package_dir(package_dir: &Path) -> Option<Self> {
+        let package_dir = canonical_absolute_path(package_dir)?;
+        Self::from_absolute_package_dir(package_dir)
+    }
+
+    fn from_absolute_package_dir(package_dir: AbsolutePathBuf) -> Option<Self> {
         if !package_dir.join(PACKAGE_METADATA_FILENAME).is_file() {
             return None;
         }
+        let bin_dir = existing_dir(package_dir.join(BIN_DIRNAME))?;
 
         Some(Self {
             resources_dir: existing_dir(package_dir.join(RESOURCES_DIRNAME)),
@@ -203,6 +254,25 @@ impl CodexPackageLayout {
             package_dir,
             bin_dir,
         })
+    }
+
+    fn from_package_bin_dir(bin_dir: AbsolutePathBuf) -> Option<Self> {
+        let package_dir = bin_dir.parent()?;
+        Self::from_absolute_package_dir(package_dir)
+    }
+}
+
+fn native_package_layout_parts() -> Option<(&'static str, &'static str)> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("android" | "linux", "aarch64") => {
+            Some(("codex-linux-arm64", "aarch64-unknown-linux-musl"))
+        }
+        ("android" | "linux", "x86_64") => Some(("codex-linux-x64", "x86_64-unknown-linux-musl")),
+        ("macos", "aarch64") => Some(("codex-darwin-arm64", "aarch64-apple-darwin")),
+        ("macos", "x86_64") => Some(("codex-darwin-x64", "x86_64-apple-darwin")),
+        ("windows", "aarch64") => Some(("codex-win32-arm64", "aarch64-pc-windows-msvc")),
+        ("windows", "x86_64") => Some(("codex-win32-x64", "x86_64-pc-windows-msvc")),
+        _ => None,
     }
 }
 
@@ -424,6 +494,33 @@ mod tests {
     }
 
     #[test]
+    fn detects_package_layout_when_exe_lives_at_package_root() -> std::io::Result<()> {
+        let package_dir = tempfile::tempdir()?;
+        let expected_layout =
+            create_package_layout(package_dir.path(), /*include_zsh*/ !cfg!(windows))?;
+        let exe_path = package_dir
+            .path()
+            .join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        fs::write(&exe_path, "")?;
+
+        let context = InstallContext::from_exe_with_codex_home(
+            /*is_macos*/ false,
+            /*current_exe*/ Some(&exe_path),
+            /*managed_by_npm*/ false,
+            /*managed_by_bun*/ false,
+            /*codex_home*/ None,
+        );
+        assert_eq!(
+            context,
+            InstallContext {
+                method: InstallMethod::Other,
+                package_layout: Some(expected_layout),
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
     fn standalone_package_layout_keeps_standalone_install_method() -> std::io::Result<()> {
         let codex_home = tempfile::tempdir()?;
         let package_dir = codex_home
@@ -480,6 +577,68 @@ mod tests {
             context.bundled_resource(TEST_RESOURCE_NAME),
             Some(canonical_resources_dir.join(TEST_RESOURCE_NAME))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn managed_package_root_falls_back_to_native_package_layout() -> std::io::Result<()> {
+        let Some((platform_package_dirname, target_triple)) = native_package_layout_parts() else {
+            return Ok(());
+        };
+        let node_modules_scope = tempfile::tempdir()?;
+        let main_package_dir = node_modules_scope.path().join("codex");
+        fs::create_dir_all(&main_package_dir)?;
+        let native_package_dir = node_modules_scope
+            .path()
+            .join(platform_package_dirname)
+            .join("vendor")
+            .join(target_triple);
+        let expected_layout =
+            create_package_layout(&native_package_dir, /*include_zsh*/ !cfg!(windows))?;
+        let exe_path = node_modules_scope
+            .path()
+            .join("target")
+            .join("release")
+            .join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        fs::create_dir_all(exe_path.parent().expect("exe path should have parent"))?;
+        fs::write(&exe_path, "")?;
+
+        let context = InstallContext::from_exe_with_context(
+            /*is_macos*/ false,
+            /*current_exe*/ Some(&exe_path),
+            /*managed_by_npm*/ false,
+            /*managed_by_bun*/ true,
+            /*codex_home*/ None,
+            /*managed_package_root*/ Some(&main_package_dir),
+        );
+        assert_eq!(
+            context,
+            InstallContext {
+                method: InstallMethod::Bun,
+                package_layout: Some(expected_layout.clone()),
+            }
+        );
+        assert_eq!(
+            context.rg_command(),
+            expected_layout
+                .path_dir
+                .as_ref()
+                .expect("package layout should have path dir")
+                .join(default_rg_command())
+                .into_path_buf()
+        );
+        if !cfg!(windows) {
+            assert_eq!(
+                context.bundled_zsh_path(),
+                Some(
+                    expected_layout
+                        .resources_dir
+                        .as_ref()
+                        .expect("package layout should have resources dir")
+                        .join(zsh_resource_path())
+                )
+            );
+        }
         Ok(())
     }
 
@@ -608,5 +767,40 @@ mod tests {
                 package_layout: None,
             }
         );
+    }
+
+    fn create_package_layout(
+        package_dir: &Path,
+        include_zsh: bool,
+    ) -> std::io::Result<CodexPackageLayout> {
+        let bin_dir = package_dir.join(BIN_DIRNAME);
+        let resources_dir = package_dir.join(RESOURCES_DIRNAME);
+        let path_dir = package_dir.join(PATH_DIRNAME);
+        fs::create_dir_all(&bin_dir)?;
+        fs::create_dir_all(&resources_dir)?;
+        fs::create_dir_all(&path_dir)?;
+        fs::write(package_dir.join(PACKAGE_METADATA_FILENAME), "{}")?;
+        fs::write(
+            bin_dir.join(if cfg!(windows) { "codex.exe" } else { "codex" }),
+            "",
+        )?;
+        fs::write(resources_dir.join(TEST_RESOURCE_NAME), "")?;
+        fs::write(path_dir.join(default_rg_command()), "")?;
+        if include_zsh {
+            let zsh_path = resources_dir.join(zsh_resource_path());
+            fs::create_dir_all(zsh_path.parent().expect("zsh path should have parent"))?;
+            fs::write(zsh_path, "")?;
+        }
+
+        Ok(CodexPackageLayout {
+            package_dir: AbsolutePathBuf::from_absolute_path(package_dir.canonicalize()?)?,
+            bin_dir: AbsolutePathBuf::from_absolute_path(bin_dir.canonicalize()?)?,
+            resources_dir: Some(AbsolutePathBuf::from_absolute_path(
+                resources_dir.canonicalize()?,
+            )?),
+            path_dir: Some(AbsolutePathBuf::from_absolute_path(
+                path_dir.canonicalize()?,
+            )?),
+        })
     }
 }
