@@ -502,7 +502,6 @@ impl NetworkApprovalService {
             }
         }
 
-        let owner_call = self.resolve_single_active_call().await;
         if let Some(owner_call) = owner_call.as_ref()
             && self
                 .active_call_has_host_approval(&owner_call.registration_id, &key)

@@ -366,6 +366,7 @@ async fn active_call_host_approval_is_scoped_to_registered_call() {
     let service = NetworkApprovalService::default();
     register_call_with_default_shell_trigger(&service, "registration-1").await;
     let key = HostApprovalKey {
+        environment_id: "local".to_string(),
         host: "example.com".to_string(),
         protocol: "https",
         port: 443,

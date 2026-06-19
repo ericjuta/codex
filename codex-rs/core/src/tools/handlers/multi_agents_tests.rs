@@ -117,9 +117,9 @@ impl crate::tasks::SessionTask for MailboxDeliveryTestTask {
         _ctx: Arc<TurnContext>,
         _input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> crate::tasks::SessionTaskResult {
         cancellation_token.cancelled().await;
-        None
+        Ok(None)
     }
 }
 

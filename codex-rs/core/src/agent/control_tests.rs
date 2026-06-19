@@ -2221,6 +2221,7 @@ async fn multi_agent_v2_terminal_turn_event_wakes_direct_parent() {
             environments: Vec::new(),
             thread_extension_init: Default::default(),
             supports_openai_form_elicitation: false,
+            multi_agent_mode: None,
         })
         .await
         .expect("tester thread should start")
@@ -2241,10 +2242,12 @@ async fn multi_agent_v2_terminal_turn_event_wakes_direct_parent() {
         )
         .await;
 
-    let expected_message = crate::session_prefix::format_subagent_notification_message(
-        tester_path.as_str(),
+    let expected_message = crate::session_prefix::format_inter_agent_completion_message(
+        worker_path.clone(),
+        tester_path.clone(),
         &AgentStatus::Completed(Some("done".to_string())),
-    );
+    )
+    .expect("completed status should render");
     let expected = (
         worker_thread_id,
         Op::InterAgentCommunication {
