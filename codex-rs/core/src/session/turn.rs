@@ -1141,6 +1141,9 @@ async fn run_sampling_request(
                 return Ok((output, original_input.unwrap_or(prompt.input)));
             }
             Err(CodexErr::ContextWindowExceeded) => {
+                if original_input.is_none() {
+                    original_input = Some(prompt.input.clone());
+                }
                 sess.set_total_tokens_full(&turn_context).await;
                 if context_window_compaction_retries
                     >= MAX_CONTEXT_WINDOW_COMPACTION_RETRIES_PER_TURN

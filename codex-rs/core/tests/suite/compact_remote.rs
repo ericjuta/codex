@@ -32,6 +32,7 @@ use core_test_support::apps_test_server::configure_search_capable_model;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
+use core_test_support::fs_wait;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
@@ -47,6 +48,7 @@ use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use tempfile::TempDir;
 use tokio::time::Duration;
 use wiremock::ResponseTemplate;
 
@@ -3686,11 +3688,32 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
 async fn remote_sampling_context_window_exceeded_compacts_and_retries() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let notify_dir = TempDir::new()?;
+    let notify_script = notify_dir.path().join("notify.py");
+    let notify_file = notify_dir.path().join("notify.jsonl");
+    fs::write(
+        &notify_script,
+        r#"from pathlib import Path
+import sys
+
+payload_path = Path(sys.argv[1])
+with payload_path.open("a", encoding="utf-8") as handle:
+    handle.write(sys.argv[-1])
+    handle.write("\n")
+"#,
+    )?;
+    let notify_argv = vec![
+        "python3".to_string(),
+        notify_script.display().to_string(),
+        notify_file.display().to_string(),
+    ];
+
     let harness = TestCodexHarness::with_builder(
         test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-            .with_config(|config| {
+            .with_config(move |config| {
                 config.model_auto_compact_token_limit = Some(200_000);
+                config.notify = Some(notify_argv);
             }),
     )
     .await?;
@@ -3790,6 +3813,42 @@ async fn remote_sampling_context_window_exceeded_compacts_and_retries() -> Resul
     assert!(
         retry_body.contains("REMOTE_OVERFLOW_RECOVERY_SUMMARY"),
         "post-compact retry should include the compacted summary"
+    );
+
+    let notify_root = notify_dir.path().to_path_buf();
+    let notify_file_for_wait = notify_file.clone();
+    fs_wait::wait_for_matching_file(notify_root, Duration::from_secs(5), move |path| {
+        path == notify_file_for_wait.as_path()
+            && fs::read_to_string(path)
+                .map(|contents| {
+                    contents
+                        .lines()
+                        .filter(|line| !line.trim().is_empty())
+                        .count()
+                        >= 2
+                })
+                .unwrap_or(false)
+    })
+    .await?;
+    let notify_payload_raw = fs::read_to_string(&notify_file)?;
+    let notify_payloads = notify_payload_raw
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(serde_json::from_str::<Value>)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    assert_eq!(
+        notify_payloads.len(),
+        2,
+        "unexpected notify payloads: {notify_payloads:?}"
+    );
+    let final_notify_payload = notify_payloads.last().expect("notify payload");
+    assert_eq!(
+        final_notify_payload["input-messages"],
+        json!(["USER_ONE", "USER_TWO"])
+    );
+    assert_eq!(
+        final_notify_payload["last-assistant-message"],
+        json!("REMOTE_RECOVERED_REPLY")
     );
 
     Ok(())
