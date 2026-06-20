@@ -255,6 +255,9 @@ mod tests {
     use std::io;
     use std::path::PathBuf;
 
+    use base64::Engine as _;
+    use pretty_assertions::assert_eq;
+
     use super::image_protocol::ImageProtocol;
     use super::*;
 
@@ -325,7 +328,7 @@ mod tests {
         let frame = dir.path().join("frame.png");
         std::fs::write(&frame, b"png").unwrap();
         let request = AmbientPetDraw {
-            frame,
+            frame: frame.clone(),
             protocol: ImageProtocol::KittyLocalFile,
             x: 2,
             y: 3,
@@ -343,8 +346,15 @@ mod tests {
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("a=d,d=I,i=49374,q=2;"));
         assert!(output.contains("\x1b[4;3H"));
-        assert!(output.contains("a=T,t=f,f=100,c=4,r=2,q=2,i=49374;"));
-        assert!(!output.contains("cG5n"));
+        let prefix = "a=T,t=f,f=100,c=4,r=2,q=2,i=49374;";
+        let payload_start = output.find(prefix).expect("writes local file command") + prefix.len();
+        let payload_end = payload_start
+            + output[payload_start..]
+                .find("\x1b\\")
+                .expect("terminates local file command");
+        let expected_payload = base64::engine::general_purpose::STANDARD
+            .encode(frame.canonicalize().unwrap().to_string_lossy().as_bytes());
+        assert_eq!(&output[payload_start..payload_end], expected_payload);
         assert!(output.contains("\x1b8"));
     }
 
