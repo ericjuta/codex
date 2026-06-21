@@ -68,6 +68,7 @@ impl CellHost for RecordingHost {
         &self,
         _call_id: String,
         _text: String,
+        _max_output_tokens: Option<usize>,
         _cancellation_token: CancellationToken,
     ) -> Result<(), String> {
         self.notified.store(true, Ordering::Release);
@@ -304,6 +305,7 @@ async fn observation_dropped_before_dequeue_does_not_consume_output() {
         .send(RuntimeEvent::Notify {
             call_id: "after-dropped-command".to_string(),
             text: "barrier".to_string(),
+            max_output_tokens: None,
         })
         .unwrap();
     wait_for_notification(&host).await;
@@ -366,6 +368,7 @@ async fn dropped_yield_observer_preserves_output_for_the_next_observation() {
         .send(RuntimeEvent::Notify {
             call_id: "after-dropped-observer".to_string(),
             text: "barrier".to_string(),
+            max_output_tokens: None,
         })
         .unwrap();
     wait_for_notification(&host).await;
@@ -427,6 +430,7 @@ async fn dropped_pending_observer_preserves_the_frontier_for_the_next_observatio
         .send(RuntimeEvent::Notify {
             call_id: "after-dropped-pending".to_string(),
             text: "barrier".to_string(),
+            max_output_tokens: None,
         })
         .unwrap();
     wait_for_notification(&host).await;
