@@ -70,6 +70,7 @@ impl CodeModeSessionDelegate for OversizedResultDelegate {
         _call_id: String,
         _cell_id: CellId,
         _text: String,
+        _max_output_tokens: Option<usize>,
         _cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a> {
         Box::pin(async { Ok(()) })
@@ -153,6 +154,7 @@ impl CodeModeSessionDelegate for CancellationDelegate {
         _call_id: String,
         _cell_id: CellId,
         _text: String,
+        _max_output_tokens: Option<usize>,
         _cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a> {
         Box::pin(async { Ok(()) })
@@ -183,6 +185,7 @@ impl CodeModeSessionDelegate for RecordingDelegate {
         call_id: String,
         cell_id: CellId,
         text: String,
+        _max_output_tokens: Option<usize>,
         _cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a> {
         self.notifications

@@ -2206,6 +2206,7 @@ async fn multi_agent_v2_terminal_turn_event_wakes_direct_parent() {
         .manager
         .start_thread_with_options(StartThreadOptions {
             config: tester_config,
+            allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
             session_source: Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: worker_thread_id,
@@ -2221,7 +2222,6 @@ async fn multi_agent_v2_terminal_turn_event_wakes_direct_parent() {
             environments: Vec::new(),
             thread_extension_init: Default::default(),
             supports_openai_form_elicitation: false,
-            multi_agent_mode: None,
         })
         .await
         .expect("tester thread should start")

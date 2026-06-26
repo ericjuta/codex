@@ -54,6 +54,7 @@ impl CodeModeSessionDelegate for RemoteDelegate {
         call_id: String,
         cell_id: CellId,
         text: String,
+        _max_output_tokens: Option<usize>,
         cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a> {
         Box::pin(async move {

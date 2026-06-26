@@ -142,7 +142,7 @@ impl DelegateRuntime {
                     cell_id,
                     text,
                 } => delegate
-                    .notify(call_id, cell_id, text, task_cancellation)
+                    .notify(call_id, cell_id, text, None, task_cancellation)
                     .await
                     .map(|()| DelegateResponse::NotificationDelivered),
             }

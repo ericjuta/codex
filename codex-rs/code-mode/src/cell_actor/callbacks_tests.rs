@@ -32,6 +32,7 @@ impl CellHost for PanickingCallbackHost {
         &self,
         _call_id: String,
         _text: String,
+        _max_output_tokens: Option<usize>,
         _cancellation_token: CancellationToken,
     ) -> Result<(), String> {
         panic!("notification callback panic probe");
@@ -99,6 +100,7 @@ async fn notification_callback_panic_reports_failure() {
         Arc::new(PanickingCallbackHost),
         "notify-1".to_string(),
         "hello".to_string(),
+        None,
         CancellationToken::new(),
         Some(Arc::new(move |reason| {
             let _ = failure_tx.send(reason);

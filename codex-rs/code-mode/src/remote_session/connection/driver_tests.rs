@@ -245,6 +245,7 @@ impl CodeModeSessionDelegate for HeldDelegate {
         _call_id: String,
         _cell_id: CellId,
         _text: String,
+        _max_output_tokens: Option<usize>,
         _cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a> {
         Box::pin(async { Ok(()) })
@@ -271,6 +272,7 @@ impl CodeModeSessionDelegate for PanickingDelegate {
         _call_id: String,
         _cell_id: CellId,
         _text: String,
+        _max_output_tokens: Option<usize>,
         _cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a> {
         Box::pin(async { Ok(()) })
@@ -297,6 +299,7 @@ impl CodeModeSessionDelegate for RecordingDelegate {
         _call_id: String,
         _cell_id: CellId,
         _text: String,
+        _max_output_tokens: Option<usize>,
         _cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a> {
         self.notifications.fetch_add(1, Ordering::Relaxed);

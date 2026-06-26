@@ -2614,7 +2614,7 @@ dependencies = [
 
 [[package]]
 name = "codex-connectors-extension"
-version = "0.0.0"
+version = "0.1337.0"
 dependencies = [
  "codex-connectors",
  "codex-core-plugins",
@@ -2958,7 +2958,7 @@ dependencies = [
 
 [[package]]
 name = "codex-exec-server-protocol"
-version = "0.0.0"
+version = "0.1337.0"
 dependencies = [
  "base64 0.22.1",
  "codex-file-system",

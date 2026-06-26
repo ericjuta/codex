@@ -1148,11 +1148,13 @@ async fn run_sampling_request(
                     return Err(CodexErr::ContextWindowExceeded);
                 }
                 context_window_compaction_retries += 1;
+                let world_state =
+                    Arc::new(sess.build_world_state_for_step(step_context.as_ref()).await);
                 run_auto_compact(
                     &sess,
-                    &turn_context,
+                    Arc::clone(&step_context),
                     client_session,
-                    InitialContextInjection::BeforeLastUserMessage,
+                    InitialContextInjection::BeforeLastUserMessage(world_state),
                     CompactionReason::ContextLimit,
                     CompactionPhase::MidTurn,
                 )

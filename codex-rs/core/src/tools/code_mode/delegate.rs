@@ -317,7 +317,7 @@ impl CoreTurnHost {
                 call_id,
                 name: Some(PUBLIC_TOOL_NAME.to_string()),
                 output,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }])
             .await
             .map_err(|_| {
