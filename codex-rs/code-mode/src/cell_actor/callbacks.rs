@@ -27,12 +27,12 @@ pub(super) fn spawn_notification<H: CellHost>(
     task_failure_handler: Option<TaskFailureHandler>,
 ) {
     tasks.spawn(async move {
-        let callback =
-            AssertUnwindSafe(async move { host
-                .notify(call_id, text, max_output_tokens, cancellation_token)
-                .await })
-                .catch_unwind()
-                .await;
+        let callback = AssertUnwindSafe(async move {
+            host.notify(call_id, text, max_output_tokens, cancellation_token)
+                .await
+        })
+        .catch_unwind()
+        .await;
         match callback {
             Ok(Ok(())) => {}
             Ok(Err(err)) => warn!("failed to deliver code mode notification: {err}"),
