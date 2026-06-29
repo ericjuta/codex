@@ -2216,6 +2216,7 @@ async fn multi_agent_v2_terminal_turn_event_wakes_direct_parent() {
                 agent_role: Some("explorer".to_string()),
             })),
             thread_source: None,
+            history_mode: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
             parent_trace: None,
