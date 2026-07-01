@@ -265,7 +265,7 @@ mod tests {
                 text: "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         });
 
         assert!(!rollout_item_affects_thread_metadata(&contextual_item));
@@ -282,7 +282,7 @@ mod tests {
                 text: "actual user request".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         });
         apply_rollout_item(&mut metadata, &user_item, "test-provider");
 

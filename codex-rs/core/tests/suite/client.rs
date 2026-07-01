@@ -2972,7 +2972,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
 
     let mut prompt = Prompt::default();
     prompt.input.push(ResponseItem::Reasoning {
-        id: Some("reasoning-id".into()),
+        id: Some("rs_reasoning-id".into()),
         summary: vec![ReasoningItemReasoningSummary::SummaryText {
             text: "summary".into(),
         }],
@@ -2983,7 +2983,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         internal_chat_message_metadata_passthrough: None,
     });
     prompt.input.push(ResponseItem::Message {
-        id: Some("message-id".into()),
+        id: Some("msg_message-id".into()),
         role: "assistant".into(),
         content: vec![ContentItem::OutputText {
             text: "message".into(),
@@ -2992,7 +2992,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         internal_chat_message_metadata_passthrough: None,
     });
     prompt.input.push(ResponseItem::WebSearchCall {
-        id: Some("web-search-id".into()),
+        id: Some("ws_web-search-id".into()),
         status: Some("completed".into()),
         action: Some(WebSearchAction::Search {
             query: Some("weather".into()),
@@ -3001,7 +3001,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         internal_chat_message_metadata_passthrough: None,
     });
     prompt.input.push(ResponseItem::FunctionCall {
-        id: Some("function-id".into()),
+        id: Some("fc_function-id".into()),
         name: "do_thing".into(),
         namespace: None,
         arguments: "{}".into(),
@@ -3015,7 +3015,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         internal_chat_message_metadata_passthrough: None,
     });
     prompt.input.push(ResponseItem::LocalShellCall {
-        id: Some("local-shell-id".into()),
+        id: Some("lsh_local-shell-id".into()),
         call_id: Some("local-shell-call-id".into()),
         status: LocalShellStatus::Completed,
         action: LocalShellAction::Exec(LocalShellExecAction {
@@ -3028,7 +3028,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         internal_chat_message_metadata_passthrough: None,
     });
     prompt.input.push(ResponseItem::CustomToolCall {
-        id: Some("custom-tool-id".into()),
+        id: Some("ctc_custom-tool-id".into()),
         status: Some("completed".into()),
         call_id: "custom-tool-call-id".into(),
         name: "custom_tool".into(),
@@ -3071,16 +3071,16 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     assert_eq!(body["store"], serde_json::Value::Bool(true));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
     assert_eq!(body["input"].as_array().map(Vec::len), Some(8));
-    assert_eq!(body["input"][0]["id"].as_str(), Some("reasoning-id"));
-    assert_eq!(body["input"][1]["id"].as_str(), Some("message-id"));
-    assert_eq!(body["input"][2]["id"].as_str(), Some("web-search-id"));
-    assert_eq!(body["input"][3]["id"].as_str(), Some("function-id"));
+    assert_eq!(body["input"][0]["id"].as_str(), Some("rs_reasoning-id"));
+    assert_eq!(body["input"][1]["id"].as_str(), Some("msg_message-id"));
+    assert_eq!(body["input"][2]["id"].as_str(), Some("ws_web-search-id"));
+    assert_eq!(body["input"][3]["id"].as_str(), Some("fc_function-id"));
     assert_eq!(
         body["input"][4]["call_id"].as_str(),
         Some("function-call-id")
     );
-    assert_eq!(body["input"][5]["id"].as_str(), Some("local-shell-id"));
-    assert_eq!(body["input"][6]["id"].as_str(), Some("custom-tool-id"));
+    assert_eq!(body["input"][5]["id"].as_str(), Some("lsh_local-shell-id"));
+    assert_eq!(body["input"][6]["id"].as_str(), Some("ctc_custom-tool-id"));
     assert_eq!(
         body["input"][7]["call_id"].as_str(),
         Some("custom-tool-call-id")

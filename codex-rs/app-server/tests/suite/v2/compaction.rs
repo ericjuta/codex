@@ -152,7 +152,7 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
     write_mock_responses_config_toml(
         codex_home.path(),
         &server.uri(),
-        &BTreeMap::from([(Feature::RemoteCompactionV2, false)]),
+        &BTreeMap::from([(Feature::RemoteCompactionV2, false), (Feature::Apps, false)]),
         REMOTE_AUTO_COMPACT_LIMIT,
         Some(true),
         "mock_provider",

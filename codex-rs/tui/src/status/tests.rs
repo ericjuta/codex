@@ -416,8 +416,9 @@ async fn status_snapshot_shows_chatgpt_plan_without_email() {
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
     );
-    let sanitized =
-        sanitize_directory(render_lines(&composite.display_lines(/*width*/ 80))).join("\n");
+    let sanitized = sanitize_cli_version(
+        sanitize_directory(render_lines(&composite.display_lines(/*width*/ 80))).join("\n"),
+    );
     assert_snapshot!(sanitized);
 }
 

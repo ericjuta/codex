@@ -516,7 +516,7 @@ fn write_response_item_user_session_file_with_messages(
                     text: (*message).to_string(),
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }),
         };
         let response_item = serde_json::to_string(&response_item).map_err(std::io::Error::other)?;
