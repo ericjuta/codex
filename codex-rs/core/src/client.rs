@@ -893,6 +893,19 @@ impl ModelClient {
 
     fn prepare_response_items_for_request(&self, input: &mut [ResponseItem], store: bool) {
         if self.state.item_ids_enabled || store {
+            // Ids stay in the request, but history can contain synthetic ids
+            // (e.g. review exit markers persisted by older builds). The
+            // Responses API rejects ids that lack the item type's expected
+            // prefix, so drop those instead of failing every turn.
+            for item in input {
+                let invalid = item.id().is_some_and(|id| {
+                    crate::session::response_item_id_prefix(item)
+                        .is_none_or(|prefix| !id.starts_with(prefix))
+                });
+                if invalid {
+                    item.set_id(/*new_id*/ None);
+                }
+            }
             return;
         }
 

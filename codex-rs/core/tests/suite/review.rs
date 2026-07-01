@@ -2,6 +2,8 @@ use codex_core::CodexThread;
 use codex_core::REVIEW_PROMPT;
 use codex_core::config::Config;
 use codex_core::review_format::render_review_output_text;
+use codex_features::Feature;
+use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
@@ -16,6 +18,8 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::responses;
@@ -862,6 +866,198 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
         saw_merge_base_sha,
         "expected review prompt to include merge-base sha {head_sha}"
     );
+
+    let _codex_home_guard = codex_home;
+    server.verify().await;
+}
+
+/// With `item_ids` enabled, the review-exit messages must be recorded with
+/// API-valid ids (`msg_*`); hardcoded marker ids like `review_rollout_user`
+/// used to brick every turn after `/review` with a 400 `invalid_id_prefix`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_exit_messages_use_valid_item_ids() {
+    skip_if_no_network!();
+
+    let (server, request_log) = start_responses_server_with_sse(
+        assistant_message_sse("review assistant output"),
+        /*expected_requests*/ 2,
+    )
+    .await;
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, codex_home.clone(), |config| {
+        let _ = config.features.enable(Feature::ItemIds);
+    })
+    .await;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "Start a review".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
+    let _closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(_))).await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "back to parent".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 2);
+    let body = requests[1].body_json();
+    let input = body["input"].as_array().expect("input array");
+    let mut saw_review_exit_message = false;
+    for item in input {
+        let text = item["content"][0]["text"].as_str().unwrap_or_default();
+        if text.contains("User initiated a review task.") {
+            saw_review_exit_message = true;
+        }
+        if item["type"].as_str() == Some("message")
+            && let Some(id) = item.get("id").and_then(serde_json::Value::as_str)
+        {
+            assert!(
+                id.starts_with("msg"),
+                "message id must use the Responses API prefix, got: {id}"
+            );
+        }
+    }
+    assert!(
+        saw_review_exit_message,
+        "review exit message missing from parent turn input"
+    );
+
+    let _codex_home_guard = codex_home;
+    server.verify().await;
+}
+
+/// Sessions persisted by older builds carry `review_rollout_*` ids in the
+/// rollout. Resuming one with `item_ids` enabled must not replay those ids to
+/// the Responses API, which rejects them with `invalid_id_prefix`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_drops_legacy_review_marker_ids_from_requests() {
+    skip_if_no_network!();
+
+    let thread_id = ThreadId::default();
+    let rollout = vec![
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:00.000Z".to_string(),
+            item: RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    session_id: thread_id.into(),
+                    id: thread_id,
+                    parent_thread_id: None,
+                    timestamp: "2024-01-01T00:00:00Z".to_string(),
+                    cwd: ".".into(),
+                    originator: "test_originator".to_string(),
+                    cli_version: "test_version".to_string(),
+                    model_provider: Some("test-provider".to_string()),
+                    ..Default::default()
+                },
+                git: None,
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:01.000Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::Message {
+                id: Some("review_rollout_user".to_string()),
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "User initiated a review task.".to_string(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:02.000Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::Message {
+                id: Some("review_rollout_assistant".to_string()),
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "review assistant output".to_string(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            }),
+        },
+    ];
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let session_path = codex_home.path().join("legacy-review-session.jsonl");
+    let mut file = std::fs::File::create(&session_path).expect("create rollout file");
+    for line in rollout {
+        use std::io::Write as _;
+        writeln!(
+            file,
+            "{}",
+            serde_json::to_string(&line).expect("serialize rollout line")
+        )
+        .expect("write rollout line");
+    }
+
+    let (server, request_log) =
+        start_responses_server_with_sse(completed_sse(), /*expected_requests*/ 1).await;
+    let codex =
+        resume_conversation_for_server(&server, codex_home.clone(), session_path, |config| {
+            let _ = config.features.enable(Feature::ItemIds);
+        })
+        .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "after resume".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 1);
+    let body = requests[0].body_json();
+    let input = body["input"].as_array().expect("input array");
+    let review_texts_present = input
+        .iter()
+        .filter(|item| {
+            item["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("review"))
+        })
+        .count();
+    assert!(
+        review_texts_present >= 2,
+        "resumed review messages missing from request input"
+    );
+    for item in input {
+        if let Some(id) = item.get("id").and_then(serde_json::Value::as_str) {
+            assert!(
+                !id.starts_with("review_rollout"),
+                "legacy review marker id must not reach the API: {id}"
+            );
+        }
+    }
 
     let _codex_home_guard = codex_home;
     server.verify().await;

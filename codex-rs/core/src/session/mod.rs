@@ -962,6 +962,29 @@ async fn thread_title_from_thread_store(
     (!title.is_empty() && thread.preview.trim() != title).then(|| title.to_string())
 }
 
+/// Responses API item-id prefix for each item type. Locally assigned ids use
+/// `<prefix>_<uuidv7>`; the API rejects ids that do not start with the
+/// type-specific prefix. Returns `None` for items whose API shape carries no id.
+pub(crate) fn response_item_id_prefix(item: &ResponseItem) -> Option<&'static str> {
+    match item {
+        ResponseItem::AdditionalTools { .. } => Some("at"),
+        ResponseItem::Message { .. } => Some("msg"),
+        ResponseItem::Reasoning { .. } => Some("rs"),
+        ResponseItem::LocalShellCall { .. } => Some("lsh"),
+        ResponseItem::FunctionCall { .. } => Some("fc"),
+        ResponseItem::ToolSearchCall { .. } => Some("tsc"),
+        ResponseItem::FunctionCallOutput { .. } => Some("fco"),
+        ResponseItem::CustomToolCall { .. } => Some("ctc"),
+        ResponseItem::CustomToolCallOutput { .. } => Some("ctco"),
+        ResponseItem::ToolSearchOutput { .. } => Some("tso"),
+        ResponseItem::WebSearchCall { .. } => Some("ws"),
+        ResponseItem::ImageGenerationCall { .. } => Some("ig"),
+        ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => Some("cmp"),
+        ResponseItem::AgentMessage { .. } => Some("amsg"),
+        ResponseItem::CompactionTrigger { .. } | ResponseItem::Other => None,
+    }
+}
+
 fn push_prompt_fragment(
     fragment: PromptFragment,
     developer_sections: &mut Vec<String>,
@@ -2748,22 +2771,8 @@ impl Session {
         if item.id().is_some() {
             return;
         }
-        let prefix = match item {
-            ResponseItem::AdditionalTools { .. } => "at",
-            ResponseItem::Message { .. } => "msg",
-            ResponseItem::Reasoning { .. } => "rs",
-            ResponseItem::LocalShellCall { .. } => "lsh",
-            ResponseItem::FunctionCall { .. } => "fc",
-            ResponseItem::ToolSearchCall { .. } => "tsc",
-            ResponseItem::FunctionCallOutput { .. } => "fco",
-            ResponseItem::CustomToolCall { .. } => "ctc",
-            ResponseItem::CustomToolCallOutput { .. } => "ctco",
-            ResponseItem::ToolSearchOutput { .. } => "tso",
-            ResponseItem::WebSearchCall { .. } => "ws",
-            ResponseItem::ImageGenerationCall { .. } => "ig",
-            ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => "cmp",
-            ResponseItem::AgentMessage { .. } => "amsg",
-            ResponseItem::CompactionTrigger { .. } | ResponseItem::Other => return,
+        let Some(prefix) = response_item_id_prefix(item) else {
+            return;
         };
         item.set_id(Some(format!("{prefix}_{}", Uuid::now_v7())));
     }
