@@ -1,6 +1,7 @@
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::registry::CoreToolRuntime;
@@ -13,6 +14,45 @@ use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
 use super::handle_runtime_response;
 use super::is_exec_tool_name;
+
+struct CodeModeExecuteOutput {
+    output: FunctionToolOutput,
+    disclosed_cell_id: Option<String>,
+}
+
+impl ToolOutput for CodeModeExecuteOutput {
+    fn log_preview(&self) -> String {
+        self.output.log_preview()
+    }
+
+    fn success_for_logging(&self) -> bool {
+        self.output.success_for_logging()
+    }
+
+    fn contains_external_context(&self) -> bool {
+        self.output.contains_external_context()
+    }
+
+    fn to_response_item(
+        &self,
+        call_id: &str,
+        payload: &ToolPayload,
+    ) -> codex_protocol::models::ResponseInputItem {
+        self.output.to_response_item(call_id, payload)
+    }
+
+    fn post_tool_use_response(
+        &self,
+        call_id: &str,
+        payload: &ToolPayload,
+    ) -> Option<serde_json::Value> {
+        self.output.post_tool_use_response(call_id, payload)
+    }
+
+    fn disclosed_code_mode_cell_id(&self) -> Option<String> {
+        self.disclosed_cell_id.clone()
+    }
+}
 
 pub struct CodeModeExecuteHandler {
     spec: ToolSpec,
@@ -34,7 +74,7 @@ impl CodeModeExecuteHandler {
         call_id: String,
         code: String,
         cancellation_token: CancellationToken,
-    ) -> Result<FunctionToolOutput, FunctionCallError> {
+    ) -> Result<CodeModeExecuteOutput, FunctionCallError> {
         let args =
             codex_code_mode::parse_exec_source(&code).map_err(FunctionCallError::RespondToModel)?;
         let exec = ExecContext { session, turn };
@@ -100,23 +140,27 @@ impl CodeModeExecuteHandler {
         // is produced by `handle_runtime_response` and later linked through
         // `CodeCell.output_item_ids` in the reduced trace.
         code_cell_trace.record_initial_response(&response);
+        let disclosed_cell_id = match &response {
+            codex_code_mode::RuntimeResponse::Yielded { cell_id, .. } => Some(cell_id.to_string()),
+            codex_code_mode::RuntimeResponse::Terminated { .. }
+            | codex_code_mode::RuntimeResponse::Result { .. } => None,
+        };
         // Yielded cells keep running, so terminal lifecycle is only emitted
         // here when the first response also ended the runtime.
-        if matches!(response, codex_code_mode::RuntimeResponse::Yielded { .. }) {
-            exec.session
-                .services
-                .code_mode_service
-                .mark_cell_model_visible(&cell_id);
-        } else {
+        if disclosed_cell_id.is_none() {
             code_cell_trace.record_ended(&response);
             exec.session
                 .services
                 .code_mode_service
                 .finish_cell_dispatch(&cell_id);
         }
-        handle_runtime_response(&exec, response, args.max_output_tokens, started_at)
+        let output = handle_runtime_response(&exec, response, args.max_output_tokens, started_at)
             .await
-            .map_err(FunctionCallError::RespondToModel)
+            .map_err(FunctionCallError::RespondToModel)?;
+        Ok(CodeModeExecuteOutput {
+            output,
+            disclosed_cell_id,
+        })
     }
 }
 
@@ -174,3 +218,7 @@ impl CoreToolRuntime for CodeModeExecuteHandler {
         true
     }
 }
+
+#[cfg(test)]
+#[path = "execute_handler_tests.rs"]
+mod tests;
