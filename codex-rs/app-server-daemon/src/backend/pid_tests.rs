@@ -10,6 +10,7 @@ use super::PidCommandKind;
 use super::PidFileState;
 use super::PidLogTail;
 use super::PidRecord;
+use super::process_command_matches_args;
 use super::read_stderr_log_tail;
 use super::stderr_log_file_for_pid_file;
 use super::try_lock_file;
@@ -192,6 +193,34 @@ fn app_server_disabled_remote_control_uses_compatible_args_and_runtime_env() {
         backend.command_env(),
         Some((REMOTE_CONTROL_DISABLED_ENV_VAR, "1"))
     );
+}
+
+#[test]
+fn pid_records_only_match_expected_codex_commands() {
+    assert!(process_command_matches_args(
+        "/tmp/codex app-server --listen unix://",
+        &["app-server", "--listen", "unix://"]
+    ));
+    assert!(process_command_matches_args(
+        "/tmp/codex app-server --remote-control --listen unix://",
+        &["app-server", "--remote-control", "--listen", "unix://"]
+    ));
+    assert!(process_command_matches_args(
+        "/tmp/codex app-server daemon pid-update-loop",
+        &["app-server", "daemon", "pid-update-loop"]
+    ));
+    assert!(!process_command_matches_args(
+        "/tmp/codex app-server daemon pid-update-loop",
+        &["app-server", "--listen", "unix://"]
+    ));
+    assert!(!process_command_matches_args(
+        "/usr/bin/yes app-server --listen unix://",
+        &["app-server", "--listen", "unix://"]
+    ));
+    assert!(!process_command_matches_args(
+        "/tmp/codex app-server --listen unix:// <defunct>",
+        &["app-server", "--listen", "unix://"]
+    ));
 }
 
 #[tokio::test]

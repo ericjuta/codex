@@ -439,6 +439,12 @@ impl PidBackend {
         }
     }
 
+    #[cfg(unix)]
+    async fn record_is_active(&self, record: &PidRecord) -> Result<bool> {
+        process_matches_record(record, &self.command_args()).await
+    }
+
+    #[cfg(not(unix))]
     async fn record_is_active(&self, record: &PidRecord) -> Result<bool> {
         process_matches_record(record).await
     }
@@ -564,13 +570,18 @@ fn force_terminate_process_group(_pid: u32) -> Result<()> {
 }
 
 #[cfg(unix)]
-async fn process_matches_record(record: &PidRecord) -> Result<bool> {
+async fn process_matches_record(record: &PidRecord, expected_args: &[&str]) -> Result<bool> {
     if !process_exists(record.pid) {
         return Ok(false);
     }
 
     match read_process_start_time(record.pid).await {
-        Ok(start_time) => Ok(start_time == record.process_start_time),
+        Ok(start_time) if start_time != record.process_start_time => Ok(false),
+        Ok(_) => match read_process_command(record.pid).await {
+            Ok(command) => Ok(process_command_matches_args(&command, expected_args)),
+            Err(_err) if !process_exists(record.pid) => Ok(false),
+            Err(err) => Err(err),
+        },
         Err(_err) if !process_exists(record.pid) => Ok(false),
         Err(err) => Err(err),
     }
@@ -705,6 +716,62 @@ async fn read_process_start_time(pid: u32) -> Result<String> {
         bail!("pid-managed app server {pid} has no recorded start time");
     }
     Ok(start_time.to_string())
+}
+
+#[cfg(unix)]
+async fn read_process_command(pid: u32) -> Result<String> {
+    let proc_cmdline = PathBuf::from(format!("/proc/{pid}/cmdline"));
+    match fs::read(&proc_cmdline).await {
+        Ok(bytes) if !bytes.is_empty() => {
+            let command = String::from_utf8_lossy(&bytes)
+                .replace('\0', " ")
+                .trim()
+                .to_string();
+            if !command.is_empty() {
+                return Ok(command);
+            }
+        }
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("failed to read command line for pid-managed process {pid}")
+            });
+        }
+    }
+
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .await
+        .context("failed to invoke ps for pid-managed process command")?;
+    if !output.status.success() {
+        bail!("failed to read command line for pid-managed process {pid}");
+    }
+
+    let command =
+        String::from_utf8(output.stdout).context("pid-managed process command was not utf-8")?;
+    let command = command.trim();
+    if command.is_empty() {
+        bail!("pid-managed process {pid} has no recorded command");
+    }
+    Ok(command.to_string())
+}
+
+#[cfg(unix)]
+fn process_command_matches_args(command: &str, expected_args: &[&str]) -> bool {
+    let parts = command.split_whitespace().collect::<Vec<_>>();
+    let Some((program, args)) = parts.split_first() else {
+        return false;
+    };
+    if Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        != Some("codex")
+    {
+        return false;
+    }
+    args == expected_args
 }
 
 #[cfg(all(test, unix))]
