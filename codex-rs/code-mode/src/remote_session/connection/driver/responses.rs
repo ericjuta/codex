@@ -22,7 +22,7 @@ use super::types::RemoteSession;
 use super::types::UnclaimedExecute;
 
 impl ConnectionDriver {
-    pub(super) fn flush_deferred_waits(&mut self) -> bool {
+    pub(super) async fn flush_deferred_waits(&mut self) -> bool {
         let mut deferred = self.requests.take_deferred_waits();
         while let Some(wait) = deferred.pop_front() {
             if wait.caller_cancellation.is_cancelled() {
@@ -38,12 +38,15 @@ impl ConnectionDriver {
                 self.requests.push_deferred_wait(wait);
                 continue;
             }
-            if !self.start_wait(
-                wait.session,
-                wait.request,
-                wait.caller_cancellation,
-                wait.response_tx,
-            ) {
+            if !self
+                .start_wait(
+                    wait.session,
+                    wait.request,
+                    wait.caller_cancellation,
+                    wait.response_tx,
+                )
+                .await
+            {
                 for wait in deferred {
                     let _ = wait
                         .response_tx
@@ -55,10 +58,10 @@ impl ConnectionDriver {
         true
     }
 
-    pub(super) fn handle_host_message(&mut self, message: HostToClient) -> bool {
+    pub(super) async fn handle_host_message(&mut self, message: HostToClient) -> bool {
         match message {
             HostToClient::Response { id, result } => {
-                self.complete_request(id, result.into_result())
+                self.complete_request(id, result.into_result()).await
             }
             HostToClient::InitialResponse { id, result } => {
                 self.complete_initial_response(id, result.into_result())
@@ -67,7 +70,7 @@ impl ConnectionDriver {
                 id,
                 session_id,
                 request,
-            } => self.start_delegate(id, session_id, request),
+            } => self.start_delegate(id, session_id, request).await,
             HostToClient::CancelDelegateRequest { id } => {
                 self.delegates.cancel(id);
                 true
@@ -75,7 +78,7 @@ impl ConnectionDriver {
             HostToClient::CellClosed {
                 session_id,
                 cell_id,
-            } => self.close_cell(session_id, cell_id),
+            } => self.close_cell(session_id, cell_id).await,
             HostToClient::HostHello(_) | HostToClient::HandshakeRejected { .. } => {
                 self.fail("code-mode host sent a second handshake response".to_string());
                 false
@@ -83,7 +86,11 @@ impl ConnectionDriver {
         }
     }
 
-    fn complete_request(&mut self, id: RequestId, result: Result<HostResponse, String>) -> bool {
+    async fn complete_request(
+        &mut self,
+        id: RequestId,
+        result: Result<HostResponse, String>,
+    ) -> bool {
         let Some(pending) = self.requests.remove_pending(id) else {
             self.fail(format!("code-mode host returned unknown request ID {id:?}"));
             return false;
@@ -101,7 +108,7 @@ impl ConnectionDriver {
                     self.sessions
                         .insert_ready(session.clone(), delegate, cleanup);
                     if abandoned || response_tx.send(Ok(())).is_err() {
-                        return self.shutdown_abandoned_session(session);
+                        return self.shutdown_abandoned_session(session).await;
                     }
                 }
                 Ok(_) => {
@@ -154,14 +161,14 @@ impl ConnectionDriver {
                     );
                     let started = StartedCell::from_result_receiver(public_id, initial_response_rx);
                     if cancellation.is_cancelled() || response_tx.is_closed() {
-                        return self.terminate_abandoned_cell(session, remote_cell_id);
+                        return self.terminate_abandoned_cell(session, remote_cell_id).await;
                     }
                     let delivered = DeliveredExecute {
                         request_id: id,
                         started,
                     };
                     if response_tx.send(Ok(delivered)).is_err() {
-                        return self.terminate_abandoned_cell(session, remote_cell_id);
+                        return self.terminate_abandoned_cell(session, remote_cell_id).await;
                     }
                     self.requests.insert_unclaimed_execute(
                         id,
@@ -185,7 +192,7 @@ impl ConnectionDriver {
             PendingRequest::Wait {
                 session,
                 cell_id,
-                cancellation: _,
+                cancellation,
                 response_tx,
             } => {
                 let result = match result {
@@ -210,7 +217,18 @@ impl ConnectionDriver {
                     }
                     Err(err) => Err(err),
                 };
-                let _ = response_tx.send(result);
+                let result_is_live_cell = matches!(
+                    &result,
+                    Ok(codex_code_mode_protocol::WaitOutcome::LiveCell(_))
+                );
+                let abandon_live_cell =
+                    result_is_live_cell && (cancellation.is_cancelled() || response_tx.is_closed());
+                if abandon_live_cell {
+                    return self.terminate_abandoned_cell(session, cell_id).await;
+                }
+                if response_tx.send(result).is_err() && result_is_live_cell {
+                    return self.terminate_abandoned_cell(session, cell_id).await;
+                }
             }
             PendingRequest::Terminate {
                 session,
@@ -250,7 +268,7 @@ impl ConnectionDriver {
             } => match result {
                 Ok(HostResponse::SessionClosed { session_id }) if session_id == session.id => {
                     let effects = self.close_session_locally(&session.id);
-                    if !self.apply_delegate_effects(effects) {
+                    if !self.apply_delegate_effects(effects).await {
                         return false;
                     }
                     let _ = response_tx.send(Ok(()));
@@ -268,40 +286,42 @@ impl ConnectionDriver {
                 }
             },
         }
-        true
+        self.flush_deferred_waits().await
     }
 
-    pub(super) fn cancel_dropped_callers(&mut self) -> bool {
+    pub(super) async fn cancel_dropped_callers(&mut self) -> bool {
         for action in self.requests.collect_cancellations() {
-            if !self.apply_cancellation(action) {
+            if !self.apply_cancellation(action).await {
                 return false;
             }
         }
         true
     }
 
-    pub(super) fn cancel_request(&mut self, id: RequestId) -> bool {
-        self.requests
-            .mark_cancelled(id)
-            .is_none_or(|action| self.apply_cancellation(action))
+    pub(super) async fn cancel_request(&mut self, id: RequestId) -> bool {
+        match self.requests.mark_cancelled(id) {
+            Some(action) => self.apply_cancellation(action).await,
+            None => true,
+        }
     }
 
-    fn apply_cancellation(&mut self, action: CancellationAction) -> bool {
+    async fn apply_cancellation(&mut self, action: CancellationAction) -> bool {
         match action {
-            CancellationAction::Send(id) => self.send_cancel_request(id),
+            CancellationAction::Send(id) => self.send_cancel_request(id).await,
             CancellationAction::Terminate {
                 request_id,
                 execute,
             } => {
-                if !self.send_cancel_request(request_id) {
+                if !self.send_cancel_request(request_id).await {
                     return false;
                 }
                 self.terminate_abandoned_cell(execute.session, execute.cell_id)
+                    .await
             }
         }
     }
 
-    fn send_cancel_request(&mut self, id: RequestId) -> bool {
+    async fn send_cancel_request(&mut self, id: RequestId) -> bool {
         let frame = match EncodedFrame::encode(&ClientToHost::CancelRequest { id }) {
             Ok(frame) => frame,
             Err(err) => {
@@ -311,10 +331,10 @@ impl ConnectionDriver {
                 return false;
             }
         };
-        self.queue_frame(frame)
+        self.queue_frame(frame).await
     }
 
-    fn shutdown_abandoned_session(&mut self, session: RemoteSession) -> bool {
+    async fn shutdown_abandoned_session(&mut self, session: RemoteSession) -> bool {
         let Some(should_shutdown) = self.sessions.begin_abandoned_shutdown(&session.id) else {
             self.fail(format!(
                 "code-mode host committed abandoned session {} without local state",
@@ -336,9 +356,14 @@ impl ConnectionDriver {
                 response_tx,
             },
         )
+        .await
     }
 
-    fn terminate_abandoned_cell(&mut self, session: RemoteSession, cell_id: WireCellId) -> bool {
+    async fn terminate_abandoned_cell(
+        &mut self,
+        session: RemoteSession,
+        cell_id: WireCellId,
+    ) -> bool {
         let Some(is_closing) = self.sessions.is_closing(&session.id) else {
             self.fail(format!(
                 "code-mode host admitted an abandoned cell in unknown session {}",
@@ -362,6 +387,7 @@ impl ConnectionDriver {
                 response_tx,
             },
         )
+        .await
     }
 
     fn complete_initial_response(

@@ -124,6 +124,34 @@ async fn synchronous_exit_returns_successfully() {
 }
 
 #[tokio::test]
+async fn exit_inside_try_catch_returns_successfully_without_continuing() {
+    let service = InProcessCodeModeSession::new();
+
+    let response = execute(
+        &service,
+        ExecuteRequest {
+            source:
+                r#"text("before"); try { exit(); } catch (e) { text("caught"); } text("after");"#
+                    .to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        },
+    )
+    .await;
+
+    assert_eq!(
+        response,
+        RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "before".to_string(),
+            }],
+            error_text: None,
+        }
+    );
+}
+
+#[tokio::test]
 async fn stored_values_are_shared_between_cells_but_not_sessions() {
     let first_session = InProcessCodeModeSession::new();
     let second_session = InProcessCodeModeSession::new();

@@ -1,4 +1,5 @@
 use super::augment_tool_spec_for_code_mode;
+use super::augment_tool_spec_for_mixed_code_mode;
 use super::tool_spec_to_code_mode_tool_definition;
 use crate::AdditionalProperties;
 use crate::FreeformTool;
@@ -44,6 +45,54 @@ exec tool declaration:
 declare const tools: { lookup_order(args: { order_id: string; }): Promise<{ ok: boolean; }>; };
 ```"#
                 .to_string(),
+            strict: false,
+            defer_loading: Some(true),
+            parameters: JsonSchema::object(
+                BTreeMap::from([(
+                    "order_id".to_string(),
+                    JsonSchema::string(/*description*/ None),
+                )]),
+                Some(vec!["order_id".to_string()]),
+                Some(AdditionalProperties::Boolean(false))
+            ),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"}
+                },
+                "required": ["ok"],
+            })),
+        })
+    );
+}
+
+#[test]
+fn augment_tool_spec_for_mixed_code_mode_uses_compact_return_type() {
+    assert_eq!(
+        augment_tool_spec_for_mixed_code_mode(ToolSpec::Function(ResponsesApiTool {
+            name: "lookup_order".to_string(),
+            description: "Look up an order".to_string(),
+            strict: false,
+            defer_loading: Some(true),
+            parameters: JsonSchema::object(
+                BTreeMap::from([(
+                    "order_id".to_string(),
+                    JsonSchema::string(/*description*/ None),
+                )]),
+                Some(vec!["order_id".to_string()]),
+                Some(AdditionalProperties::Boolean(false))
+            ),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"}
+                },
+                "required": ["ok"],
+            })),
+        })),
+        ToolSpec::Function(ResponsesApiTool {
+            name: "lookup_order".to_string(),
+            description: "Look up an order\n\nCode mode return type: `tools.lookup_order(...)` returns `Promise<{ ok: boolean; }>`.".to_string(),
             strict: false,
             defer_loading: Some(true),
             parameters: JsonSchema::object(

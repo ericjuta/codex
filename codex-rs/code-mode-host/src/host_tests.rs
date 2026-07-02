@@ -386,6 +386,7 @@ async fn execute_request_id_remains_active_until_initial_response() {
                 request: execute_request("await new Promise(() => {});"),
             },
         )
+        .await
         .expect("spawn execute request");
     let started = decode_frame(outgoing_rx.recv().await.expect("execution started frame")).await;
     let HostToClient::Response {

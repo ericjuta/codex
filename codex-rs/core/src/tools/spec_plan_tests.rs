@@ -1164,11 +1164,50 @@ async fn excluded_deferred_namespaces_do_not_enable_nested_tool_guidance() {
             .description
             .contains("Some deferred nested tools may be omitted")
     );
-    plan.assert_registered_contains(&[
-        &ToolName::namespaced("excluded", "lookup").to_string(),
-        "tool_search",
-    ]);
+    plan.assert_registered_contains(&[&ToolName::namespaced("excluded", "lookup").to_string()]);
+    plan.assert_registered_lacks(&["tool_search"]);
 }
+
+#[tokio::test]
+async fn code_mode_only_exposes_excluded_namespace_directly() {
+    let plan = probe_with(
+        |turn| {
+            set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
+            turn.model_info.supports_search_tool = true;
+            update_config(turn, |config| {
+                config.code_mode.excluded_tool_namespaces = vec!["excluded".to_string()];
+            });
+        },
+        ToolPlanInputs {
+            dynamic_tools: vec![dynamic_tool(
+                Some("excluded"),
+                "lookup",
+                /*defer_loading*/ true,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    plan.assert_visible_contains(&[
+        codex_code_mode::PUBLIC_TOOL_NAME,
+        codex_code_mode::WAIT_TOOL_NAME,
+        "excluded",
+    ]);
+    assert_eq!(
+        plan.exposure(&ToolName::namespaced("excluded", "lookup").to_string()),
+        ToolExposure::DirectModelOnly
+    );
+    assert_eq!(
+        plan.namespace_function_names("excluded"),
+        &["lookup".to_string()]
+    );
+    let ToolSpec::Freeform(exec) = plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME) else {
+        panic!("expected code mode exec tool");
+    };
+    assert!(!exec.description.contains("excluded_lookup(args:"));
+}
+
 #[tokio::test]
 async fn code_mode_only_exec_description_omits_deferred_tools() {
     let plan = probe_with(

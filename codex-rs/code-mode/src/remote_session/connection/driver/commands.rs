@@ -23,7 +23,7 @@ use super::types::PendingRequest;
 use super::types::RemoteSession;
 
 impl ConnectionDriver {
-    pub(super) fn handle_command(&mut self, command: DriverCommand) -> bool {
+    pub(super) async fn handle_command(&mut self, command: DriverCommand) -> bool {
         match command {
             DriverCommand::OpenSession {
                 session,
@@ -31,32 +31,41 @@ impl ConnectionDriver {
                 cleanup,
                 caller_cancellation,
                 response_tx,
-            } => self.open_session(session, delegate, cleanup, caller_cancellation, response_tx),
+            } => {
+                self.open_session(session, delegate, cleanup, caller_cancellation, response_tx)
+                    .await
+            }
             DriverCommand::Execute {
                 session,
                 request,
                 caller_cancellation,
                 response_tx,
-            } => self.execute(session, request, caller_cancellation, response_tx),
+            } => {
+                self.execute(session, request, caller_cancellation, response_tx)
+                    .await
+            }
             DriverCommand::Wait {
                 session,
                 request,
                 caller_cancellation,
                 response_tx,
-            } => self.wait(session, request, caller_cancellation, response_tx),
+            } => {
+                self.wait(session, request, caller_cancellation, response_tx)
+                    .await
+            }
             DriverCommand::Terminate {
                 session,
                 cell_id,
                 response_tx,
-            } => self.terminate(session, cell_id, response_tx),
+            } => self.terminate(session, cell_id, response_tx).await,
             DriverCommand::ShutdownSession {
                 session,
                 response_tx,
-            } => self.shutdown_session(session, response_tx),
+            } => self.shutdown_session(session, response_tx).await,
         }
     }
 
-    fn open_session(
+    async fn open_session(
         &mut self,
         session: RemoteSession,
         delegate: Arc<dyn CodeModeSessionDelegate>,
@@ -105,10 +114,10 @@ impl ConnectionDriver {
             },
             &self.event_tx,
         );
-        self.queue_frame(frame)
+        self.queue_frame(frame).await
     }
 
-    fn execute(
+    async fn execute(
         &mut self,
         session: RemoteSession,
         request: ExecuteRequest,
@@ -164,10 +173,10 @@ impl ConnectionDriver {
             },
             &self.event_tx,
         );
-        self.queue_frame(frame)
+        self.queue_frame(frame).await
     }
 
-    fn wait(
+    async fn wait(
         &mut self,
         session: RemoteSession,
         request: WaitRequest,
@@ -195,9 +204,10 @@ impl ConnectionDriver {
             return true;
         }
         self.start_wait(session, request, caller_cancellation, response_tx)
+            .await
     }
 
-    pub(super) fn start_wait(
+    pub(super) async fn start_wait(
         &mut self,
         session: RemoteSession,
         request: WireWaitRequest,
@@ -217,9 +227,10 @@ impl ConnectionDriver {
                 response_tx,
             },
         )
+        .await
     }
 
-    fn terminate(
+    async fn terminate(
         &mut self,
         session: RemoteSession,
         cell_id: CellId,
@@ -248,9 +259,10 @@ impl ConnectionDriver {
                 response_tx,
             },
         )
+        .await
     }
 
-    fn shutdown_session(
+    async fn shutdown_session(
         &mut self,
         session: RemoteSession,
         response_tx: oneshot::Sender<Result<(), String>>,
@@ -268,9 +280,14 @@ impl ConnectionDriver {
                 response_tx,
             },
         )
+        .await
     }
 
-    pub(super) fn send_request(&mut self, request: HostRequest, pending: PendingRequest) -> bool {
+    pub(super) async fn send_request(
+        &mut self,
+        request: HostRequest,
+        pending: PendingRequest,
+    ) -> bool {
         let request_id = match self.requests.allocate_id() {
             Ok(id) => id,
             Err(err) => {
@@ -293,6 +310,6 @@ impl ConnectionDriver {
         };
         self.requests
             .insert_pending(request_id, pending, &self.event_tx);
-        self.queue_frame(frame)
+        self.queue_frame(frame).await
     }
 }

@@ -28,6 +28,7 @@ pub(super) struct CodeModeDispatchBroker {
     dispatch_tx: async_channel::Sender<DispatchMessage>,
     dispatch_rx: async_channel::Receiver<DispatchMessage>,
     dispatch_gates: Arc<Mutex<HashMap<CellId, watch::Sender<bool>>>>,
+    active_turn_id: Arc<Mutex<Option<String>>>,
 }
 
 impl CodeModeDispatchBroker {
@@ -37,6 +38,7 @@ impl CodeModeDispatchBroker {
             dispatch_tx,
             dispatch_rx,
             dispatch_gates: Arc::new(Mutex::new(HashMap::new())),
+            active_turn_id: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -54,13 +56,17 @@ impl CodeModeDispatchBroker {
         router: Arc<ToolRouter>,
         step_context: Arc<StepContext>,
         tracker: SharedTurnDiffTracker,
+        turn_id: String,
+        turn_end_cleanup: Box<dyn FnOnce() + Send>,
     ) -> CodeModeDispatchWorker {
+        set_active_turn_id(&self.active_turn_id, Some(turn_id.clone()));
         let tool_runtime =
             ToolCallRuntime::new(router, Arc::clone(&exec.session), step_context, tracker);
         let host = Arc::new(CoreTurnHost { exec, tool_runtime });
         let dispatch_rx = self.dispatch_rx.clone();
         let dispatch_gates = Arc::clone(&self.dispatch_gates);
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+        let worker_turn_id = turn_id.clone();
         tokio::spawn(async move {
             loop {
                 let message = tokio::select! {
@@ -72,6 +78,7 @@ impl CodeModeDispatchBroker {
                 };
                 match message {
                     DispatchMessage::Notify {
+                        submitting_turn_id,
                         call_id,
                         cell_id,
                         text,
@@ -79,6 +86,15 @@ impl CodeModeDispatchBroker {
                         cancellation_token,
                         response_tx,
                     } => {
+                        if !message_belongs_to_turn_or_ready_cell(
+                            submitting_turn_id.as_deref(),
+                            &worker_turn_id,
+                            &dispatch_gates,
+                            &cell_id,
+                        ) {
+                            let _ = response_tx.send(Err(stale_turn_message(submitting_turn_id)));
+                            continue;
+                        }
                         let response = if wait_until_cell_ready_for_dispatch(
                             &dispatch_gates,
                             &cell_id,
@@ -94,11 +110,21 @@ impl CodeModeDispatchBroker {
                         let _ = response_tx.send(response);
                     }
                     DispatchMessage::InvokeTool {
+                        submitting_turn_id,
                         invocation,
                         cancellation_token,
                         response_tx,
                     } => {
                         let cell_id = invocation.cell_id.clone();
+                        if !message_belongs_to_turn_or_ready_cell(
+                            submitting_turn_id.as_deref(),
+                            &worker_turn_id,
+                            &dispatch_gates,
+                            &cell_id,
+                        ) {
+                            let _ = response_tx.send(Err(stale_turn_message(submitting_turn_id)));
+                            continue;
+                        }
                         if !wait_until_cell_ready_for_dispatch(
                             &dispatch_gates,
                             &cell_id,
@@ -107,6 +133,8 @@ impl CodeModeDispatchBroker {
                         .await
                         {
                             remove_dispatch_gate(&dispatch_gates, &cell_id);
+                            let _ = response_tx
+                                .send(Err("code mode nested tool call cancelled".to_string()));
                             continue;
                         }
                         let host = Arc::clone(&host);
@@ -126,7 +154,50 @@ impl CodeModeDispatchBroker {
         });
         CodeModeDispatchWorker {
             shutdown_tx: Some(shutdown_tx),
+            active_turn_id: Arc::clone(&self.active_turn_id),
+            turn_id,
+            turn_end_cleanup: Some(turn_end_cleanup),
         }
+    }
+
+    fn current_turn_id(&self) -> Option<String> {
+        self.active_turn_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+fn set_active_turn_id(active_turn_id: &Mutex<Option<String>>, turn_id: Option<String>) {
+    *active_turn_id
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = turn_id;
+}
+
+fn clear_active_turn_id(active_turn_id: &Mutex<Option<String>>, turn_id: &str) {
+    let mut active_turn_id = active_turn_id
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if active_turn_id.as_deref() == Some(turn_id) {
+        *active_turn_id = None;
+    }
+}
+
+fn message_belongs_to_turn_or_ready_cell(
+    submitting_turn_id: Option<&str>,
+    active_turn_id: &str,
+    dispatch_gates: &Mutex<HashMap<CellId, watch::Sender<bool>>>,
+    cell_id: &CellId,
+) -> bool {
+    submitting_turn_id == Some(active_turn_id) || cell_ready_for_dispatch(dispatch_gates, cell_id)
+}
+
+fn stale_turn_message(submitting_turn_id: Option<String>) -> String {
+    match submitting_turn_id {
+        Some(turn_id) => {
+            format!("code mode nested tool call was submitted by inactive turn {turn_id}")
+        }
+        None => "code mode nested tool call was submitted without an active turn".to_string(),
     }
 }
 
@@ -153,6 +224,19 @@ fn remove_dispatch_gate(
         Err(poisoned) => poisoned.into_inner(),
     };
     dispatch_gates.remove(cell_id);
+}
+
+fn cell_ready_for_dispatch(
+    dispatch_gates: &Mutex<HashMap<CellId, watch::Sender<bool>>>,
+    cell_id: &CellId,
+) -> bool {
+    let dispatch_gates = match dispatch_gates.lock() {
+        Ok(dispatch_gates) => dispatch_gates,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    dispatch_gates
+        .get(cell_id)
+        .is_some_and(|ready_tx| *ready_tx.borrow())
 }
 
 async fn wait_until_cell_ready_for_dispatch(
@@ -192,6 +276,7 @@ impl CodeModeSessionDelegate for CodeModeDispatchBroker {
             let (response_tx, response_rx) = oneshot::channel();
             self.dispatch_tx
                 .send(DispatchMessage::InvokeTool {
+                    submitting_turn_id: self.current_turn_id(),
                     invocation,
                     cancellation_token: cancellation_token.clone(),
                     response_tx,
@@ -223,6 +308,7 @@ impl CodeModeSessionDelegate for CodeModeDispatchBroker {
             let (response_tx, response_rx) = oneshot::channel();
             self.dispatch_tx
                 .send(DispatchMessage::Notify {
+                    submitting_turn_id: self.current_turn_id(),
                     call_id,
                     cell_id,
                     text,
@@ -249,11 +335,13 @@ impl CodeModeSessionDelegate for CodeModeDispatchBroker {
 
 enum DispatchMessage {
     InvokeTool {
+        submitting_turn_id: Option<String>,
         invocation: CodeModeNestedToolCall,
         cancellation_token: CancellationToken,
         response_tx: oneshot::Sender<Result<JsonValue, String>>,
     },
     Notify {
+        submitting_turn_id: Option<String>,
         call_id: String,
         cell_id: CellId,
         text: String,
@@ -265,12 +353,19 @@ enum DispatchMessage {
 
 pub(crate) struct CodeModeDispatchWorker {
     shutdown_tx: Option<oneshot::Sender<()>>,
+    active_turn_id: Arc<Mutex<Option<String>>>,
+    turn_id: String,
+    turn_end_cleanup: Option<Box<dyn FnOnce() + Send>>,
 }
 
 impl Drop for CodeModeDispatchWorker {
     fn drop(&mut self) {
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(());
+        }
+        clear_active_turn_id(&self.active_turn_id, &self.turn_id);
+        if let Some(turn_end_cleanup) = self.turn_end_cleanup.take() {
+            turn_end_cleanup();
         }
     }
 }

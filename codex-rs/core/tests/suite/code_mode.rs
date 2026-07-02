@@ -256,13 +256,63 @@ async fn run_code_mode_turn_with_model_and_config(
     Ok((test, second_mock))
 }
 
+async fn submit_turn_without_waiting_for_completion(
+    test: &TestCodex,
+    prompt: &str,
+) -> Result<String> {
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
+    let session_model = test.session_configured.model.clone();
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: prompt.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    Ok(wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
+        _ => None,
+    })
+    .await)
+}
+
+async fn wait_until_file_exists(path: &Path) -> Result<()> {
+    for _ in 0..100 {
+        if path.exists() {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    anyhow::bail!("timed out waiting for {}", path.display());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn missing_process_host_returns_a_tool_error() -> Result<()> {
+async fn code_mode_host_feature_runs_code_mode() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let (_test, follow_up_mock) =
-        run_code_mode_turn_with_config(&server, "Run code mode", "text('unreachable')", |config| {
+        run_code_mode_turn_with_config(&server, "Run code mode", "text('reachable')", |config| {
             config
                 .features
                 .enable(Feature::CodeModeHost)
@@ -270,13 +320,9 @@ async fn missing_process_host_returns_a_tool_error() -> Result<()> {
         })
         .await?;
 
-    let output = follow_up_mock
-        .single_request()
-        .custom_tool_call_output("call-1");
-    assert!(
-        output["output"]
-            .as_str()
-            .is_some_and(|output| output.contains("failed to spawn code-mode host"))
+    assert_eq!(
+        custom_tool_output_last_non_empty_text(&follow_up_mock.single_request(), "call-1"),
+        Some("reachable".to_string())
     );
 
     Ok(())
@@ -1479,7 +1525,12 @@ try {
   await tools.exec_command({});
   text("no-exception");
 } catch (error) {
-  text(`caught:${error?.message ?? String(error)}`);
+  text(JSON.stringify({
+    message: error.message,
+    name: error.name,
+    isError: error instanceof Error,
+    hasStack: typeof error.stack === "string",
+  }));
 }
 "#,
     )
@@ -1492,9 +1543,15 @@ try {
         Some(false),
         "script should catch the nested tool error: {output}"
     );
+    let parsed: Value = serde_json::from_str(&output)?;
+    assert_eq!(parsed["name"], "Error");
+    assert_eq!(parsed["isError"], true);
+    assert_eq!(parsed["hasStack"], true);
     assert!(
-        output.contains("caught:"),
-        "expected caught exception text in output: {output}"
+        parsed["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("failed to parse function arguments")),
+        "expected nested tool error message: {parsed:?}"
     );
     assert!(
         !output.contains("no-exception"),
@@ -1646,6 +1703,202 @@ text("phase 3");
         text_item(&third_items, /*index*/ 0),
     );
     assert_eq!(text_item(&third_items, /*index*/ 1), "phase 3");
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupted_unrevealed_exec_does_not_run_nested_tools_on_next_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex().with_config(move |config| {
+        let _ = config.features.enable(Feature::CodeMode);
+    });
+    let test = builder.build(&server).await?;
+    let started_marker = test.workspace_path("code-mode-interrupt-started.txt");
+    let gate = test.workspace_path("code-mode-interrupt-gate.ready");
+    let leaked_marker = test.workspace_path("code-mode-interrupt-leaked.txt");
+    let started_marker_quoted = shlex::try_join([started_marker.to_string_lossy().as_ref()])?;
+    let gate_quoted = shlex::try_join([gate.to_string_lossy().as_ref()])?;
+    let leaked_marker_quoted = shlex::try_join([leaked_marker.to_string_lossy().as_ref()])?;
+    let mark_started_command = format!("printf started > {started_marker_quoted}");
+    let check_gate_command = format!("if [ -f {gate_quoted} ]; then printf ready; fi");
+    let write_leaked_command = format!("printf leaked > {leaked_marker_quoted}");
+
+    let code = format!(
+        r#"// @exec: {{"yield_time_ms": 30000}}
+await tools.exec_command({{ cmd: {mark_started_command:?} }});
+while ((await tools.exec_command({{ cmd: {check_gate_command:?} }})).output !== "ready") {{
+  await new Promise(resolve => setTimeout(resolve, 25));
+}}
+await tools.exec_command({{ cmd: {write_leaked_command:?} }});
+"#
+    );
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call("call-1", "exec", &code),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    submit_turn_without_waiting_for_completion(&test, "start interrupted exec").await?;
+    wait_until_file_exists(&started_marker).await?;
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnAborted(_) => Some(()),
+        _ => None,
+    })
+    .await;
+
+    fs::write(&gate, "ready")?;
+    let watch_leak_command = format!(
+        "for i in $(seq 1 50); do if [ -f {leaked_marker_quoted} ]; then printf leaked; exit 0; fi; sleep 0.02; done; printf clean"
+    );
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-2"),
+            responses::ev_function_call(
+                "call-2",
+                "exec_command",
+                &serde_json::to_string(&serde_json::json!({
+                    "cmd": watch_leak_command,
+                }))?,
+            ),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+    let follow_up = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "checked"),
+            ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("check for stale nested dispatch").await?;
+
+    let output = follow_up
+        .single_request()
+        .function_call_output_text("call-2")
+        .expect("watch command output should be forwarded");
+    assert!(
+        output.ends_with("clean"),
+        "stale code-mode nested tool call unexpectedly ran: {output:?}"
+    );
+    assert!(!leaked_marker.exists());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_wait_calls_in_one_response_run_in_parallel() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex().with_config(move |config| {
+        let _ = config.features.enable(Feature::CodeMode);
+    });
+    let test = builder.build(&server).await?;
+    let pending_code = r#"// @exec: {"yield_time_ms": 0}
+yield_control();
+await new Promise(() => {});
+"#;
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call("call-1", "exec", pending_code),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let first_completion = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "first pending"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+    test.submit_turn("start first pending cell").await?;
+    let first_items = custom_tool_output_items(&first_completion.single_request(), "call-1");
+    let first_cell_id = extract_running_cell_id(text_item(&first_items, /*index*/ 0));
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_custom_tool_call("call-2", "exec", pending_code),
+            ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+    let second_completion = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-2", "second pending"),
+            ev_completed("resp-4"),
+        ]),
+    )
+    .await;
+    test.submit_turn("start second pending cell").await?;
+    let second_items = custom_tool_output_items(&second_completion.single_request(), "call-2");
+    let second_cell_id = extract_running_cell_id(text_item(&second_items, /*index*/ 0));
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-5"),
+            responses::ev_function_call(
+                "call-wait-1",
+                "wait",
+                &serde_json::to_string(&serde_json::json!({
+                    "cell_id": first_cell_id,
+                    "yield_time_ms": 1_000,
+                }))?,
+            ),
+            responses::ev_function_call(
+                "call-wait-2",
+                "wait",
+                &serde_json::to_string(&serde_json::json!({
+                    "cell_id": second_cell_id,
+                    "yield_time_ms": 1_000,
+                }))?,
+            ),
+            ev_completed("resp-5"),
+        ]),
+    )
+    .await;
+    let wait_completion = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-3", "both still pending"),
+            ev_completed("resp-6"),
+        ]),
+    )
+    .await;
+
+    let start = Instant::now();
+    test.submit_turn("wait both pending cells").await?;
+    let duration = start.elapsed();
+
+    assert!(
+        duration < Duration::from_millis(1_800),
+        "expected same-response wait calls to run in parallel, got {duration:?}",
+    );
+    let request = wait_completion.single_request();
+    assert!(!function_tool_output_items(&request, "call-wait-1").is_empty());
+    assert!(!function_tool_output_items(&request, "call-wait-2").is_empty());
 
     Ok(())
 }
@@ -2603,7 +2856,7 @@ text("token one token two token three token four token five token six token seve
                 &serde_json::to_string(&serde_json::json!({
                     "cell_id": cell_id.clone(),
                     "yield_time_ms": 1_000,
-                    "max_tokens": 6,
+                    "max_output_tokens": 6,
                 }))?,
             ),
             ev_completed("resp-3"),
@@ -3837,6 +4090,79 @@ text(JSON.stringify({
             "allowedType": "function",
             "allowedMetadata": true,
         })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_only_keeps_excluded_namespaces_direct() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        let _ = config.features.enable(Feature::CodeModeOnly);
+        config.code_mode.excluded_tool_namespaces = vec!["excluded".to_string()];
+    });
+    let base_test = builder.build(&server).await?;
+    let new_thread = base_test
+        .thread_manager
+        .start_thread_with_tools(
+            base_test.config.clone(),
+            vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+                name: "excluded".to_string(),
+                description: "Excluded tools.".to_string(),
+                tools: vec![DynamicToolNamespaceTool::Function(
+                    DynamicToolFunctionSpec {
+                        name: "lookup".to_string(),
+                        description: "An excluded dynamic tool.".to_string(),
+                        input_schema: serde_json::json!({
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": false,
+                        }),
+                        defer_loading: false,
+                    },
+                )],
+            })],
+        )
+        .await?;
+    let mut test = base_test;
+    test.codex = new_thread.thread;
+    test.session_configured = new_thread.session_configured;
+
+    let response = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("inspect code mode only excluded namespace")
+        .await?;
+
+    let body = response.single_request().body_json();
+    assert!(
+        tool_names(&body).contains(&"excluded".to_string()),
+        "excluded namespace should remain directly exposed in code_mode_only: {body}"
+    );
+    let exec_description = body
+        .get("tools")
+        .and_then(Value::as_array)
+        .and_then(|tools| {
+            tools.iter().find_map(|tool| {
+                (tool.get("name").and_then(Value::as_str) == Some("exec"))
+                    .then(|| tool.get("description").and_then(Value::as_str))
+                    .flatten()
+            })
+        })
+        .expect("exec description should be present");
+    assert!(
+        !exec_description.contains("excluded__lookup"),
+        "excluded namespace should not be listed as a nested code-mode tool: {exec_description}"
     );
 
     Ok(())

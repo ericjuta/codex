@@ -107,6 +107,31 @@ fn should_use_test_thread_manager_behavior() -> bool {
     FORCE_TEST_THREAD_MANAGER_BEHAVIOR.load(Ordering::Relaxed)
 }
 
+fn code_mode_session_provider_for_config(config: &Config) -> Arc<dyn CodeModeSessionProvider> {
+    if config.features.enabled(Feature::CodeModeHost) {
+        return code_mode_process_session_provider_or_fallback(
+            ProcessOwnedCodeModeSessionProvider::with_default_host_program_if_available(),
+        );
+    }
+
+    Arc::new(InProcessCodeModeSessionProvider)
+}
+
+fn code_mode_process_session_provider_or_fallback(
+    process_provider: Result<ProcessOwnedCodeModeSessionProvider, PathBuf>,
+) -> Arc<dyn CodeModeSessionProvider> {
+    match process_provider {
+        Ok(provider) => Arc::new(provider),
+        Err(host_program) => {
+            warn!(
+                expected_path = %host_program.display(),
+                "features.code_mode_host is enabled but the code-mode host binary is missing; falling back to the in-process runtime"
+            );
+            Arc::new(InProcessCodeModeSessionProvider)
+        }
+    }
+}
+
 struct TempCodexHomeGuard {
     path: PathBuf,
 }
@@ -342,11 +367,7 @@ impl ThreadManager {
                 skills_service,
                 plugins_manager,
                 mcp_manager,
-                code_mode_session_provider: if config.features.enabled(Feature::CodeModeHost) {
-                    Arc::new(ProcessOwnedCodeModeSessionProvider::default())
-                } else {
-                    Arc::new(InProcessCodeModeSessionProvider)
-                },
+                code_mode_session_provider: code_mode_session_provider_for_config(config),
                 extensions,
                 user_instructions_provider,
                 thread_store,

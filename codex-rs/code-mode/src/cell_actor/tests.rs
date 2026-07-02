@@ -91,7 +91,7 @@ impl CellHost for RecordingHost {
 struct CellActorHarness {
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
     handle: CellHandle,
-    initial_event_rx: oneshot::Receiver<Result<CellEvent, CellError>>,
+    initial_event_rx: oneshot::Receiver<CellObservation>,
     task: tokio::task::JoinHandle<()>,
     runtime_control_rx: std_mpsc::Receiver<RuntimeControlCommand>,
     _runtime_event_rx: mpsc::UnboundedReceiver<RuntimeEvent>,
@@ -189,6 +189,7 @@ async fn unexpected_runtime_thread_exit_is_reported_to_the_session_owner() {
             .initial_event_rx
             .await
             .expect("initial event")
+            .into_result()
             .is_ok()
     );
     harness.task.await.expect("cell task");
@@ -204,7 +205,11 @@ async fn runtime_thread_panic_remains_a_cell_error_without_owner_supervision() {
     drop(harness.event_tx);
 
     assert_eq!(
-        harness.initial_event_rx.await.expect("initial event"),
+        harness
+            .initial_event_rx
+            .await
+            .expect("initial event")
+            .into_result(),
         Ok(CellEvent::Completed {
             content_items: Vec::new(),
             error_text: Some("exec runtime ended unexpectedly".to_string()),
@@ -237,7 +242,7 @@ async fn yield_timer_preempts_buffered_runtime_output() {
         .unwrap();
 
     assert_eq!(
-        harness.initial_event_rx.await.unwrap(),
+        harness.initial_event_rx.await.unwrap().into_result(),
         Ok(CellEvent::Yielded {
             content_items: Vec::new(),
         })
@@ -272,7 +277,10 @@ async fn queued_termination_preempts_unobserved_runtime_completion() {
         content_items: Vec::new(),
     });
     assert_eq!(termination.await, terminated.clone());
-    assert_eq!(harness.initial_event_rx.await.unwrap(), terminated);
+    assert_eq!(
+        harness.initial_event_rx.await.unwrap().into_result(),
+        terminated
+    );
     harness.task.await.unwrap();
 }
 
@@ -284,7 +292,14 @@ async fn observation_dropped_before_dequeue_does_not_consume_output() {
         Arc::clone(&host),
     );
     harness.event_tx.send(RuntimeEvent::YieldRequested).unwrap();
-    assert!(harness.initial_event_rx.await.unwrap().is_ok());
+    assert!(
+        harness
+            .initial_event_rx
+            .await
+            .unwrap()
+            .into_result()
+            .is_ok()
+    );
 
     drop(
         harness
@@ -341,7 +356,14 @@ async fn dropped_yield_observer_preserves_output_for_the_next_observation() {
         Arc::clone(&host),
     );
     harness.event_tx.send(RuntimeEvent::YieldRequested).unwrap();
-    assert!(harness.initial_event_rx.await.unwrap().is_ok());
+    assert!(
+        harness
+            .initial_event_rx
+            .await
+            .unwrap()
+            .into_result()
+            .is_ok()
+    );
 
     let dropped_observation = harness
         .handle
@@ -404,7 +426,14 @@ async fn dropped_pending_observer_preserves_the_frontier_for_the_next_observatio
         Arc::clone(&host),
     );
     harness.event_tx.send(RuntimeEvent::YieldRequested).unwrap();
-    assert!(harness.initial_event_rx.await.unwrap().is_ok());
+    assert!(
+        harness
+            .initial_event_rx
+            .await
+            .unwrap()
+            .into_result()
+            .is_ok()
+    );
 
     let dropped_observation = harness.handle.observe(ObserveMode::PendingFrontier);
     assert_eq!(
@@ -548,9 +577,46 @@ fn failed_completion_delivery_rebuffers_the_event() {
     let (response_tx, mut response_rx) = oneshot::channel();
     assert!(matches!(
         cell_state.route_observation(ObserveMode::YieldAfter(Duration::ZERO), response_tx),
-        ObservationDelivery::Delivered
+        ObservationDelivery::Claimed
     ));
-    assert_eq!(response_rx.try_recv(), Ok(Ok(event)));
+    assert_eq!(
+        response_rx.try_recv().map(CellObservation::into_result),
+        Ok(Ok(event))
+    );
+}
+
+#[test]
+fn unread_claimed_completion_rebuffers_the_event() {
+    let cell_state = CellState::new(CancellationToken::new());
+    let event = CellEvent::Completed {
+        content_items: Vec::new(),
+        error_text: None,
+    };
+    assert_eq!(
+        cell_state.commit_completion(
+            event.clone(),
+            /*pending_initial_yield_items*/ None,
+            || {}
+        ),
+        CompletionCommit::Committed
+    );
+    let (response_tx, response_rx) = oneshot::channel();
+    assert!(matches!(
+        cell_state.deliver_completion(Some(response_tx)),
+        CompletionDelivery::Claimed
+    ));
+    drop(response_rx);
+    assert!(cell_state.accepting_observations());
+
+    let (response_tx, mut response_rx) = oneshot::channel();
+    assert!(matches!(
+        cell_state.route_observation(ObserveMode::YieldAfter(Duration::ZERO), response_tx),
+        ObservationDelivery::Claimed
+    ));
+    assert_eq!(
+        response_rx.try_recv().map(CellObservation::into_result),
+        Ok(Ok(event))
+    );
 }
 
 #[test]
@@ -583,7 +649,7 @@ fn buffered_initial_yield_precedes_buffered_completion_for_yield_observer() {
         ObservationDelivery::Buffered
     ));
     assert_eq!(
-        response_rx.try_recv(),
+        response_rx.try_recv().map(CellObservation::into_result),
         Ok(Ok(CellEvent::Yielded {
             content_items: vec![OutputItem::Text {
                 text: "before".to_string(),
@@ -594,9 +660,12 @@ fn buffered_initial_yield_precedes_buffered_completion_for_yield_observer() {
     let (response_tx, mut response_rx) = oneshot::channel();
     assert!(matches!(
         cell_state.route_observation(ObserveMode::YieldAfter(Duration::ZERO), response_tx),
-        ObservationDelivery::Delivered
+        ObservationDelivery::Claimed
     ));
-    assert_eq!(response_rx.try_recv(), Ok(Ok(completion)));
+    assert_eq!(
+        response_rx.try_recv().map(CellObservation::into_result),
+        Ok(Ok(completion))
+    );
 }
 
 #[test]
@@ -625,10 +694,10 @@ fn pending_observer_merges_initial_yield_and_completion_output() {
     let (response_tx, mut response_rx) = oneshot::channel();
     assert!(matches!(
         cell_state.route_observation(ObserveMode::PendingFrontier, response_tx),
-        ObservationDelivery::Delivered
+        ObservationDelivery::Claimed
     ));
     assert_eq!(
-        response_rx.try_recv(),
+        response_rx.try_recv().map(CellObservation::into_result),
         Ok(Ok(CellEvent::Completed {
             content_items: vec![
                 OutputItem::Text {
@@ -680,7 +749,7 @@ fn dropped_pending_observation_preserves_the_initial_yield_boundary() {
         ObservationDelivery::Buffered
     ));
     assert_eq!(
-        response_rx.try_recv(),
+        response_rx.try_recv().map(CellObservation::into_result),
         Ok(Ok(CellEvent::Yielded {
             content_items: vec![OutputItem::Text {
                 text: "before".to_string(),
@@ -691,7 +760,10 @@ fn dropped_pending_observation_preserves_the_initial_yield_boundary() {
     let (response_tx, mut response_rx) = oneshot::channel();
     assert!(matches!(
         cell_state.route_observation(ObserveMode::YieldAfter(Duration::ZERO), response_tx),
-        ObservationDelivery::Delivered
+        ObservationDelivery::Claimed
     ));
-    assert_eq!(response_rx.try_recv(), Ok(Ok(completion)));
+    assert_eq!(
+        response_rx.try_recv().map(CellObservation::into_result),
+        Ok(Ok(completion))
+    );
 }

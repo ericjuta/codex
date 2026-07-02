@@ -20,12 +20,13 @@ use super::wait_spec::create_wait_tool;
 
 pub struct CodeModeWaitHandler;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 struct ExecWaitArgs {
     cell_id: String,
     #[serde(default = "default_wait_yield_time_ms")]
     yield_time_ms: u64,
-    #[serde(default)]
+    #[serde(default, alias = "max_output_tokens")]
     max_tokens: Option<usize>,
     #[serde(default)]
     terminate: bool,
@@ -56,6 +57,10 @@ impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
     fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
         Box::pin(self.handle_call(invocation))
     }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
 }
 
 impl CodeModeWaitHandler {
@@ -66,6 +71,7 @@ impl CodeModeWaitHandler {
         let ToolInvocation {
             session,
             turn,
+            cancellation_token,
             tool_name,
             payload,
             ..
@@ -86,14 +92,18 @@ impl CodeModeWaitHandler {
                         .terminate(cell_id)
                         .await
                 } else {
-                    exec.session
-                        .services
-                        .code_mode_service
-                        .wait(codex_code_mode::WaitRequest {
-                            cell_id,
-                            yield_time_ms: args.yield_time_ms,
-                        })
-                        .await
+                    tokio::select! {
+                        response = exec.session
+                            .services
+                            .code_mode_service
+                            .wait(codex_code_mode::WaitRequest {
+                                cell_id,
+                                yield_time_ms: args.yield_time_ms,
+                            }) => response,
+                        _ = cancellation_token.cancelled() => {
+                            Err("wait aborted by user".to_string())
+                        }
+                    }
                 }
                 .map_err(FunctionCallError::RespondToModel)?;
                 if let codex_code_mode::WaitOutcome::LiveCell(response) = &wait_response
@@ -133,6 +143,10 @@ impl CodeModeWaitHandler {
 }
 
 impl CoreToolRuntime for CodeModeWaitHandler {
+    fn waits_for_runtime_cancellation(&self) -> bool {
+        true
+    }
+
     fn pre_tool_use_payload(&self, _invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
         // Code-mode `wait` is runtime control for an existing code cell, not a
         // standalone user action. Tool calls made from code mode still flow
@@ -151,3 +165,7 @@ impl CoreToolRuntime for CodeModeWaitHandler {
         None
     }
 }
+
+#[cfg(test)]
+#[path = "wait_handler_tests.rs"]
+mod tests;

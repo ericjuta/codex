@@ -21,6 +21,7 @@ mod tool_search;
 mod tool_spec;
 
 pub use code_mode::augment_tool_spec_for_code_mode;
+pub use code_mode::augment_tool_spec_for_mixed_code_mode;
 pub use code_mode::code_mode_name_for_tool_name;
 pub use code_mode::collect_code_mode_exec_prompt_tool_definitions;
 pub use code_mode::collect_code_mode_tool_definitions;

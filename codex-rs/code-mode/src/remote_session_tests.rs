@@ -67,6 +67,28 @@ fn host_program_falls_back_to_its_name_when_main_executable_is_unknown() {
     );
 }
 
+#[test]
+fn host_program_availability_check_reports_missing_path() {
+    let missing_path = std::env::current_exe()
+        .expect("test executable path")
+        .with_file_name("codex-code-mode-host-definitely-missing");
+
+    assert_eq!(
+        ProcessOwnedCodeModeSessionProvider::with_host_program_if_available(missing_path.clone())
+            .err(),
+        Some(missing_path)
+    );
+}
+
+#[test]
+fn host_program_availability_check_accepts_existing_path() {
+    let current_exe = std::env::current_exe().expect("test executable path");
+
+    assert!(
+        ProcessOwnedCodeModeSessionProvider::with_host_program_if_available(current_exe).is_ok()
+    );
+}
+
 #[tokio::test]
 async fn provider_reports_host_spawn_failure() {
     let provider = ProcessOwnedCodeModeSessionProvider::with_host_program(
