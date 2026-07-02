@@ -18,8 +18,8 @@ Live proof used for this spec:
 | MCP path | `codex-rs/codex-mcp/src/connection_manager.rs` and `core/src/tools/handlers/mcp.rs` | Hashline can be tried as MCP, but MCP is not the best default integration boundary. |
 
 Related spec: [Hashline Enablement Flags Spec](hashline_enablement_flags_spec.md)
-defines the `hashline = true` and `hashline_only = true` config surface that
-gates this integration.
+defines the `[features].hashline = true` and `[features].hashline_only = true`
+config surface that gates this integration.
 
 ## Recommendation
 
@@ -76,7 +76,7 @@ Codex already has the pieces needed for a native integration:
 
 | Priority | Option | Current state | Proposed change | Rationale |
 | --- | --- | --- | --- | --- |
-| P0 | Native additive namespace | Native Hashline tools are available behind `hashline = true` | Continue hardening parser parity, refreshed patch output, and integration coverage | Best fit for Codex approvals, sandboxing, remote filesystems, code-mode, tests, and telemetry. |
+| P0 | Native additive namespace | Native Hashline tools are available behind `[features].hashline = true` | Continue hardening parser parity, refreshed patch output, and integration coverage | Best fit for Codex approvals, sandboxing, remote filesystems, code-mode, tests, and telemetry. |
 | P1 | External MCP experiment | Hashline has a stdio MCP server | Allow users to configure `/tmp/hashline` or installed `hashline mcp` manually | Fastest smoke path, but weak for default UX because process lifecycle, filesystem permissions, and remote environments sit outside Codex's native edit path. |
 | P2 | Full `apply_patch` replacement | `apply_patch` is deeply integrated and compatibility-sensitive | Defer until Hashline has native parity and integration tests | Avoid breaking models, hooks, existing patch approvals, shell interception, and standalone `apply_patch` command behavior. |
 
@@ -91,6 +91,8 @@ Expose a namespace named `hashline` with these first-stage tools:
 | `hashline.read` | Read a bounded file range with Hashline anchors | `[path#HASH]` plus `line:hash|content`, with explicit truncation metadata when capped. |
 | `hashline.patch` | Apply a single-file Hashline patch string | Success/failure status, changed line range, refreshed `[path#HASH]`, compact diff, and warnings. |
 | `hashline.find_block` | Resolve a block around an anchored line | Block span, language guess, and a small anchored excerpt. |
+| `hashline.remove_file` | Delete one text file after optional file-hash validation | Existing `apply_patch` delete-file success/failure output. |
+| `hashline.rename_file` | Move one non-empty newline-terminated text file after optional file-hash validation | Existing `apply_patch` move success/failure output. |
 
 Use structured function tools for stage 1. A freeform `hashline_patch` tool can
 be added later if model behavior proves better with grammar-constrained patch
@@ -115,7 +117,27 @@ bodies.
 | `path` | string | yes | Stage 1 is intentionally single-file. |
 | `patch` | string | yes | Hashline ops such as `SWAP 12:ab:` or a `[path#HASH]` section plus ops. |
 | `dry_run` | boolean | no | Defaults to false. |
+| `create` | boolean | no | Defaults to false. When true, the target must be missing and the patch is applied to an empty file before routing through `apply_patch` add-file handling. |
 | `environment_id` | string | only when multiple environments exist | Match `apply_patch` environment selection behavior. |
+
+`hashline.remove_file`:
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `path` | string | yes | File to delete, resolved relative to selected environment cwd. |
+| `expected_hash` | string | no | Optional 4-hex file hash from a Hashline read header. |
+| `dry_run` | boolean | no | Validate without deleting. |
+| `environment_id` | string | only when multiple environments exist | Match other file tools. |
+
+`hashline.rename_file`:
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `path` | string | yes | Source file, resolved relative to selected environment cwd. |
+| `new_path` | string | yes | Destination path, which must be missing. |
+| `expected_hash` | string | no | Optional 4-hex file hash from a Hashline read header. |
+| `dry_run` | boolean | no | Validate without renaming. |
+| `environment_id` | string | only when multiple environments exist | Match other file tools. |
 
 `hashline.find_block`:
 
@@ -223,8 +245,11 @@ The tool guidance should be short and operational:
    read with Hashline anchors.
 2. Prefer `line:hash` anchors in patch operations.
 3. Re-read when a stale file or line hash is reported.
-4. Use `apply_patch` for add/delete/move or broad legacy patch operations until
-   Hashline multi-file parity is implemented.
+4. Use `create=true` for single-file creation, `hashline.remove_file` for
+   single-file deletion, and `hashline.rename_file` for single-file moves that
+   the tool can represent without changing file contents. Use `apply_patch`
+   for broad legacy patch operations until Hashline multi-file parity is
+   implemented.
 
 Do not present Hashline as a universal replacement during the additive stage.
 

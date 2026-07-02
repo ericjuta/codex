@@ -150,6 +150,19 @@ fn request_permissions_tool_is_under_development() {
 }
 
 #[test]
+fn hashline_features_are_under_development_and_disabled_by_default() {
+    assert_eq!(feature_for_key("hashline"), Some(Feature::Hashline));
+    assert_eq!(
+        feature_for_key("hashline_only"),
+        Some(Feature::HashlineOnly)
+    );
+    assert_eq!(Feature::Hashline.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::HashlineOnly.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::Hashline.default_enabled(), false);
+    assert_eq!(Feature::HashlineOnly.default_enabled(), false);
+}
+
+#[test]
 fn terminal_resize_reflow_is_removed_and_enabled_by_default() {
     assert_eq!(
         feature_for_key("terminal_resize_reflow"),

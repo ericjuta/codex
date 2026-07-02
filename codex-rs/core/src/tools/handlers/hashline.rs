@@ -18,21 +18,27 @@ use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::hash::Hasher;
+use std::io;
 
 const NAMESPACE: &str = "hashline";
 const READ_TOOL: &str = "read";
 const PATCH_TOOL: &str = "patch";
 const FIND_BLOCK_TOOL: &str = "find_block";
+const REMOVE_FILE_TOOL: &str = "remove_file";
+const RENAME_FILE_TOOL: &str = "rename_file";
 const DEFAULT_READ_MAX_LINES: usize = 200;
 const HARD_READ_MAX_LINES: usize = 1000;
 const DEFAULT_FIND_BLOCK_MAX_LINES: usize = 80;
 const HARD_FIND_BLOCK_MAX_LINES: usize = 300;
+const APPLY_PATCH_CONTEXT_LINES: usize = 3;
 
 #[derive(Clone, Copy)]
 pub(crate) enum HashlineToolKind {
     Read,
     Patch,
     FindBlock,
+    RemoveFile,
+    RenameFile,
 }
 
 pub(crate) struct HashlineHandler {
@@ -53,6 +59,8 @@ impl HashlineHandler {
             HashlineToolKind::Read => READ_TOOL,
             HashlineToolKind::Patch => PATCH_TOOL,
             HashlineToolKind::FindBlock => FIND_BLOCK_TOOL,
+            HashlineToolKind::RemoveFile => REMOVE_FILE_TOOL,
+            HashlineToolKind::RenameFile => RENAME_FILE_TOOL,
         }
     }
 }
@@ -73,6 +81,7 @@ struct PatchArgs {
     path: String,
     patch: String,
     dry_run: Option<bool>,
+    create: Option<bool>,
     environment_id: Option<String>,
 }
 
@@ -82,6 +91,25 @@ struct FindBlockArgs {
     path: String,
     anchor: String,
     max_lines: Option<usize>,
+    environment_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemoveFileArgs {
+    path: String,
+    expected_hash: Option<String>,
+    dry_run: Option<bool>,
+    environment_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenameFileArgs {
+    path: String,
+    new_path: String,
+    expected_hash: Option<String>,
+    dry_run: Option<bool>,
     environment_id: Option<String>,
 }
 
@@ -99,6 +127,8 @@ impl ToolExecutor<ToolInvocation> for HashlineHandler {
                 HashlineToolKind::Read => read_tool_spec(self.multi_environment),
                 HashlineToolKind::Patch => patch_tool_spec(self.multi_environment),
                 HashlineToolKind::FindBlock => find_block_tool_spec(self.multi_environment),
+                HashlineToolKind::RemoveFile => remove_file_tool_spec(self.multi_environment),
+                HashlineToolKind::RenameFile => rename_file_tool_spec(self.multi_environment),
             })],
         })
     }
@@ -109,6 +139,12 @@ impl ToolExecutor<ToolInvocation> for HashlineHandler {
                 HashlineToolKind::Read => handle_read(invocation).await,
                 HashlineToolKind::Patch => handle_patch(invocation, self.multi_environment).await,
                 HashlineToolKind::FindBlock => handle_find_block(invocation).await,
+                HashlineToolKind::RemoveFile => {
+                    handle_remove_file(invocation, self.multi_environment).await
+                }
+                HashlineToolKind::RenameFile => {
+                    handle_rename_file(invocation, self.multi_environment).await
+                }
             }
         })
     }
@@ -172,7 +208,7 @@ fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "patch".to_string(),
                     JsonSchema::string(Some(
-                        "Hashline operations, one per line. Line anchors use N or N:hh, followed by | and inserted/replacement text when needed."
+                        "Hashline operations, one per line. Use SWAP 12:ab|replacement, DEL 12:ab, INS.PRE 12:ab|text, INS.POST 12:ab|text, INS.HEAD |text, or INS.TAIL |text. INS.HEAD|text and INS.TAIL|text are also accepted."
                             .to_string(),
                     )),
                 ),
@@ -180,6 +216,13 @@ fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                     "dry_run".to_string(),
                     JsonSchema::boolean(Some(
                         "Validate the patch and report the resulting file hash without writing."
+                            .to_string(),
+                    )),
+                ),
+                (
+                    "create".to_string(),
+                    JsonSchema::boolean(Some(
+                        "Create a missing target file. When true, the target must not already exist."
                             .to_string(),
                     )),
                 ),
@@ -215,6 +258,73 @@ fn find_block_tool_spec(multi_environment: bool) -> ResponsesApiTool {
             ]),
             multi_environment,
             vec!["path".to_string(), "anchor".to_string()],
+        ),
+        output_schema: None,
+    }
+}
+
+fn remove_file_tool_spec(multi_environment: bool) -> ResponsesApiTool {
+    ResponsesApiTool {
+        name: REMOVE_FILE_TOOL.to_string(),
+        description: "Remove one text file after optional Hashline file-hash validation."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: schema_with_common_path(
+            BTreeMap::from([
+                (
+                    "expected_hash".to_string(),
+                    JsonSchema::string(Some(
+                        "Optional 4-hex file hash from a Hashline read header.".to_string(),
+                    )),
+                ),
+                (
+                    "dry_run".to_string(),
+                    JsonSchema::boolean(Some(
+                        "Validate the request and report the file hash without deleting."
+                            .to_string(),
+                    )),
+                ),
+            ]),
+            multi_environment,
+            vec!["path".to_string()],
+        ),
+        output_schema: None,
+    }
+}
+
+fn rename_file_tool_spec(multi_environment: bool) -> ResponsesApiTool {
+    ResponsesApiTool {
+        name: RENAME_FILE_TOOL.to_string(),
+        description: "Rename one non-empty newline-terminated text file after optional Hashline file-hash validation."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: schema_with_common_path(
+            BTreeMap::from([
+                (
+                    "new_path".to_string(),
+                    JsonSchema::string(Some(
+                        "Destination path resolved relative to the selected environment cwd."
+                            .to_string(),
+                    )),
+                ),
+                (
+                    "expected_hash".to_string(),
+                    JsonSchema::string(Some(
+                        "Optional 4-hex file hash from a Hashline read header.".to_string(),
+                    )),
+                ),
+                (
+                    "dry_run".to_string(),
+                    JsonSchema::boolean(Some(
+                        "Validate the request and report the file hash without renaming."
+                            .to_string(),
+                    )),
+                ),
+            ]),
+            multi_environment,
+            vec!["path".to_string(), "new_path".to_string()],
         ),
         output_schema: None,
     }
@@ -377,15 +487,34 @@ async fn handle_patch(
         ));
     };
     let args: PatchArgs = parse_arguments(arguments)?;
-    let contents = read_selected_file(
-        turn.as_ref(),
-        step_context.as_ref(),
-        &args.path,
-        args.environment_id.as_deref(),
-    )
-    .await?;
+    let create = args.create.unwrap_or(false);
+    let contents = if create {
+        ensure_selected_file_missing(
+            turn.as_ref(),
+            step_context.as_ref(),
+            &args.path,
+            args.environment_id.as_deref(),
+        )
+        .await?;
+        String::new()
+    } else {
+        read_selected_file(
+            turn.as_ref(),
+            step_context.as_ref(),
+            &args.path,
+            args.environment_id.as_deref(),
+        )
+        .await?
+    };
     let patched = apply_hashline_patch(&contents, &args.patch)?;
     let new_hash = hash_hex(&patched, 4);
+    let apply_patch_text = apply_patch_for_hashline_update(
+        &args.path,
+        &contents,
+        &patched,
+        create,
+        args.environment_id.as_deref(),
+    )?;
 
     if args.dry_run.unwrap_or(false) {
         let body = json!({
@@ -402,12 +531,6 @@ async fn handle_patch(
         )));
     }
 
-    let apply_patch_text = apply_patch_for_full_file_update(
-        &args.path,
-        &contents,
-        &patched,
-        args.environment_id.as_deref(),
-    );
     let apply_patch_invocation = ToolInvocation {
         tool_name: ToolName::plain("apply_patch"),
         payload: ToolPayload::Custom {
@@ -418,6 +541,162 @@ async fn handle_patch(
     ApplyPatchHandler::new(multi_environment)
         .handle(apply_patch_invocation)
         .await
+}
+
+async fn handle_remove_file(
+    invocation: ToolInvocation,
+    multi_environment: bool,
+) -> Result<Box<dyn codex_tools::ToolOutput>, FunctionCallError> {
+    let ToolInvocation {
+        turn,
+        step_context,
+        payload,
+        ..
+    } = &invocation;
+    let ToolPayload::Function { arguments } = payload else {
+        return Err(FunctionCallError::RespondToModel(
+            "hashline.remove_file handler received unsupported payload".to_string(),
+        ));
+    };
+    let args: RemoveFileArgs = parse_arguments(arguments)?;
+    let contents = read_selected_file(
+        turn.as_ref(),
+        step_context.as_ref(),
+        &args.path,
+        args.environment_id.as_deref(),
+    )
+    .await?;
+    validate_file_hash(&args.path, &contents, args.expected_hash.as_deref())?;
+    let old_hash = hash_hex(&contents, 4);
+
+    if args.dry_run.unwrap_or(false) {
+        let body = json!({
+            "path": args.path,
+            "dry_run": true,
+            "old_hash": old_hash,
+            "operation": "remove_file",
+        });
+        return Ok(boxed_tool_output(FunctionToolOutput::from_text(
+            serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+                format!("failed to serialize hashline.remove_file dry-run output: {err}")
+            }),
+            Some(true),
+        )));
+    }
+
+    let apply_patch_text =
+        apply_patch_for_hashline_remove(&args.path, args.environment_id.as_deref());
+    let apply_patch_invocation = ToolInvocation {
+        tool_name: ToolName::plain("apply_patch"),
+        payload: ToolPayload::Custom {
+            input: apply_patch_text,
+        },
+        ..invocation
+    };
+    ApplyPatchHandler::new(multi_environment)
+        .handle(apply_patch_invocation)
+        .await
+}
+
+async fn handle_rename_file(
+    invocation: ToolInvocation,
+    multi_environment: bool,
+) -> Result<Box<dyn codex_tools::ToolOutput>, FunctionCallError> {
+    let ToolInvocation {
+        turn,
+        step_context,
+        payload,
+        ..
+    } = &invocation;
+    let ToolPayload::Function { arguments } = payload else {
+        return Err(FunctionCallError::RespondToModel(
+            "hashline.rename_file handler received unsupported payload".to_string(),
+        ));
+    };
+    let args: RenameFileArgs = parse_arguments(arguments)?;
+    let contents = read_selected_file(
+        turn.as_ref(),
+        step_context.as_ref(),
+        &args.path,
+        args.environment_id.as_deref(),
+    )
+    .await?;
+    validate_file_hash(&args.path, &contents, args.expected_hash.as_deref())?;
+    ensure_rename_representable(&args.path, &contents)?;
+    ensure_selected_file_missing(
+        turn.as_ref(),
+        step_context.as_ref(),
+        &args.new_path,
+        args.environment_id.as_deref(),
+    )
+    .await?;
+    let old_hash = hash_hex(&contents, 4);
+
+    if args.dry_run.unwrap_or(false) {
+        let body = json!({
+            "path": args.path,
+            "new_path": args.new_path,
+            "dry_run": true,
+            "old_hash": old_hash,
+            "operation": "rename_file",
+        });
+        return Ok(boxed_tool_output(FunctionToolOutput::from_text(
+            serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+                format!("failed to serialize hashline.rename_file dry-run output: {err}")
+            }),
+            Some(true),
+        )));
+    }
+
+    let apply_patch_text = apply_patch_for_hashline_rename(
+        &args.path,
+        &args.new_path,
+        &contents,
+        args.environment_id.as_deref(),
+    )?;
+    let apply_patch_invocation = ToolInvocation {
+        tool_name: ToolName::plain("apply_patch"),
+        payload: ToolPayload::Custom {
+            input: apply_patch_text,
+        },
+        ..invocation
+    };
+    ApplyPatchHandler::new(multi_environment)
+        .handle(apply_patch_invocation)
+        .await
+}
+
+async fn ensure_selected_file_missing(
+    turn: &crate::session::turn_context::TurnContext,
+    step_context: &crate::session::step_context::StepContext,
+    path: &str,
+    environment_id: Option<&str>,
+) -> Result<(), FunctionCallError> {
+    let Some(turn_environment) =
+        resolve_tool_environment(&step_context.environments, environment_id)?
+    else {
+        return Err(FunctionCallError::RespondToModel(
+            "hashline file tools are unavailable in this session".to_string(),
+        ));
+    };
+    let path_uri = turn_environment.cwd().join(path).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "unable to resolve path {path} against environment cwd {}: {err}",
+            turn_environment.cwd(),
+        ))
+    })?;
+    let sandbox = turn
+        .file_system_sandbox_context(/*additional_permissions*/ None, turn_environment.cwd());
+    let fs = turn_environment.environment.get_filesystem();
+    match fs.get_metadata(&path_uri, Some(&sandbox)).await {
+        Ok(_) => Err(FunctionCallError::RespondToModel(format!(
+            "Hashline operation requires {path} to be missing, but it already exists"
+        ))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(FunctionCallError::RespondToModel(format!(
+            "unable to inspect {path} before create: {error}"
+        ))),
+    }
 }
 
 async fn read_selected_file(
@@ -462,9 +741,7 @@ fn apply_hashline_patch(contents: &str, patch: &str) -> Result<String, FunctionC
             continue;
         }
         saw_operation = true;
-        let (op, rest) = line.split_once(' ').ok_or_else(|| {
-            FunctionCallError::RespondToModel(format!("invalid Hashline operation {line}"))
-        })?;
+        let (op, rest) = split_hashline_operation(line)?;
         match op {
             "SWAP" => {
                 let (line_number, expected_hash, replacement) =
@@ -537,6 +814,32 @@ fn parse_line_op(
     Ok((line_number, expected_hash, text))
 }
 
+fn split_hashline_operation(input: &str) -> Result<(&str, &str), FunctionCallError> {
+    let line = input.trim_start();
+    let Some(op_end) = line.find(|ch: char| ch.is_whitespace() || ch == '|') else {
+        return Err(invalid_operation_error(line));
+    };
+    let (op, rest) = line.split_at(op_end);
+    if op.is_empty() {
+        return Err(invalid_operation_error(line));
+    }
+    let rest = if rest.starts_with('|') {
+        rest
+    } else {
+        rest.trim_start()
+    };
+    if rest.is_empty() {
+        return Err(invalid_operation_error(line));
+    }
+    Ok((op, rest))
+}
+
+fn invalid_operation_error(line: &str) -> FunctionCallError {
+    FunctionCallError::RespondToModel(format!(
+        "invalid Hashline operation {line}; expected forms like SWAP 12:ab|text, DEL 12:ab, INS.POST 12:ab|text, or INS.TAIL |text"
+    ))
+}
+
 fn parse_insert_text(input: &str) -> Result<&str, FunctionCallError> {
     input.trim_start().strip_prefix('|').ok_or_else(|| {
         FunctionCallError::RespondToModel(format!("insert operation {input} must include |text"))
@@ -582,36 +885,177 @@ fn validate_line_hash(
     Ok(())
 }
 
-fn apply_patch_for_full_file_update(
+fn validate_file_hash(
+    path: &str,
+    contents: &str,
+    expected_hash: Option<&str>,
+) -> Result<(), FunctionCallError> {
+    if let Some(expected_hash) = expected_hash {
+        let actual_hash = hash_hex(contents, 4);
+        if expected_hash != actual_hash {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "file hash mismatch for {path}: expected {expected_hash}, found {actual_hash}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_rename_representable(path: &str, contents: &str) -> Result<(), FunctionCallError> {
+    if split_lines_preserve(contents).is_empty() {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "hashline.rename_file cannot move empty file {path} through apply_patch"
+        )));
+    }
+    if !contents.ends_with('\n') {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "hashline.rename_file cannot preserve non-newline-terminated file {path} through apply_patch"
+        )));
+    }
+    Ok(())
+}
+
+fn apply_patch_for_hashline_update(
     path: &str,
     old_contents: &str,
     new_contents: &str,
+    create: bool,
     environment_id: Option<&str>,
-) -> String {
+) -> Result<String, FunctionCallError> {
     let mut patch = String::from("*** Begin Patch\n");
     if let Some(environment_id) = environment_id {
         patch.push_str("*** Environment ID: ");
         patch.push_str(environment_id);
         patch.push('\n');
     }
+
+    if create {
+        let new_lines = split_lines_preserve(new_contents);
+        if new_lines.is_empty() {
+            return Err(FunctionCallError::RespondToModel(
+                "hashline.patch create=true produced an empty file, which apply_patch Add File cannot represent".to_string(),
+            ));
+        }
+        patch.push_str("*** Add File: ");
+        patch.push_str(path);
+        patch.push('\n');
+        for line in new_lines {
+            patch.push('+');
+            patch.push_str(line);
+            patch.push('\n');
+        }
+    } else {
+        append_localized_update_hunk(&mut patch, path, old_contents, new_contents)?;
+    }
+    patch.push_str("*** End Patch");
+    Ok(patch)
+}
+
+fn apply_patch_for_hashline_remove(path: &str, environment_id: Option<&str>) -> String {
+    let mut patch = apply_patch_header(environment_id);
+    patch.push_str("*** Delete File: ");
+    patch.push_str(path);
+    patch.push('\n');
+    patch.push_str("*** End Patch");
+    patch
+}
+
+fn apply_patch_for_hashline_rename(
+    path: &str,
+    new_path: &str,
+    contents: &str,
+    environment_id: Option<&str>,
+) -> Result<String, FunctionCallError> {
+    let Some(first_line) = split_lines_preserve(contents).first().copied() else {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "hashline.rename_file cannot move empty file {path} through apply_patch"
+        )));
+    };
+    let mut patch = apply_patch_header(environment_id);
+    patch.push_str("*** Update File: ");
+    patch.push_str(path);
+    patch.push_str("\n*** Move to: ");
+    patch.push_str(new_path);
+    patch.push_str("\n@@\n");
+    append_apply_patch_line(&mut patch, ' ', first_line);
+    patch.push_str("*** End Patch");
+    Ok(patch)
+}
+
+fn apply_patch_header(environment_id: Option<&str>) -> String {
+    let mut patch = String::from("*** Begin Patch\n");
+    if let Some(environment_id) = environment_id {
+        patch.push_str("*** Environment ID: ");
+        patch.push_str(environment_id);
+        patch.push('\n');
+    }
+    patch
+}
+
+fn append_localized_update_hunk(
+    patch: &mut String,
+    path: &str,
+    old_contents: &str,
+    new_contents: &str,
+) -> Result<(), FunctionCallError> {
+    let old_lines = split_lines_preserve(old_contents);
+    let new_lines = split_lines_preserve(new_contents);
+    let common_prefix = old_lines
+        .iter()
+        .zip(&new_lines)
+        .take_while(|(old, new)| old == new)
+        .count();
+    let remaining_old = old_lines.len().saturating_sub(common_prefix);
+    let remaining_new = new_lines.len().saturating_sub(common_prefix);
+    let common_suffix = old_lines[common_prefix..]
+        .iter()
+        .rev()
+        .zip(new_lines[common_prefix..].iter().rev())
+        .take_while(|(old, new)| old == new)
+        .count()
+        .min(remaining_old)
+        .min(remaining_new);
+
+    let old_change_start = common_prefix;
+    let old_change_end = old_lines.len() - common_suffix;
+    let new_change_start = common_prefix;
+    let new_change_end = new_lines.len() - common_suffix;
+    if old_change_start == old_change_end && new_change_start == new_change_end {
+        return Err(FunctionCallError::RespondToModel(
+            "hashline.patch did not change file contents".to_string(),
+        ));
+    }
+
+    let context_start = old_change_start.saturating_sub(APPLY_PATCH_CONTEXT_LINES);
+    let old_context_end = old_lines
+        .len()
+        .min(old_change_end.saturating_add(APPLY_PATCH_CONTEXT_LINES));
+
     patch.push_str("*** Update File: ");
     patch.push_str(path);
     patch.push_str("\n@@\n");
-    for line in split_lines_preserve(old_contents) {
-        patch.push('-');
-        patch.push_str(line);
-        patch.push('\n');
+    for line in &old_lines[context_start..old_change_start] {
+        append_apply_patch_line(patch, ' ', line);
     }
-    for line in split_lines_preserve(new_contents) {
-        patch.push('+');
-        patch.push_str(line);
-        patch.push('\n');
+    for line in &old_lines[old_change_start..old_change_end] {
+        append_apply_patch_line(patch, '-', line);
     }
-    if !old_contents.ends_with('\n') {
+    for line in &new_lines[new_change_start..new_change_end] {
+        append_apply_patch_line(patch, '+', line);
+    }
+    for line in &old_lines[old_change_end..old_context_end] {
+        append_apply_patch_line(patch, ' ', line);
+    }
+    if !old_contents.ends_with('\n') && old_context_end == old_lines.len() {
         patch.push_str("*** End of File\n");
     }
-    patch.push_str("*** End Patch");
-    patch
+    Ok(())
+}
+
+fn append_apply_patch_line(patch: &mut String, prefix: char, line: &str) {
+    patch.push(prefix);
+    patch.push_str(line);
+    patch.push('\n');
 }
 
 fn format_hashline_excerpt(contents: &str, start_line: usize, end_line: usize) -> String {

@@ -172,6 +172,245 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_patch_can_create_missing_file() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let file_name = "hashline-created.txt";
+    let file_path = test.cwd.path().join(file_name);
+
+    let call_id = "hashline-create-call";
+    let patch_args = json!({
+        "path": file_name,
+        "patch": "INS.TAIL |created by hashline",
+        "create": true
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                "patch",
+                &serde_json::to_string(&patch_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline file created"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, "create the file with hashline").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(fs::read_to_string(file_path)?, "created by hashline\n");
+    let request = final_mock.single_request();
+    let patch_output = request
+        .function_call_output_text(call_id)
+        .expect("patch output should be sent to model");
+    assert!(patch_output.contains("Success. Updated the following files:"));
+    assert!(patch_output.contains(file_name));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_patch_create_rejects_existing_file() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let file_name = "hashline-existing.txt";
+    let file_path = test.cwd.path().join(file_name);
+    fs::write(&file_path, "keep me\n")?;
+
+    let call_id = "hashline-create-existing-call";
+    let patch_args = json!({
+        "path": file_name,
+        "patch": "INS.TAIL |do not overwrite",
+        "create": true
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                "patch",
+                &serde_json::to_string(&patch_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline create rejected"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, "try to create an existing file with hashline").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(fs::read_to_string(file_path)?, "keep me\n");
+    let request = final_mock.single_request();
+    let patch_output = request
+        .function_call_output_text(call_id)
+        .expect("patch output should be sent to model");
+    assert!(patch_output.contains("Hashline operation requires"));
+    assert!(patch_output.contains("already exists"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_remove_file_deletes_through_apply_patch() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let file_name = "hashline-remove.txt";
+    let file_path = test.cwd.path().join(file_name);
+    fs::write(&file_path, "remove me\n")?;
+
+    let call_id = "hashline-remove-call";
+    let remove_args = json!({
+        "path": file_name
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                "remove_file",
+                &serde_json::to_string(&remove_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline file removed"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, "remove the file with hashline").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert!(!file_path.exists());
+    let request = final_mock.single_request();
+    let remove_output = request
+        .function_call_output_text(call_id)
+        .expect("remove output should be sent to model");
+    assert!(remove_output.contains("Success. Updated the following files:"));
+    assert!(remove_output.contains(file_name));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_rename_file_moves_through_apply_patch() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let old_name = "hashline-old-name.txt";
+    let new_name = "hashline-new-name.txt";
+    let old_path = test.cwd.path().join(old_name);
+    let new_path = test.cwd.path().join(new_name);
+    fs::write(&old_path, "first\nsecond\n")?;
+
+    let call_id = "hashline-rename-call";
+    let rename_args = json!({
+        "path": old_name,
+        "new_path": new_name
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                "rename_file",
+                &serde_json::to_string(&rename_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline file renamed"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, "rename the file with hashline").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert!(!old_path.exists());
+    assert_eq!(fs::read_to_string(new_path)?, "first\nsecond\n");
+    let request = final_mock.single_request();
+    let rename_output = request
+        .function_call_output_text(call_id)
+        .expect("rename output should be sent to model");
+    assert!(rename_output.contains("Success. Updated the following files:"));
+    assert!(rename_output.contains(new_name));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hashline_patch_uses_apply_patch_approval_flow() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let test = test_codex()
@@ -283,6 +522,8 @@ async fn hashline_only_hides_apply_patch_from_model_visible_tools() -> anyhow::R
     assert!(namespace_child_tool(&body, "hashline", "read").is_some());
     assert!(namespace_child_tool(&body, "hashline", "patch").is_some());
     assert!(namespace_child_tool(&body, "hashline", "find_block").is_some());
+    assert!(namespace_child_tool(&body, "hashline", "remove_file").is_some());
+    assert!(namespace_child_tool(&body, "hashline", "rename_file").is_some());
     assert!(!request_tools_include(&body, "apply_patch"));
 
     Ok(())

@@ -112,6 +112,10 @@ pub enum Feature {
     TerminalVisualizationInstructions,
     /// Stream structured progress while apply_patch input is being generated.
     ApplyPatchStreamingEvents,
+    /// Enable native Hashline file tools alongside existing edit tools.
+    Hashline,
+    /// Hide direct apply_patch from model-visible tools when Hashline is enabled.
+    HashlineOnly,
     /// Allow exec tools to request additional permissions while staying sandboxed.
     ExecPermissionApprovals,
     /// Expose the built-in request_permissions tool.
@@ -949,6 +953,18 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ApplyPatchStreamingEvents,
         key: "apply_patch_streaming_events",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Hashline,
+        key: "hashline",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::HashlineOnly,
+        key: "hashline_only",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

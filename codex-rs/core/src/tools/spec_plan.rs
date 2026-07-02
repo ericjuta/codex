@@ -816,6 +816,14 @@ fn add_file_edit_tools(
             HashlineToolKind::FindBlock,
             include_environment_id,
         ));
+        planned_tools.add(HashlineHandler::new(
+            HashlineToolKind::RemoveFile,
+            include_environment_id,
+        ));
+        planned_tools.add(HashlineHandler::new(
+            HashlineToolKind::RenameFile,
+            include_environment_id,
+        ));
     }
 
     if turn_context.model_info.apply_patch_tool_type.is_some() {

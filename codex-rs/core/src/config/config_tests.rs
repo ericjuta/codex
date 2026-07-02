@@ -9407,8 +9407,13 @@ async fn hashline_config_defaults_to_disabled() -> std::io::Result<()> {
 #[tokio::test]
 async fn hashline_config_resolves_additive_mode() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
-    let cfg: ConfigToml = toml::from_str("hashline = true")
-        .expect("TOML deserialization should succeed for hashline");
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[features]
+hashline = true
+"#,
+    )
+    .expect("TOML deserialization should succeed for hashline");
 
     let config = Config::load_from_base_config_with_overrides(
         cfg,
@@ -9432,6 +9437,7 @@ async fn hashline_config_resolves_hashline_only_mode() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg: ConfigToml = toml::from_str(
         r#"
+[features]
 hashline = true
 hashline_only = true
 "#,
@@ -9458,8 +9464,13 @@ hashline_only = true
 #[tokio::test]
 async fn hashline_only_requires_hashline() {
     let codex_home = TempDir::new().expect("create temp dir");
-    let cfg: ConfigToml = toml::from_str("hashline_only = true")
-        .expect("TOML deserialization should succeed for hashline_only");
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[features]
+hashline_only = true
+"#,
+    )
+    .expect("TOML deserialization should succeed for hashline_only");
 
     let error = Config::load_from_base_config_with_overrides(
         cfg,
@@ -9469,7 +9480,10 @@ async fn hashline_only_requires_hashline() {
     .await
     .expect_err("hashline_only without hashline should fail");
 
-    assert_eq!(error.to_string(), "hashline_only requires hashline = true");
+    assert_eq!(
+        error.to_string(),
+        "features.hashline_only requires features.hashline = true"
+    );
 }
 
 #[tokio::test]

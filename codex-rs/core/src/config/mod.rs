@@ -2467,13 +2467,13 @@ fn resolve_orchestrator_feature_enabled(
     feature.and_then(|feature| feature.enabled).unwrap_or(true)
 }
 
-fn resolve_hashline_config(config_toml: &ConfigToml) -> std::io::Result<HashlineConfig> {
-    let enabled = config_toml.hashline.unwrap_or(false);
-    let only = config_toml.hashline_only.unwrap_or(false);
+fn resolve_hashline_config(features: &Features) -> std::io::Result<HashlineConfig> {
+    let enabled = features.enabled(Feature::Hashline);
+    let only = features.enabled(Feature::HashlineOnly);
     if only && !enabled {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "hashline_only requires hashline = true",
+            "features.hashline_only requires features.hashline = true",
         ));
     }
     Ok(HashlineConfig { enabled, only })
@@ -3401,7 +3401,7 @@ impl Config {
         let web_search_config = resolve_web_search_config(&cfg);
         let experimental_request_user_input_enabled =
             resolve_experimental_request_user_input_enabled(&cfg);
-        let hashline = resolve_hashline_config(&cfg)?;
+        let hashline = resolve_hashline_config(&features)?;
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
         let token_budget = resolve_token_budget_config(&cfg, &features)?;
