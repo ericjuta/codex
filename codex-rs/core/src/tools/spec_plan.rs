@@ -206,20 +206,22 @@ fn apply_direct_model_only_namespace_overrides(
     turn_context: &TurnContext,
     planned_tools: &mut PlannedTools,
 ) {
+    let code_mode_only = effective_tool_mode(turn_context) == ToolMode::CodeModeOnly;
     for runtime in &mut planned_tools.runtimes {
-        let configured = runtime
-            .tool_name()
-            .namespace
-            .as_ref()
-            .is_some_and(|namespace| {
-                turn_context
-                    .config
-                    .code_mode
-                    .direct_only_tool_namespaces
-                    .contains(namespace)
-            });
+        let tool_name = runtime.tool_name();
+        let configured_direct_only = tool_name.namespace.as_ref().is_some_and(|namespace| {
+            turn_context
+                .config
+                .code_mode
+                .direct_only_tool_namespaces
+                .contains(namespace)
+        });
+        let excluded_from_code_mode_only =
+            code_mode_only && is_excluded_from_code_mode(turn_context, &tool_name);
         match runtime.exposure() {
-            ToolExposure::Direct | ToolExposure::Deferred if configured => {
+            ToolExposure::Direct | ToolExposure::Deferred
+                if configured_direct_only || excluded_from_code_mode_only =>
+            {
                 *runtime =
                     override_tool_exposure(Arc::clone(runtime), ToolExposure::DirectModelOnly);
             }
@@ -284,7 +286,11 @@ fn spec_for_model_request(
         && !is_excluded_from_code_mode(turn_context, tool_name)
         && codex_code_mode::is_code_mode_nested_tool(spec.name())
     {
-        codex_tools::augment_tool_spec_for_code_mode(spec)
+        match tool_mode {
+            ToolMode::CodeMode => codex_tools::augment_tool_spec_for_mixed_code_mode(spec),
+            ToolMode::CodeModeOnly => codex_tools::augment_tool_spec_for_code_mode(spec),
+            ToolMode::Direct => spec,
+        }
     } else {
         spec
     }
@@ -465,6 +471,7 @@ fn is_hidden_by_code_mode_only(
     let tool_mode = effective_tool_mode(turn_context);
     tool_mode == ToolMode::CodeModeOnly
         && exposure != ToolExposure::DirectModelOnly
+        && !is_excluded_from_code_mode(turn_context, tool_name)
         && codex_code_mode::is_code_mode_nested_tool(&codex_tools::code_mode_name_for_tool_name(
             tool_name,
         ))

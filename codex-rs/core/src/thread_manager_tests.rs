@@ -454,6 +454,43 @@ async fn code_mode_session_provider_is_shared_across_threads() {
 }
 
 #[tokio::test]
+async fn missing_code_mode_host_provider_falls_back_to_in_process_runtime() {
+    let missing_path = std::env::current_exe()
+        .expect("test executable path")
+        .with_file_name("codex-code-mode-host-definitely-missing");
+    let provider = code_mode_process_session_provider_or_fallback(Err(missing_path));
+
+    let session = provider
+        .create_session(Arc::new(codex_code_mode::NoopCodeModeSessionDelegate))
+        .await
+        .expect("fallback provider should create an in-process session");
+    let response = session
+        .execute(codex_code_mode::ExecuteRequest {
+            tool_call_id: "call-1".to_string(),
+            enabled_tools: Vec::new(),
+            source: "text('fallback-ok')".to_string(),
+            yield_time_ms: None,
+            max_output_tokens: None,
+        })
+        .await
+        .expect("fallback provider should execute")
+        .initial_response()
+        .await
+        .expect("fallback provider should return an initial response");
+
+    assert_eq!(
+        response,
+        codex_code_mode::RuntimeResponse::Result {
+            cell_id: codex_code_mode::CellId::new("1".to_string()),
+            content_items: vec![codex_code_mode::FunctionCallOutputContentItem::InputText {
+                text: "fallback-ok".to_string(),
+            }],
+            error_text: None,
+        }
+    );
+}
+
+#[tokio::test]
 async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;

@@ -25,6 +25,7 @@ pub(crate) use self::types::CellError;
 pub(crate) use self::types::CellEventFuture;
 pub(crate) use self::types::CellHandle;
 pub(crate) use self::types::CellHost;
+use self::types::CellObservation;
 pub(crate) use self::types::CellState;
 pub(crate) use self::types::CellToolCall;
 pub(crate) use self::types::CompletionCommit;
@@ -87,8 +88,12 @@ impl CellActor {
             },
             task_failure_handler,
         );
-        let initial_response =
-            Box::pin(async move { initial_response_rx.await.unwrap_or(Err(CellError::Closed)) });
+        let initial_response = Box::pin(async move {
+            initial_response_rx
+                .await
+                .map(CellObservation::into_result)
+                .unwrap_or(Err(CellError::Closed))
+        });
         Ok((handle, initial_response, task))
     }
 }
@@ -102,7 +107,7 @@ struct CellContext {
 
 struct Observer {
     mode: ObserveMode,
-    response_tx: oneshot::Sender<Result<CellEvent, CellError>>,
+    response_tx: oneshot::Sender<CellObservation>,
 }
 
 async fn run_cell<H: CellHost>(
@@ -182,7 +187,7 @@ async fn run_cell<H: CellHost>(
                 }
                 let response_tx = match cell_state.route_observation(mode, response_tx) {
                     ObservationDelivery::Running(response_tx) => response_tx,
-                    ObservationDelivery::Delivered => break,
+                    ObservationDelivery::Claimed => continue,
                     ObservationDelivery::Buffered | ObservationDelivery::Closed => continue,
                 };
                 if observer
@@ -193,7 +198,7 @@ async fn run_cell<H: CellHost>(
                     yield_timer = None;
                 }
                 if observer.is_some() || termination {
-                    let _ = response_tx.send(Err(CellError::Busy));
+                    let _ = response_tx.send(CellObservation::err(CellError::Busy));
                     continue;
                 }
                 if matches!(mode, ObserveMode::PendingFrontier) && pending_frontier_ready {
@@ -312,7 +317,7 @@ async fn run_cell<H: CellHost>(
                     match cell_state.deliver_completion(
                         observer.take().map(|observer| observer.response_tx),
                     ) {
-                        CompletionDelivery::Delivered => break,
+                        CompletionDelivery::Claimed => continue,
                         CompletionDelivery::Buffered => {}
                         CompletionDelivery::Rejected(response_tx) => {
                             finish_termination(
@@ -464,10 +469,15 @@ async fn run_cell<H: CellHost>(
                             CompletionCommit::Committed => None,
                             CompletionCommit::Rejected(event) => Some(event),
                         };
+                        stop_runtime_after_completion(
+                            &runtime_tx,
+                            &runtime_control_tx,
+                            &runtime_terminate_handle,
+                        );
                         match cell_state.deliver_completion(
                             observer.take().map(|observer| observer.response_tx),
                         ) {
-                            CompletionDelivery::Delivered => break,
+                            CompletionDelivery::Claimed => continue,
                             CompletionDelivery::Buffered => {}
                             CompletionDelivery::Rejected(response_tx) => {
                                 finish_termination(
@@ -526,13 +536,15 @@ fn send_observer_event(observer: Option<Observer>, event: CellEvent) -> Result<(
 }
 
 fn send_cell_event(
-    response_tx: oneshot::Sender<Result<CellEvent, CellError>>,
+    response_tx: oneshot::Sender<CellObservation>,
     event: CellEvent,
 ) -> Result<(), CellEvent> {
-    match response_tx.send(Ok(event)) {
+    match response_tx.send(CellObservation::ok(event)) {
         Ok(()) => Ok(()),
-        Err(Ok(event)) => Err(event),
-        Err(Err(error)) => panic!("cell event delivery returned an actor error: {error:?}"),
+        Err(response) => match response.into_undelivered_result() {
+            Ok(event) => Err(event),
+            Err(error) => panic!("cell event delivery returned an actor error: {error:?}"),
+        },
     }
 }
 
@@ -559,13 +571,13 @@ fn rejected_completion_content(event: Option<CellEvent>) -> Vec<OutputItem> {
 
 fn finish_termination(
     cell_state: &CellState,
-    observer_tx: Option<oneshot::Sender<Result<CellEvent, CellError>>>,
+    observer_tx: Option<oneshot::Sender<CellObservation>>,
     event: CellEvent,
 ) {
     if let Some(event) = cell_state.finish_termination(event)
         && let Some(observer_tx) = observer_tx
     {
-        let _ = observer_tx.send(Ok(event));
+        let _ = observer_tx.send(CellObservation::ok(event));
     }
 }
 
@@ -601,6 +613,16 @@ fn begin_termination(
     cancellation_token: &CancellationToken,
 ) {
     cancellation_token.cancel();
+    let _ = runtime_tx.send(RuntimeCommand::Terminate);
+    let _ = runtime_control_tx.send(RuntimeControlCommand::Terminate);
+    let _ = runtime_terminate_handle.terminate_execution();
+}
+
+fn stop_runtime_after_completion(
+    runtime_tx: &std::sync::mpsc::Sender<RuntimeCommand>,
+    runtime_control_tx: &std::sync::mpsc::Sender<RuntimeControlCommand>,
+    runtime_terminate_handle: &v8::IsolateHandle,
+) {
     let _ = runtime_tx.send(RuntimeCommand::Terminate);
     let _ = runtime_control_tx.send(RuntimeControlCommand::Terminate);
     let _ = runtime_terminate_handle.terminate_execution();

@@ -47,9 +47,13 @@ struct DriverHarness {
 
 impl DriverHarness {
     fn start() -> Self {
+        Self::start_with_outgoing_capacity(/*max_capacity*/ 16)
+    }
+
+    fn start_with_outgoing_capacity(outgoing_capacity: usize) -> Self {
         let (command_tx, command_rx) = mpsc::channel(/*max_capacity*/ 16);
         let (event_tx, event_rx) = mpsc::channel(/*max_capacity*/ 16);
-        let (outgoing_tx, outgoing_rx) = mpsc::channel(/*max_capacity*/ 16);
+        let (outgoing_tx, outgoing_rx) = mpsc::channel(outgoing_capacity);
         let cancellation = CancellationToken::new();
         let alive = Arc::new(AtomicBool::new(true));
         let (driver, execute_claim_tx) = ConnectionDriver::new(
@@ -971,6 +975,55 @@ async fn remote_wait_accepts_durations_longer_than_five_minutes() {
 }
 
 #[tokio::test]
+async fn full_outgoing_queue_backpressures_without_failing_connection() {
+    let mut harness = DriverHarness::start_with_outgoing_capacity(/*outgoing_capacity*/ 1);
+    let session = remote_session();
+    harness
+        .open(session.clone(), Arc::new(RecordingDelegate::default()))
+        .await;
+
+    let (first_tx, _first_rx) = oneshot::channel();
+    harness
+        .command_tx
+        .send(DriverCommand::Wait {
+            session: session.clone(),
+            request: WaitRequest {
+                cell_id: CellId::new("1".to_string()),
+                yield_time_ms: 1,
+            },
+            caller_cancellation: CancellationToken::new(),
+            response_tx: first_tx,
+        })
+        .await
+        .expect("first wait command");
+    tokio::task::yield_now().await;
+
+    let (second_tx, _second_rx) = oneshot::channel();
+    harness
+        .command_tx
+        .send(DriverCommand::Wait {
+            session,
+            request: WaitRequest {
+                cell_id: CellId::new("2".to_string()),
+                yield_time_ms: 1,
+            },
+            caller_cancellation: CancellationToken::new(),
+            response_tx: second_tx,
+        })
+        .await
+        .expect("second wait command");
+    tokio::task::yield_now().await;
+    assert!(harness.alive.load(Ordering::Acquire));
+
+    harness.outgoing_rx.recv().await.expect("first wait frame");
+    tokio::time::timeout(Duration::from_secs(1), harness.outgoing_rx.recv())
+        .await
+        .expect("second wait frame timeout")
+        .expect("second wait frame");
+    assert!(harness.alive.load(Ordering::Acquire));
+}
+
+#[tokio::test]
 async fn cancelled_wait_is_retired_before_next_wait_is_sent() {
     let mut harness = DriverHarness::start();
     let session = remote_session();
@@ -1059,6 +1112,56 @@ async fn cancelled_wait_is_retired_before_next_wait_is_sent() {
             }
         ))
     );
+}
+
+#[tokio::test]
+async fn abandoned_wait_completion_terminates_the_cell() {
+    let mut harness = DriverHarness::start();
+    let session = remote_session();
+    harness
+        .open(session.clone(), Arc::new(RecordingDelegate::default()))
+        .await;
+    let _started = harness
+        .start_cell(session.clone(), /*request_id*/ 2, "1")
+        .await;
+    let (response_tx, response_rx) = oneshot::channel();
+    harness
+        .command_tx
+        .send(DriverCommand::Wait {
+            session,
+            request: WaitRequest {
+                cell_id: CellId::new("1".to_string()),
+                yield_time_ms: 1,
+            },
+            caller_cancellation: CancellationToken::new(),
+            response_tx,
+        })
+        .await
+        .expect("wait command");
+    harness.outgoing_rx.recv().await.expect("wait frame");
+    drop(response_rx);
+    harness
+        .event_tx
+        .send(DriverEvent::HostMessage(HostToClient::Response {
+            id: RequestId::new(/*value*/ 3),
+            result: WireResult::Ok {
+                value: HostResponse::WaitCompleted {
+                    outcome: WireWaitOutcome::LiveCell(WireRuntimeResponse::Result {
+                        cell_id: CellId::new("1".to_string()).into(),
+                        content_items: Vec::new(),
+                        error_text: None,
+                    }),
+                },
+            },
+        }))
+        .await
+        .expect("wait response");
+
+    tokio::time::timeout(Duration::from_secs(1), harness.outgoing_rx.recv())
+        .await
+        .expect("terminate frame timeout")
+        .expect("terminate frame");
+    assert!(harness.alive.load(Ordering::Acquire));
 }
 
 #[tokio::test]

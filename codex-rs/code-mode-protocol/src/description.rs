@@ -18,7 +18,8 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/co
 - Accepts raw JavaScript source text, not JSON, quoted strings, or markdown code fences.
 - You may optionally start the tool input with a first-line pragma like `// @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000}`.
 - `yield_time_ms` asks `exec` to yield early if the script is still running. Defaults to 10000 ms.
-- `max_output_tokens` sets the token budget for direct `exec` results. Defaults to 10000 tokens.
+- `max_output_tokens` sets the token budget for direct `exec` results. `max_tokens` is also accepted as an alias. Defaults to 10000 tokens.
+- The script's completion value is not surfaced; use `text()`, `image()`, `generatedImage()`, or `notify()` to emit output.
 - When the JS code is fully evaluated, the isolate's lifetime ends and unawaited promises are silently discarded.
 
 - Global helpers:
@@ -33,10 +34,11 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/co
 - `clearTimeout(timeoutId?: number)`: cancels a timeout created by `setTimeout`.
 - `ALL_TOOLS`: metadata for the enabled nested tools as `{ name, description }` entries.
 - `yield_control()`: yields the accumulated output to the model immediately while the script keeps running."#;
+const MIXED_CODE_MODE_DIRECT_TOOLS_GUIDANCE: &str = r#"All direct tools are also callable as `tools.<name>(...)` inside cells; signatures match their JSON schemas, and nested calls return the same structured output the direct tool returns."#;
 const WAIT_DESCRIPTION_TEMPLATE: &str = r#"- Use `wait` only after `exec` returns `Script running with cell ID ...`.
 - `cell_id` identifies the running `exec` cell to resume.
 - `yield_time_ms` controls how long to wait for more output before yielding again. Defaults to 10000 ms.
-- `max_tokens` limits how much new output this wait call returns. Defaults to 10000 tokens.
+- `max_tokens` limits how much new output this wait call returns. `max_output_tokens` is also accepted as an alias. Defaults to 10000 tokens.
 - `terminate: true` stops the running cell; false or omitted waits for output.
 - `wait` returns only the new output since the last yield, or the final completion or termination result for that cell.
 - If the cell is still running, `wait` may yield again with the same `cell_id`.
@@ -149,7 +151,7 @@ pub struct ToolNamespaceDescription {
 struct CodeModeExecPragma {
     #[serde(default)]
     yield_time_ms: Option<u64>,
-    #[serde(default)]
+    #[serde(default, alias = "max_tokens")]
     max_output_tokens: Option<usize>,
 }
 
@@ -190,26 +192,26 @@ pub fn parse_exec_source(input: &str) -> Result<ParsedExecSource, String> {
     let directive = pragma.trim();
     if directive.is_empty() {
         return Err(
-            "exec pragma must be a JSON object with supported fields `yield_time_ms` and `max_output_tokens`"
+            "exec pragma must be a JSON object with supported fields `yield_time_ms`, `max_output_tokens`, and `max_tokens`"
                 .to_string(),
         );
     }
 
     let value: serde_json::Value = serde_json::from_str(directive).map_err(|err| {
         format!(
-            "exec pragma must be valid JSON with supported fields `yield_time_ms` and `max_output_tokens`: {err}"
+            "exec pragma must be valid JSON with supported fields `yield_time_ms`, `max_output_tokens`, and `max_tokens`: {err}"
         )
     })?;
     let object = value.as_object().ok_or_else(|| {
-        "exec pragma must be a JSON object with supported fields `yield_time_ms` and `max_output_tokens`"
+        "exec pragma must be a JSON object with supported fields `yield_time_ms`, `max_output_tokens`, and `max_tokens`"
             .to_string()
     })?;
     for key in object.keys() {
         match key.as_str() {
-            "yield_time_ms" | "max_output_tokens" => {}
+            "yield_time_ms" | "max_output_tokens" | "max_tokens" => {}
             _ => {
                 return Err(format!(
-                    "exec pragma only supports `yield_time_ms` and `max_output_tokens`; got `{key}`"
+                    "exec pragma only supports `yield_time_ms`, `max_output_tokens`, and `max_tokens`; got `{key}`"
                 ));
             }
         }
@@ -217,7 +219,7 @@ pub fn parse_exec_source(input: &str) -> Result<ParsedExecSource, String> {
 
     let pragma: CodeModeExecPragma = serde_json::from_value(value).map_err(|err| {
         format!(
-            "exec pragma fields `yield_time_ms` and `max_output_tokens` must be non-negative safe integers: {err}"
+            "exec pragma fields `yield_time_ms`, `max_output_tokens`, and `max_tokens` must be non-negative safe integers: {err}"
         )
     })?;
     if pragma
@@ -234,7 +236,8 @@ pub fn parse_exec_source(input: &str) -> Result<ParsedExecSource, String> {
             .unwrap_or(true)
     }) {
         return Err(
-            "exec pragma field `max_output_tokens` must be a non-negative safe integer".to_string(),
+            "exec pragma field `max_output_tokens`/`max_tokens` must be a non-negative safe integer"
+                .to_string(),
         );
     }
 
@@ -260,6 +263,7 @@ pub fn build_exec_tool_description(
         sections.push(DEFERRED_NESTED_TOOLS_GUIDANCE.to_string());
     }
     if !code_mode_only {
+        sections.push(MIXED_CODE_MODE_DIRECT_TOOLS_GUIDANCE.to_string());
         return sections.join("\n\n");
     }
 
@@ -352,6 +356,13 @@ pub fn augment_tool_definition(mut definition: ToolDefinition) -> ToolDefinition
     definition
 }
 
+pub fn augment_tool_definition_for_mixed_mode(mut definition: ToolDefinition) -> ToolDefinition {
+    if definition.name != PUBLIC_TOOL_NAME {
+        definition.description = render_mixed_mode_code_mode_reference(&definition);
+    }
+    definition
+}
+
 pub fn enabled_tool_metadata(definition: &ToolDefinition) -> EnabledToolMetadata {
     EnabledToolMetadata {
         tool_name: definition.tool_name.clone(),
@@ -396,7 +407,27 @@ fn render_code_mode_sample_for_definition(definition: &ToolDefinition) -> String
             .unwrap_or_else(|| "unknown".to_string()),
         CodeModeToolKind::Freeform => "string".to_string(),
     };
-    let output_type = if let Some(structured_content_schema) =
+    let output_type = render_code_mode_output_type(definition);
+    render_code_mode_sample(
+        &definition.description,
+        &definition.name,
+        input_name,
+        input_type,
+        output_type,
+    )
+}
+
+fn render_mixed_mode_code_mode_reference(definition: &ToolDefinition) -> String {
+    let global_name = normalize_code_mode_identifier(&definition.name);
+    let output_type = render_code_mode_output_type(definition);
+    format!(
+        "{}\n\nCode mode return type: `tools.{global_name}(...)` returns `Promise<{output_type}>`.",
+        definition.description
+    )
+}
+
+fn render_code_mode_output_type(definition: &ToolDefinition) -> String {
+    if let Some(structured_content_schema) =
         mcp_structured_content_schema(definition.output_schema.as_ref())
     {
         let structured_content_type = render_json_schema_to_typescript(structured_content_schema);
@@ -411,14 +442,7 @@ fn render_code_mode_sample_for_definition(definition: &ToolDefinition) -> String
             .as_ref()
             .map(render_json_schema_to_typescript)
             .unwrap_or_else(|| "unknown".to_string())
-    };
-    render_code_mode_sample(
-        &definition.description,
-        &definition.name,
-        input_name,
-        input_type,
-        output_type,
-    )
+    }
 }
 
 fn render_code_mode_tool_declaration(
@@ -711,6 +735,7 @@ mod tests {
     use super::ToolDefinition;
     use super::ToolNamespaceDescription;
     use super::augment_tool_definition;
+    use super::augment_tool_definition_for_mixed_mode;
     use super::build_exec_tool_description;
     use super::normalize_code_mode_identifier;
     use super::parse_exec_source;
@@ -759,6 +784,18 @@ mod tests {
                 code: "text('hi')".to_string(),
                 yield_time_ms: Some(10),
                 max_output_tokens: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_exec_source_accepts_max_tokens_alias() {
+        assert_eq!(
+            parse_exec_source("// @exec: {\"max_tokens\": 42}\ntext('hi')").unwrap(),
+            ParsedExecSource {
+                code: "text('hi')".to_string(),
+                yield_time_ms: None,
+                max_output_tokens: Some(42),
             }
         );
     }
@@ -853,6 +890,31 @@ mod tests {
     }
 
     #[test]
+    fn mixed_mode_tool_definition_includes_output_type_without_input_declaration() {
+        let definition = ToolDefinition {
+            name: "weather_tool".to_string(),
+            tool_name: ToolName::plain("weather_tool"),
+            description: "Weather tool".to_string(),
+            kind: CodeModeToolKind::Function,
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": { "city": { "type": "string" } },
+                "required": ["city"]
+            })),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": { "forecast": { "type": "string" } },
+                "required": ["forecast"]
+            })),
+        };
+
+        assert_eq!(
+            augment_tool_definition_for_mixed_mode(definition).description,
+            "Weather tool\n\nCode mode return type: `tools.weather_tool(...)` returns `Promise<{ forecast: string; }>`."
+        );
+    }
+
+    #[test]
     fn code_mode_only_description_includes_nested_tools() {
         let description = build_exec_tool_description(
             &[ToolDefinition {
@@ -884,6 +946,8 @@ bar"
         );
         assert!(description.contains("`setTimeout(callback: () => void, delayMs?: number)`"));
         assert!(description.contains("`clearTimeout(timeoutId?: number)`"));
+        assert!(description.contains("The script's completion value is not surfaced"));
+        assert!(description.contains("All direct tools are also callable as `tools.<name>(...)`"));
     }
 
     #[test]

@@ -24,7 +24,6 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-const CELL_MESSAGE_CAPACITY: usize = 128;
 const MAX_PENDING_DELEGATE_CALLS: usize = 256;
 
 pub(super) struct HostPeer {
@@ -46,7 +45,7 @@ struct PendingDelegate {
 
 enum CellRoute {
     Pending(VecDeque<CellMessage>),
-    Active(mpsc::Sender<CellMessage>),
+    Active(mpsc::UnboundedSender<CellMessage>),
 }
 
 enum CellMessage {
@@ -72,13 +71,13 @@ impl HostPeer {
         }
     }
 
-    pub(super) fn send(&self, message: HostToClient) -> Result<(), PeerSendError> {
+    pub(super) async fn send(&self, message: HostToClient) -> Result<(), PeerSendError> {
         let frame = EncodedFrame::encode(&message)
             .map_err(|err| PeerSendError::Payload(err.to_string()))?;
-        self.send_frame(frame)
+        self.send_frame(frame).await
     }
 
-    pub(super) fn respond(
+    pub(super) async fn respond(
         &self,
         id: RequestId,
         result: Result<codex_code_mode_protocol::host::HostResponse, String>,
@@ -87,17 +86,21 @@ impl HostPeer {
             id,
             result: WireResult::from_result(result),
         };
-        if let Err(PeerSendError::Payload(err)) = self.send(message) {
-            let _ = self.send(HostToClient::Response {
-                id,
-                result: WireResult::Err {
-                    message: format!("code-mode host response exceeds the IPC frame limit: {err}"),
-                },
-            });
+        if let Err(PeerSendError::Payload(err)) = self.send(message).await {
+            let _ = self
+                .send(HostToClient::Response {
+                    id,
+                    result: WireResult::Err {
+                        message: format!(
+                            "code-mode host response exceeds the IPC frame limit: {err}"
+                        ),
+                    },
+                })
+                .await;
         }
     }
 
-    fn initial_response(
+    async fn initial_response(
         &self,
         id: RequestId,
         result: Result<codex_code_mode_protocol::host::WireRuntimeResponse, String>,
@@ -106,15 +109,17 @@ impl HostPeer {
             id,
             result: WireResult::from_result(result),
         };
-        if let Err(PeerSendError::Payload(err)) = self.send(message) {
-            let _ = self.send(HostToClient::InitialResponse {
-                id,
-                result: WireResult::Err {
-                    message: format!(
-                        "code-mode initial response exceeds the IPC frame limit: {err}"
-                    ),
-                },
-            });
+        if let Err(PeerSendError::Payload(err)) = self.send(message).await {
+            let _ = self
+                .send(HostToClient::InitialResponse {
+                    id,
+                    result: WireResult::Err {
+                        message: format!(
+                            "code-mode initial response exceeds the IPC frame limit: {err}"
+                        ),
+                    },
+                })
+                .await;
         }
     }
 
@@ -184,7 +189,7 @@ impl HostPeer {
             }
             _ = cancellation_token.cancelled() => {
                 if self.remove_pending(id).await.is_some() {
-                    let _ = self.send(HostToClient::CancelDelegateRequest { id });
+                    let _ = self.send(HostToClient::CancelDelegateRequest { id }).await;
                 }
                 pending.disarm();
                 Err("code mode delegate request cancelled".to_string())
@@ -216,7 +221,7 @@ impl HostPeer {
     ) -> oneshot::Receiver<()> {
         let (initial_response_sent_tx, initial_response_sent_rx) = oneshot::channel();
         let key = (session_id, started.cell_id.clone());
-        let (messages_tx, messages_rx) = mpsc::channel(CELL_MESSAGE_CAPACITY);
+        let (messages_tx, messages_rx) = mpsc::unbounded_channel();
         let previous = self
             .cell_routes
             .lock()
@@ -225,8 +230,7 @@ impl HostPeer {
         match previous {
             Some(CellRoute::Pending(messages)) => {
                 for message in messages {
-                    if messages_tx.try_send(message).is_err() {
-                        self.disconnect();
+                    if messages_tx.send(message).is_err() {
                         return initial_response_sent_rx;
                     }
                 }
@@ -315,25 +319,32 @@ impl HostPeer {
         request: DelegateRequest,
         dispatched_tx: oneshot::Sender<Result<(), String>>,
     ) {
-        let result = {
-            let mut pending = self.pending.lock().await;
-            let Some(pending) = pending.get_mut(&id) else {
-                let _ = dispatched_tx.send(Err(
-                    "code-mode delegate request was cancelled before dispatch".to_string(),
-                ));
-                return;
-            };
-            match self.send(HostToClient::DelegateRequest {
+        if !self.pending.lock().await.contains_key(&id) {
+            let _ = dispatched_tx.send(Err(
+                "code-mode delegate request was cancelled before dispatch".to_string(),
+            ));
+            return;
+        }
+        let result = match self
+            .send(HostToClient::DelegateRequest {
                 id,
                 session_id,
                 request,
-            }) {
-                Ok(()) => {
-                    pending.dispatched = true;
-                    Ok(())
-                }
-                Err(err) => Err(err.to_string()),
+            })
+            .await
+        {
+            Ok(()) => {
+                let mut pending = self.pending.lock().await;
+                let Some(pending) = pending.get_mut(&id) else {
+                    let _ = dispatched_tx.send(Err(
+                        "code-mode delegate request was cancelled before dispatch".to_string(),
+                    ));
+                    return;
+                };
+                pending.dispatched = true;
+                Ok(())
             }
+            Err(err) => Err(err.to_string()),
         };
         let _ = dispatched_tx.send(result);
     }
@@ -345,31 +356,26 @@ impl HostPeer {
     ) -> Result<(), String> {
         use std::collections::hash_map::Entry;
 
-        let result = match self
+        match self
             .cell_routes
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .entry(key)
         {
             Entry::Occupied(mut entry) => match entry.get_mut() {
-                CellRoute::Pending(messages) if messages.len() < CELL_MESSAGE_CAPACITY => {
+                CellRoute::Pending(messages) => {
                     messages.push_back(message);
                     Ok(())
                 }
-                CellRoute::Pending(_) => Err("code-mode cell message queue is full".to_string()),
                 CellRoute::Active(sender) => sender
-                    .try_send(message)
+                    .send(message)
                     .map_err(|_| "code-mode cell message queue is unavailable".to_string()),
             },
             Entry::Vacant(entry) => {
                 entry.insert(CellRoute::Pending(VecDeque::from([message])));
                 Ok(())
             }
-        };
-        if result.is_err() {
-            self.disconnect();
         }
-        result
     }
 
     async fn remove_pending(&self, id: DelegateRequestId) -> Option<PendingDelegate> {
@@ -389,16 +395,10 @@ impl HostPeer {
         });
     }
 
-    fn send_frame(&self, frame: EncodedFrame) -> Result<(), PeerSendError> {
-        match self.outgoing_tx.try_send(frame) {
+    async fn send_frame(&self, frame: EncodedFrame) -> Result<(), PeerSendError> {
+        match self.outgoing_tx.send(frame).await {
             Ok(()) => Ok(()),
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                self.disconnect();
-                Err(PeerSendError::Unavailable(
-                    "code-mode host outgoing queue is full".to_string(),
-                ))
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
+            Err(_) => {
                 self.disconnect();
                 Err(PeerSendError::Unavailable(
                     "code-mode client connection closed".to_string(),
@@ -413,7 +413,7 @@ async fn drive_cell(
     key: (SessionId, CellId),
     request_id: RequestId,
     started: StartedCell,
-    mut messages_rx: mpsc::Receiver<CellMessage>,
+    mut messages_rx: mpsc::UnboundedReceiver<CellMessage>,
     initial_response_sent_tx: oneshot::Sender<()>,
     _active_cell_permit: OwnedSemaphorePermit,
 ) {
@@ -424,7 +424,7 @@ async fn drive_cell(
         tokio::select! {
             biased;
             result = &mut initial_response => {
-                peer.initial_response(request_id, result.map(Into::into));
+                peer.initial_response(request_id, result.map(Into::into)).await;
                 if let Some(initial_response_sent_tx) = initial_response_sent_tx.take() {
                     let _ = initial_response_sent_tx.send(());
                 }
@@ -448,7 +448,8 @@ async fn drive_cell(
     };
 
     if closed {
-        peer.initial_response(request_id, initial_response.await.map(Into::into));
+        peer.initial_response(request_id, initial_response.await.map(Into::into))
+            .await;
         if let Some(initial_response_sent_tx) = initial_response_sent_tx.take() {
             let _ = initial_response_sent_tx.send(());
         }
@@ -472,10 +473,12 @@ async fn drive_cell(
             }
         }
     }
-    let _ = peer.send(HostToClient::CellClosed {
-        session_id: key.0.clone(),
-        cell_id: (&key.1).into(),
-    });
+    let _ = peer
+        .send(HostToClient::CellClosed {
+            session_id: key.0.clone(),
+            cell_id: (&key.1).into(),
+        })
+        .await;
     peer.remove_cell_route(&key);
 }
 
@@ -492,6 +495,7 @@ impl HostPeer {
     }
 }
 
+#[derive(Debug)]
 pub(super) enum PeerSendError {
     Payload(String),
     Unavailable(String),
@@ -530,7 +534,7 @@ impl Drop for PendingDelegateRequest {
             if let Some(pending) = peer.remove_pending(id).await
                 && pending.dispatched
             {
-                let _ = peer.send(HostToClient::CancelDelegateRequest { id });
+                let _ = peer.send(HostToClient::CancelDelegateRequest { id }).await;
             }
         });
     }

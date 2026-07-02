@@ -6,10 +6,25 @@ use codex_code_mode::ToolDefinition as CodeModeToolDefinition;
 
 /// Augment tool descriptions with code-mode-specific exec samples.
 pub fn augment_tool_spec_for_code_mode(spec: ToolSpec) -> ToolSpec {
+    augment_tool_spec_for_code_mode_with(spec, codex_code_mode::augment_tool_definition)
+}
+
+/// Add only the mixed-mode code-mode return type to direct tool descriptions.
+pub fn augment_tool_spec_for_mixed_code_mode(spec: ToolSpec) -> ToolSpec {
+    augment_tool_spec_for_code_mode_with(
+        spec,
+        codex_code_mode::augment_tool_definition_for_mixed_mode,
+    )
+}
+
+fn augment_tool_spec_for_code_mode_with(
+    spec: ToolSpec,
+    augment: fn(CodeModeToolDefinition) -> CodeModeToolDefinition,
+) -> ToolSpec {
     match spec {
         ToolSpec::Function(mut tool) => {
             let Some(description) =
-                augmented_description_for_spec(&ToolSpec::Function(tool.clone()))
+                augmented_description_for_spec(&ToolSpec::Function(tool.clone()), augment)
             else {
                 return ToolSpec::Function(tool);
             };
@@ -18,7 +33,7 @@ pub fn augment_tool_spec_for_code_mode(spec: ToolSpec) -> ToolSpec {
         }
         ToolSpec::Freeform(mut tool) => {
             let Some(description) =
-                augmented_description_for_spec(&ToolSpec::Freeform(tool.clone()))
+                augmented_description_for_spec(&ToolSpec::Freeform(tool.clone()), augment)
             else {
                 return ToolSpec::Freeform(tool);
             };
@@ -39,8 +54,7 @@ pub fn augment_tool_spec_for_code_mode(spec: ToolSpec) -> ToolSpec {
                             input_schema: serde_json::to_value(&tool.parameters).ok(),
                             output_schema: tool.output_schema.clone(),
                         };
-                        tool.description =
-                            codex_code_mode::augment_tool_definition(definition).description;
+                        tool.description = augment(definition).description;
                     }
                 }
             }
@@ -97,9 +111,12 @@ pub fn collect_code_mode_exec_prompt_tool_definitions<'a>(
     tool_definitions
 }
 
-fn augmented_description_for_spec(spec: &ToolSpec) -> Option<String> {
+fn augmented_description_for_spec(
+    spec: &ToolSpec,
+    augment: fn(CodeModeToolDefinition) -> CodeModeToolDefinition,
+) -> Option<String> {
     code_mode_tool_definition_for_spec(spec)
-        .map(codex_code_mode::augment_tool_definition)
+        .map(augment)
         .map(|definition| definition.description)
 }
 

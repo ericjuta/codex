@@ -1,7 +1,6 @@
 use serde_json::Value as JsonValue;
 
 use super::CompletionState;
-use super::EXIT_SENTINEL;
 use super::RuntimeState;
 use super::value::json_to_v8;
 use super::value::value_to_error_text;
@@ -31,6 +30,9 @@ pub(super) fn evaluate_main_module(
     let result = match module.evaluate(&tc) {
         Some(result) => result,
         None => {
+            if tc.has_terminated() && exit_requested(&mut tc) {
+                return Ok(None);
+            }
             if let Some(exception) = tc.exception() {
                 if is_exit_exception(&mut tc, exception) {
                     return Ok(None);
@@ -53,14 +55,16 @@ pub(super) fn evaluate_main_module(
 
 fn is_exit_exception(
     scope: &mut v8::PinScope<'_, '_>,
-    exception: v8::Local<'_, v8::Value>,
+    _exception: v8::Local<'_, v8::Value>,
 ) -> bool {
+    exit_requested(scope)
+}
+
+fn exit_requested(scope: &mut v8::PinScope<'_, '_>) -> bool {
     scope
         .get_slot::<RuntimeState>()
         .map(|state| state.exit_requested)
         .unwrap_or(false)
-        && exception.is_string()
-        && exception.to_rust_string_lossy(scope) == EXIT_SENTINEL
 }
 
 pub(super) fn resolve_tool_response(
@@ -86,9 +90,9 @@ pub(super) fn resolve_tool_response(
             resolver.resolve(&tc, value);
         }
         Err(error_text) => {
-            let value = v8::String::new(&tc, &error_text)
+            let value = v8_error(&tc, &error_text)
                 .ok_or_else(|| "failed to allocate tool error".to_string())?;
-            resolver.reject(&tc, value.into());
+            resolver.reject(&tc, value);
         }
     }
     if tc.has_caught() {
@@ -98,6 +102,11 @@ pub(super) fn resolve_tool_response(
             .unwrap_or_else(|| "unknown code mode exception".to_string()));
     }
     Ok(())
+}
+
+fn v8_error<'s>(scope: &v8::PinScope<'s, '_>, message: &str) -> Option<v8::Local<'s, v8::Value>> {
+    let message = v8::String::new(scope, message)?;
+    Some(v8::Exception::error(scope, message))
 }
 
 pub(super) fn completion_state(

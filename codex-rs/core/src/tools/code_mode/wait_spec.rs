@@ -22,6 +22,12 @@ pub(crate) fn create_wait_tool() -> ToolSpec {
             )),
         ),
         (
+            "max_output_tokens".to_string(),
+            JsonSchema::number(Some(
+                "Alias for max_tokens. Defaults to 10000 tokens.".to_string(),
+            )),
+        ),
+        (
             "terminate".to_string(),
             JsonSchema::boolean(Some(
                 "True stops the running exec cell; false or omitted waits for output.".to_string(),
@@ -78,6 +84,12 @@ mod tests {
                             JsonSchema::number(Some(
                                 "Output token budget for this wait call. Defaults to 10000 tokens."
                                     .to_string(),
+                            )),
+                        ),
+                        (
+                            "max_output_tokens".to_string(),
+                            JsonSchema::number(Some(
+                                "Alias for max_tokens. Defaults to 10000 tokens.".to_string(),
                             )),
                         ),
                         (

@@ -46,6 +46,18 @@ impl ProcessOwnedCodeModeSessionProvider {
         }
     }
 
+    pub fn with_default_host_program_if_available() -> Result<Self, PathBuf> {
+        Self::with_host_program_if_available(default_host_program())
+    }
+
+    pub fn with_host_program_if_available(host_program: PathBuf) -> Result<Self, PathBuf> {
+        if host_program.is_file() {
+            Ok(Self::with_host_program(host_program))
+        } else {
+            Err(host_program)
+        }
+    }
+
     fn process_host(&self) -> Arc<OwnedProcessHost> {
         let mut process_host = self
             .process_host

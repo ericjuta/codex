@@ -1,5 +1,6 @@
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::FutureExt;
 use tokio::task::JoinSet;
@@ -10,6 +11,8 @@ use super::CellHost;
 use super::CellToolCall;
 use crate::TaskFailureHandler;
 use crate::runtime::RuntimeCommand;
+
+const NOTIFICATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy)]
 pub(super) enum CallbackCompletion {
@@ -89,7 +92,27 @@ pub(super) async fn finish_callbacks(
     if matches!(completion, CallbackCompletion::Cancel) {
         cancellation_token.cancel();
     }
-    drain_tasks(notification_tasks, "notification", task_failure_handler).await;
+    match completion {
+        CallbackCompletion::DrainNotifications => {
+            if tokio::time::timeout(
+                NOTIFICATION_DRAIN_TIMEOUT,
+                drain_tasks(notification_tasks, "notification", task_failure_handler),
+            )
+            .await
+            .is_err()
+            {
+                notification_tasks.abort_all();
+                report_task_failure(
+                    task_failure_handler,
+                    "code mode notification drain timed out".to_string(),
+                );
+                drain_tasks(notification_tasks, "notification", task_failure_handler).await;
+            }
+        }
+        CallbackCompletion::Cancel => {
+            drain_tasks(notification_tasks, "notification", task_failure_handler).await;
+        }
+    }
     cancellation_token.cancel();
     drain_tasks(tool_tasks, "tool", task_failure_handler).await;
 }

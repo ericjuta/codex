@@ -5,7 +5,9 @@ mod response_adapter;
 mod wait_handler;
 pub(crate) mod wait_spec;
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -16,7 +18,9 @@ use codex_code_mode::CodeModeSession;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
 use codex_code_mode::RuntimeResponse;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::ResponseItem;
 use serde_json::Value as JsonValue;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
@@ -64,19 +68,27 @@ pub(crate) struct ExecContext {
 }
 
 pub(crate) struct CodeModeService {
-    session: OnceCell<Arc<dyn CodeModeSession>>,
+    session: Arc<OnceCell<Arc<dyn CodeModeSession>>>,
     session_provider: Arc<dyn CodeModeSessionProvider>,
     dispatch_broker: Arc<CodeModeDispatchBroker>,
+    live_cells: Arc<Mutex<HashMap<CellId, LiveCell>>>,
     shutting_down: AtomicBool,
+}
+
+#[derive(Clone)]
+struct LiveCell {
+    turn_id: String,
+    model_visible: bool,
 }
 
 impl CodeModeService {
     pub(crate) fn new(session_provider: Arc<dyn CodeModeSessionProvider>) -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
         Self {
-            session: OnceCell::new(),
+            session: Arc::new(OnceCell::new()),
             session_provider,
             dispatch_broker,
+            live_cells: Arc::new(Mutex::new(HashMap::new())),
             shutting_down: AtomicBool::new(false),
         }
     }
@@ -106,6 +118,14 @@ impl CodeModeService {
         self.session().await?.terminate(cell_id).await
     }
 
+    pub(crate) async fn terminate_abandoned_cell(&self, cell_id: CellId) {
+        self.dispatch_broker.close_cell(&cell_id);
+        remove_live_cell(&self.live_cells, &cell_id);
+        if let Some(session) = self.session.get() {
+            let _ = session.terminate(cell_id).await;
+        }
+    }
+
     pub(crate) async fn shutdown(&self) -> Result<(), String> {
         self.shutting_down.store(true, Ordering::Release);
         // Join any initialization already in progress without initializing an unused service.
@@ -127,8 +147,25 @@ impl CodeModeService {
         self.dispatch_broker.mark_cell_ready_for_dispatch(cell_id);
     }
 
+    pub(crate) fn register_started_cell(&self, turn_id: &str, cell_id: &CellId) {
+        live_cells_guard(&self.live_cells).insert(
+            cell_id.clone(),
+            LiveCell {
+                turn_id: turn_id.to_string(),
+                model_visible: false,
+            },
+        );
+    }
+
+    pub(crate) fn mark_cell_model_visible(&self, cell_id: &CellId) {
+        if let Some(cell) = live_cells_guard(&self.live_cells).get_mut(cell_id) {
+            cell.model_visible = true;
+        }
+    }
+
     pub(crate) fn finish_cell_dispatch(&self, cell_id: &CellId) {
         self.dispatch_broker.close_cell(cell_id);
+        remove_live_cell(&self.live_cells, cell_id);
     }
 
     pub(crate) fn start_turn_worker(
@@ -141,6 +178,7 @@ impl CodeModeService {
         let turn = &step_context.turn;
         let tool_mode = effective_tool_mode(turn);
         if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
+            self.terminate_live_cells_for_mode_flip(session);
             return None;
         }
 
@@ -148,10 +186,34 @@ impl CodeModeService {
             session: Arc::clone(session),
             turn: Arc::clone(turn),
         };
-        Some(
-            self.dispatch_broker
-                .start_turn_worker(exec, router, step_context, tracker),
-        )
+        let turn_id = turn.sub_id.clone();
+        let live_cells = Arc::clone(&self.live_cells);
+        let code_mode_session = Arc::clone(&self.session);
+        let dispatch_broker = Arc::clone(&self.dispatch_broker);
+        let cleanup_turn_id = turn_id.clone();
+        let turn_end_cleanup = Box::new(move || {
+            let cells = take_unmodel_visible_cells_for_turn(&live_cells, &cleanup_turn_id);
+            if cells.is_empty() {
+                return;
+            }
+            let Some(session) = code_mode_session.get().cloned() else {
+                return;
+            };
+            tokio::spawn(async move {
+                for cell_id in cells {
+                    dispatch_broker.close_cell(&cell_id);
+                    let _ = session.terminate(cell_id).await;
+                }
+            });
+        });
+        Some(self.dispatch_broker.start_turn_worker(
+            exec,
+            router,
+            step_context,
+            tracker,
+            turn_id,
+            turn_end_cleanup,
+        ))
     }
 
     async fn session(&self) -> Result<Arc<dyn CodeModeSession>, String> {
@@ -176,6 +238,77 @@ impl CodeModeService {
             .await
             .map(Arc::clone)
     }
+
+    fn terminate_live_cells_for_mode_flip(&self, session: &Arc<Session>) {
+        let cells = take_all_live_cells(&self.live_cells);
+        if cells.is_empty() {
+            return;
+        }
+        let count = cells.len();
+        let Some(code_mode_session) = self.session.get().cloned() else {
+            return;
+        };
+        let dispatch_broker = Arc::clone(&self.dispatch_broker);
+        let session = Arc::clone(session);
+        tokio::spawn(async move {
+            for cell_id in cells {
+                dispatch_broker.close_cell(&cell_id);
+                let _ = code_mode_session.terminate(cell_id).await;
+            }
+            let message = if count == 1 {
+                "1 running code cell was terminated because the active model does not support code mode"
+                    .to_string()
+            } else {
+                format!(
+                    "{count} running code cells were terminated because the active model does not support code mode"
+                )
+            };
+            let _ = session
+                .inject_if_running(vec![ResponseItem::Message {
+                    id: None,
+                    role: "developer".to_string(),
+                    content: vec![ContentItem::InputText { text: message }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                }])
+                .await;
+        });
+    }
+}
+
+fn live_cells_guard(
+    live_cells: &Mutex<HashMap<CellId, LiveCell>>,
+) -> std::sync::MutexGuard<'_, HashMap<CellId, LiveCell>> {
+    live_cells
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn remove_live_cell(live_cells: &Mutex<HashMap<CellId, LiveCell>>, cell_id: &CellId) {
+    live_cells_guard(live_cells).remove(cell_id);
+}
+
+fn take_unmodel_visible_cells_for_turn(
+    live_cells: &Mutex<HashMap<CellId, LiveCell>>,
+    turn_id: &str,
+) -> Vec<CellId> {
+    let mut live_cells = live_cells_guard(live_cells);
+    let cells = live_cells
+        .iter()
+        .filter(|(_, cell)| cell.turn_id == turn_id && !cell.model_visible)
+        .map(|(cell_id, _)| cell_id.clone())
+        .collect::<Vec<_>>();
+    for cell_id in &cells {
+        live_cells.remove(cell_id);
+    }
+    cells
+}
+
+fn take_all_live_cells(live_cells: &Mutex<HashMap<CellId, LiveCell>>) -> Vec<CellId> {
+    live_cells_guard(live_cells)
+        .drain()
+        .map(|(cell_id, _)| cell_id)
+        .collect()
 }
 
 pub(super) async fn handle_runtime_response(

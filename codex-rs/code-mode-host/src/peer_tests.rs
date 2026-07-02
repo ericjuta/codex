@@ -5,6 +5,7 @@ use codex_code_mode_protocol::CellId;
 use codex_code_mode_protocol::RuntimeResponse;
 use codex_code_mode_protocol::StartedCell;
 use codex_code_mode_protocol::host::DelegateRequest;
+use codex_code_mode_protocol::host::HostToClient;
 use codex_code_mode_protocol::host::RequestId;
 use codex_code_mode_protocol::host::SessionId;
 use pretty_assertions::assert_eq;
@@ -92,4 +93,34 @@ async fn pending_delegate_limit_rejects_call_without_disconnecting() {
     );
     assert!(!peer.is_disconnected());
     drop(permits);
+}
+
+#[tokio::test]
+async fn full_outgoing_queue_backpressures_without_disconnecting() {
+    let (outgoing_tx, mut outgoing_rx) = mpsc::channel(/*max_capacity*/ 1);
+    let peer = Arc::new(HostPeer::new(outgoing_tx));
+    peer.send(HostToClient::CellClosed {
+        session_id: session_id("session-1"),
+        cell_id: CellId::new("cell-1".to_string()).into(),
+    })
+    .await
+    .expect("first frame");
+
+    let pending_send = tokio::spawn({
+        let peer = Arc::clone(&peer);
+        async move {
+            peer.send(HostToClient::CellClosed {
+                session_id: session_id("session-1"),
+                cell_id: CellId::new("cell-2".to_string()).into(),
+            })
+            .await
+        }
+    });
+    tokio::task::yield_now().await;
+    assert!(!peer.is_disconnected());
+    assert!(!pending_send.is_finished());
+
+    outgoing_rx.recv().await.expect("first frame");
+    assert!(pending_send.await.expect("pending send").is_ok());
+    assert!(!peer.is_disconnected());
 }

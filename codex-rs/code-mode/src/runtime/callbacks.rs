@@ -1,6 +1,5 @@
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
 
-use super::EXIT_SENTINEL;
 use super::RuntimeEvent;
 use super::RuntimeState;
 use super::timers;
@@ -15,6 +14,9 @@ pub(super) fn tool_callback(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue<v8::Value>,
 ) {
+    if return_undefined_if_exit_requested(scope, &mut retval) {
+        return;
+    }
     let tool_index = match args.data().to_rust_string_lossy(scope).parse::<usize>() {
         Ok(tool_index) => tool_index,
         Err(_) => {
@@ -76,6 +78,9 @@ pub(super) fn text_callback(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue<v8::Value>,
 ) {
+    if return_undefined_if_exit_requested(scope, &mut retval) {
+        return;
+    }
     let value = if args.length() == 0 {
         v8::undefined(scope).into()
     } else {
@@ -101,6 +106,9 @@ pub(super) fn image_callback(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue<v8::Value>,
 ) {
+    if return_undefined_if_exit_requested(scope, &mut retval) {
+        return;
+    }
     let value = if args.length() == 0 {
         v8::undefined(scope).into()
     } else {
@@ -134,6 +142,9 @@ pub(super) fn generated_image_callback(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue<v8::Value>,
 ) {
+    if return_undefined_if_exit_requested(scope, &mut retval) {
+        return;
+    }
     let value = if args.length() == 0 {
         v8::undefined(scope).into()
     } else {
@@ -186,6 +197,9 @@ pub(super) fn store_callback(
     args: v8::FunctionCallbackArguments,
     _retval: v8::ReturnValue<v8::Value>,
 ) {
+    if exit_requested(scope) {
+        return;
+    }
     let key = match args.get(0).to_string(scope) {
         Some(key) => key.to_rust_string_lossy(scope),
         None => {
@@ -219,6 +233,9 @@ pub(super) fn load_callback(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue<v8::Value>,
 ) {
+    if return_undefined_if_exit_requested(scope, &mut retval) {
+        return;
+    }
     let key = match args.get(0).to_string(scope) {
         Some(key) => key.to_rust_string_lossy(scope),
         None => {
@@ -246,6 +263,9 @@ pub(super) fn notify_callback(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue<v8::Value>,
 ) {
+    if return_undefined_if_exit_requested(scope, &mut retval) {
+        return;
+    }
     let value = if args.length() == 0 {
         v8::undefined(scope).into()
     } else {
@@ -277,6 +297,9 @@ pub(super) fn set_timeout_callback(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue<v8::Value>,
 ) {
+    if return_undefined_if_exit_requested(scope, &mut retval) {
+        return;
+    }
     let timeout_id = match timers::schedule_timeout(scope, args) {
         Ok(timeout_id) => timeout_id,
         Err(error_text) => {
@@ -293,6 +316,9 @@ pub(super) fn clear_timeout_callback(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue<v8::Value>,
 ) {
+    if return_undefined_if_exit_requested(scope, &mut retval) {
+        return;
+    }
     if let Err(error_text) = timers::clear_timeout(scope, args) {
         throw_type_error(scope, &error_text);
         return;
@@ -306,6 +332,9 @@ pub(super) fn yield_control_callback(
     _args: v8::FunctionCallbackArguments,
     _retval: v8::ReturnValue<v8::Value>,
 ) {
+    if exit_requested(scope) {
+        return;
+    }
     if let Some(state) = scope.get_slot::<RuntimeState>() {
         let _ = state.event_tx.send(RuntimeEvent::YieldRequested);
     }
@@ -318,8 +347,27 @@ pub(super) fn exit_callback(
 ) {
     if let Some(state) = scope.get_slot_mut::<RuntimeState>() {
         state.exit_requested = true;
+        let _ = state
+            .runtime_command_tx
+            .send(super::RuntimeCommand::Terminate);
+        let _ = state.runtime_terminate_handle.terminate_execution();
     }
-    if let Some(error) = v8::String::new(scope, EXIT_SENTINEL) {
-        scope.throw_exception(error.into());
+    scope.terminate_execution();
+}
+
+fn return_undefined_if_exit_requested(
+    scope: &mut v8::PinScope<'_, '_>,
+    retval: &mut v8::ReturnValue<v8::Value>,
+) -> bool {
+    if !exit_requested(scope) {
+        return false;
     }
+    retval.set(v8::undefined(scope).into());
+    true
+}
+
+fn exit_requested(scope: &mut v8::PinScope<'_, '_>) -> bool {
+    scope
+        .get_slot::<RuntimeState>()
+        .is_some_and(|state| state.exit_requested)
 }

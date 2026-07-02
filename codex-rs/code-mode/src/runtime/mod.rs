@@ -22,8 +22,6 @@ use tokio::sync::mpsc;
 
 use crate::TaskFailureHandler;
 
-const EXIT_SENTINEL: &str = "__codex_code_mode_exit__";
-
 #[derive(Debug)]
 pub(crate) enum RuntimeCommand {
     ToolResponse { id: String, result: JsonValue },
@@ -158,6 +156,8 @@ pub(super) struct RuntimeState {
     tool_call_id: String,
     max_output_tokens: Option<usize>,
     runtime_command_tx: std_mpsc::Sender<RuntimeCommand>,
+    timer_scheduler: timers::TimerScheduler,
+    runtime_terminate_handle: v8::IsolateHandle,
     exit_requested: bool,
 }
 
@@ -196,7 +196,7 @@ fn run_runtime(
 ) {
     let isolate = &mut v8::Isolate::new(v8::CreateParams::default());
     let isolate_handle = isolate.thread_safe_handle();
-    if isolate_handle_tx.send(isolate_handle).is_err() {
+    if isolate_handle_tx.send(isolate_handle.clone()).is_err() {
         return;
     }
     isolate.set_host_import_module_dynamically_callback(module_loader::dynamic_import_callback);
@@ -205,6 +205,7 @@ fn run_runtime(
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
 
+    let timer_scheduler = timers::TimerScheduler::new(runtime_command_tx.clone());
     scope.set_slot(RuntimeState {
         event_tx: event_tx.clone(),
         pending_tool_calls: HashMap::new(),
@@ -217,6 +218,8 @@ fn run_runtime(
         tool_call_id: config.tool_call_id,
         max_output_tokens: config.max_output_tokens,
         runtime_command_tx,
+        timer_scheduler,
+        runtime_terminate_handle: isolate_handle,
         exit_requested: false,
     });
 

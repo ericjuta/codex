@@ -1,5 +1,12 @@
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::Condvar;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use super::RuntimeCommand;
 use super::RuntimeState;
@@ -7,6 +14,122 @@ use super::value::value_to_error_text;
 
 pub(super) struct ScheduledTimeout {
     callback: v8::Global<v8::Function>,
+}
+
+pub(super) struct TimerScheduler {
+    shared: Arc<TimerShared>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+struct TimerShared {
+    state: Mutex<TimerState>,
+    wake: Condvar,
+    runtime_command_tx: std::sync::mpsc::Sender<RuntimeCommand>,
+}
+
+#[derive(Default)]
+struct TimerState {
+    deadlines: HashMap<u64, Instant>,
+    heap: BinaryHeap<Reverse<(Instant, u64)>>,
+    shutdown: bool,
+}
+
+impl TimerScheduler {
+    pub(super) fn new(runtime_command_tx: std::sync::mpsc::Sender<RuntimeCommand>) -> Self {
+        let shared = Arc::new(TimerShared {
+            state: Mutex::new(TimerState::default()),
+            wake: Condvar::new(),
+            runtime_command_tx,
+        });
+        let worker_shared = Arc::clone(&shared);
+        let worker = thread::spawn(move || run_timer_scheduler(worker_shared));
+        Self {
+            shared,
+            worker: Some(worker),
+        }
+    }
+
+    pub(super) fn schedule(&self, id: u64, delay_ms: u64) {
+        let deadline = Instant::now()
+            .checked_add(Duration::from_millis(delay_ms))
+            .unwrap_or_else(Instant::now);
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.deadlines.insert(id, deadline);
+        state.heap.push(Reverse((deadline, id)));
+        self.shared.wake.notify_one();
+    }
+
+    pub(super) fn clear(&self, id: u64) {
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.deadlines.remove(&id);
+        self.shared.wake.notify_one();
+    }
+}
+
+impl Drop for TimerScheduler {
+    fn drop(&mut self) {
+        {
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.shutdown = true;
+        }
+        self.shared.wake.notify_one();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn run_timer_scheduler(shared: Arc<TimerShared>) {
+    loop {
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        loop {
+            if state.shutdown {
+                return;
+            }
+            let Some(Reverse((deadline, timeout_id))) = state.heap.peek().copied() else {
+                state = shared
+                    .wake
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                continue;
+            };
+            if state.deadlines.get(&timeout_id) != Some(&deadline) {
+                state.heap.pop();
+                continue;
+            }
+            let now = Instant::now();
+            if deadline <= now {
+                state.heap.pop();
+                state.deadlines.remove(&timeout_id);
+                drop(state);
+                let _ = shared
+                    .runtime_command_tx
+                    .send(RuntimeCommand::TimeoutFired { id: timeout_id });
+                break;
+            }
+            let wait_duration = deadline.saturating_duration_since(now);
+            let wait_result = shared
+                .wake
+                .wait_timeout(state, wait_duration)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state = wait_result.0;
+        }
+    }
 }
 
 pub(super) fn schedule_timeout(
@@ -32,14 +155,10 @@ pub(super) fn schedule_timeout(
         .ok_or_else(|| "runtime state unavailable".to_string())?;
     let timeout_id = state.next_timeout_id;
     state.next_timeout_id = state.next_timeout_id.saturating_add(1);
-    let runtime_command_tx = state.runtime_command_tx.clone();
     state
         .pending_timeouts
         .insert(timeout_id, ScheduledTimeout { callback });
-    thread::spawn(move || {
-        thread::sleep(Duration::from_millis(delay_ms));
-        let _ = runtime_command_tx.send(RuntimeCommand::TimeoutFired { id: timeout_id });
-    });
+    state.timer_scheduler.schedule(timeout_id, delay_ms);
 
     Ok(timeout_id)
 }
@@ -55,7 +174,9 @@ pub(super) fn clear_timeout(
     let Some(state) = scope.get_slot_mut::<RuntimeState>() else {
         return Err("runtime state unavailable".to_string());
     };
-    state.pending_timeouts.remove(&timeout_id);
+    if state.pending_timeouts.remove(&timeout_id).is_some() {
+        state.timer_scheduler.clear(timeout_id);
+    }
     Ok(())
 }
 
