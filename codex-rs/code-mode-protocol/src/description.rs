@@ -28,7 +28,7 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/co
 - `generatedImage(result: { image_url: string; output_hint?: string })`: Appends an image-generation result and its optional output hint. HTTP(S) URLs are not supported.
 - `store(key: string, value: any)`: stores a serializable value under a string key for later `exec` calls in the same session.
 - `load(key: string)`: returns the stored value for a string key, or `undefined` if it is missing.
-- `notify(value: string | number | boolean | undefined | null)`: immediately injects an extra `custom_tool_call_output` for the current `exec` call. Values are stringified like `text(...)`.
+- `notify(value: string | number | boolean | undefined | null)`: immediately delivers a developer message wrapped in `<code_mode_notification cell_id="..." call_id="...">` for the current `exec` call. Values are stringified like `text(...)`.
 - `setTimeout(callback: () => void, delayMs?: number)`: schedules a callback to run later and returns a timeout id. Pending timeouts do not keep `exec` alive by themselves; await an explicit promise if you need to wait for one.
 - `clearTimeout(timeoutId?: number)`: cancels a timeout created by `setTimeout`.
 - `ALL_TOOLS`: metadata for the enabled nested tools as `{ name, description }` entries.

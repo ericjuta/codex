@@ -3,16 +3,139 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::util::error_or_panic;
 use tracing::info;
+use tracing::warn;
 
 const IMAGE_CONTENT_OMITTED_PLACEHOLDER: &str =
     "image content omitted because you do not support image input";
 // Changing this value would change model-visible IDs and invalidate prompt caches.
 const SYNTHETIC_OUTPUT_ID_NAMESPACE: Uuid = Uuid::from_u128(0x90d38d3e_6a5b_4d52_bfe2_2f1e634bfac4);
+
+/// Repairs invalid call/output shapes that the set-based checks below cannot
+/// catch: duplicate calls or outputs sharing one call id, and outputs recorded
+/// ahead of their call. The Responses API binds outputs to calls one-to-one and
+/// scans the input sequentially, so any of these shapes fails the whole request
+/// with "No tool call found for function call output with call_id ...".
+pub(crate) fn repair_call_output_pairs(items: &mut Vec<ResponseItem>) {
+    dedup_duplicate_calls(items);
+    dedup_duplicate_outputs(items);
+    move_outputs_after_calls(items);
+}
+
+/// Returns the pairing call id when the item is a tool call.
+fn call_id_of_call(item: &ResponseItem) -> Option<&str> {
+    match item {
+        ResponseItem::FunctionCall { call_id, .. }
+        | ResponseItem::CustomToolCall { call_id, .. }
+        | ResponseItem::LocalShellCall {
+            call_id: Some(call_id),
+            ..
+        }
+        | ResponseItem::ToolSearchCall {
+            call_id: Some(call_id),
+            ..
+        } => Some(call_id),
+        _ => None,
+    }
+}
+
+/// Returns the pairing call id when the item is a client-executed tool output.
+fn call_id_of_output(item: &ResponseItem) -> Option<&str> {
+    match item {
+        // Server-executed tool search outputs are not paired client-side.
+        ResponseItem::ToolSearchOutput { execution, .. } if execution == "server" => None,
+        ResponseItem::FunctionCallOutput { call_id, .. }
+        | ResponseItem::CustomToolCallOutput { call_id, .. }
+        | ResponseItem::ToolSearchOutput {
+            call_id: Some(call_id),
+            ..
+        } => Some(call_id),
+        _ => None,
+    }
+}
+
+fn dedup_duplicate_calls(items: &mut Vec<ResponseItem>) {
+    let mut seen: HashSet<String> = HashSet::new();
+    items.retain(|item| match call_id_of_call(item) {
+        Some(call_id) => {
+            let first = seen.insert(call_id.to_string());
+            if !first {
+                warn!("dropping duplicate tool call for call id: {call_id}");
+            }
+            first
+        }
+        None => true,
+    });
+}
+
+fn dedup_duplicate_outputs(items: &mut Vec<ResponseItem>) {
+    let mut remaining: HashMap<String, usize> = HashMap::new();
+    for item in items.iter() {
+        if let Some(call_id) = call_id_of_output(item) {
+            *remaining.entry(call_id.to_string()).or_insert(0) += 1;
+        }
+    }
+    // Keep the last occurrence per call id: later outputs carry the most
+    // recent information for that call (e.g. a re-recorded final result).
+    items.retain(|item| {
+        let Some(call_id) = call_id_of_output(item) else {
+            return true;
+        };
+        let Some(count) = remaining.get_mut(call_id) else {
+            return true;
+        };
+        *count -= 1;
+        let keep = *count == 0;
+        if !keep {
+            warn!("dropping duplicate tool output for call id: {call_id}");
+        }
+        keep
+    });
+}
+
+fn move_outputs_after_calls(items: &mut Vec<ResponseItem>) {
+    let call_positions: HashMap<String, usize> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, item)| call_id_of_call(item).map(|id| (id.to_string(), idx)))
+        .collect();
+    let misordered = items.iter().enumerate().any(|(idx, item)| {
+        call_id_of_output(item)
+            .and_then(|call_id| call_positions.get(call_id))
+            .is_some_and(|&call_idx| call_idx > idx)
+    });
+    if !misordered {
+        return;
+    }
+
+    let old_items = std::mem::take(items);
+    let mut deferred: HashMap<String, Vec<ResponseItem>> = HashMap::new();
+    let mut reordered: Vec<ResponseItem> = Vec::with_capacity(old_items.len());
+    for (idx, item) in old_items.into_iter().enumerate() {
+        if let Some(call_id) = call_id_of_output(&item)
+            && call_positions
+                .get(call_id)
+                .is_some_and(|&call_idx| call_idx > idx)
+        {
+            warn!("moving tool output after its call for call id: {call_id}");
+            deferred.entry(call_id.to_string()).or_default().push(item);
+            continue;
+        }
+        let call_id = call_id_of_call(&item).map(str::to_string);
+        reordered.push(item);
+        if let Some(call_id) = call_id
+            && let Some(outputs) = deferred.remove(&call_id)
+        {
+            reordered.extend(outputs);
+        }
+    }
+    *items = reordered;
+}
 
 pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
     let mut function_output_ids = HashSet::new();

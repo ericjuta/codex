@@ -353,10 +353,15 @@ impl ContextManager {
     }
 
     /// This function enforces a couple of invariants on the in-memory history:
-    /// 1. every call (function/custom) has a corresponding output entry
+    /// 1. every call has exactly one output entry, ordered after the call
     /// 2. every output has a corresponding call entry
     /// 3. when images are unsupported, image content is stripped from messages and tool outputs
     fn normalize_history(&mut self, input_modalities: &[InputModality]) {
+        // duplicate calls/outputs sharing a call id and outputs recorded ahead
+        // of their call must be repaired before the set-based checks below,
+        // which cannot see them
+        normalize::repair_call_output_pairs(&mut self.items);
+
         // all function/tool calls must have a corresponding output
         normalize::ensure_call_outputs_present(&mut self.items);
 

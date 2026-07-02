@@ -1,6 +1,10 @@
 use anyhow::Result;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
@@ -456,6 +460,155 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
         .filter(|text| text.contains("<model_switch>"))
         .count();
     assert_eq!(model_switch_count, 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_repairs_duplicate_tool_outputs_from_rollout() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let initial = builder.build(&server).await?;
+    let codex = Arc::clone(&initial.codex);
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-initial"),
+            ev_assistant_message("msg-1", "Completed first turn"),
+            ev_completed("resp-initial"),
+        ]),
+    )
+    .await;
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "Record a turn".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    // Wait until the turn has been flushed to the rollout file before
+    // appending to it.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let contents = std::fs::read_to_string(&rollout_path).unwrap_or_default();
+        if contents.contains("Completed first turn") {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("timed out waiting for the first turn to flush to the rollout");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    drop(codex);
+    drop(initial);
+
+    // Simulate a rollout persisted by an older build that recorded a tool call
+    // with two outputs bound to the same call_id. Unrepaired, such history
+    // fails every model request with "No tool call found for function call
+    // output with call_id ...".
+    let poisoned_items = [
+        RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+            id: None,
+            name: "shell".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-poison".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        }),
+        RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "call-poison".to_string(),
+            output: FunctionCallOutputPayload::from_text("first".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        }),
+        RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "call-poison".to_string(),
+            output: FunctionCallOutputPayload::from_text("second".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        }),
+    ];
+    let mut appended = String::new();
+    for item in poisoned_items {
+        let line = RolloutLine {
+            timestamp: "2026-01-01T00:00:00.000Z".to_string(),
+            item,
+        };
+        appended.push_str(&serde_json::to_string(&line)?);
+        appended.push('\n');
+    }
+    let mut contents = std::fs::read_to_string(&rollout_path)?;
+    contents.push_str(&appended);
+    std::fs::write(&rollout_path, contents)?;
+
+    let resumed_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-resume"),
+            ev_assistant_message("msg-2", "Resumed turn"),
+            ev_completed("resp-resume"),
+        ]),
+    )
+    .await;
+    let resumed = builder.resume(&server, home, rollout_path).await?;
+    resumed
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "Turn after resume".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let request = resumed_mock.single_request();
+    let poison_outputs = request
+        .inputs_of_type("function_call_output")
+        .into_iter()
+        .filter(|item| {
+            item.get("call_id").and_then(serde_json::Value::as_str) == Some("call-poison")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        poison_outputs.len(),
+        1,
+        "expected the duplicate output to be repaired on resume: {:?}",
+        request.input()
+    );
+    assert_eq!(
+        poison_outputs[0]
+            .get("output")
+            .and_then(|output| match output {
+                serde_json::Value::String(text) => Some(text.as_str()),
+                _ => None,
+            }),
+        Some("second"),
+        "expected the last recorded output to win"
+    );
 
     Ok(())
 }

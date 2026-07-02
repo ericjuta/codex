@@ -7,16 +7,16 @@ use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSessionDelegate;
 use codex_code_mode::NotificationFuture;
 use codex_code_mode::ToolInvocationFuture;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::function_call_output_content_items_to_text;
 use serde_json::Value as JsonValue;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use super::ExecContext;
-use super::PUBLIC_TOOL_NAME;
 use super::call_nested_tool;
 use super::truncate_code_mode_result;
 use crate::session::step_context::StepContext;
@@ -306,17 +306,27 @@ impl CoreTurnHost {
         if text.trim().is_empty() {
             return Ok(());
         }
-        let output = FunctionCallOutputPayload::from_content_items(truncate_code_mode_result(
+        // Deliver the notification as a developer message rather than a tool
+        // output: the exec call already receives its own output through the
+        // tool runtime, and the Responses API rejects a second output bound to
+        // the same call_id.
+        let truncated = truncate_code_mode_result(
             vec![FunctionCallOutputContentItem::InputText { text }],
             max_output_tokens,
-        ));
+        );
+        let Some(text) = function_call_output_content_items_to_text(&truncated) else {
+            return Ok(());
+        };
+        let message = format!(
+            "<code_mode_notification cell_id=\"{cell_id}\" call_id=\"{call_id}\">\n{text}\n</code_mode_notification>"
+        );
         self.exec
             .session
-            .inject_if_running(vec![ResponseItem::CustomToolCallOutput {
+            .inject_if_running(vec![ResponseItem::Message {
                 id: None,
-                call_id,
-                name: Some(PUBLIC_TOOL_NAME.to_string()),
-                output,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText { text: message }],
+                phase: None,
                 internal_chat_message_metadata_passthrough: None,
             }])
             .await

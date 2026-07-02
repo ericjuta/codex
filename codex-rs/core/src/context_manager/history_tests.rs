@@ -1596,6 +1596,151 @@ fn normalize_mixed_inserts_and_removals() {
     );
 }
 
+fn repair_function_call(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: "do_it".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: call_id.to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+fn repair_function_call_output(call_id: &str, text: &str) -> ResponseItem {
+    ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload::from_text(text.to_string()),
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+fn repair_custom_tool_call(call_id: &str) -> ResponseItem {
+    ResponseItem::CustomToolCall {
+        id: None,
+        status: None,
+        call_id: call_id.to_string(),
+        name: "exec".to_string(),
+        namespace: None,
+        input: "{}".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+fn repair_custom_tool_call_output(call_id: &str, text: &str) -> ResponseItem {
+    ResponseItem::CustomToolCallOutput {
+        id: None,
+        call_id: call_id.to_string(),
+        name: None,
+        output: FunctionCallOutputPayload::from_text(text.to_string()),
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+#[test]
+fn normalize_dedups_duplicate_function_outputs_keeping_last() {
+    let items = vec![
+        repair_function_call("call-dup"),
+        repair_function_call_output("call-dup", "first"),
+        repair_function_call_output("call-dup", "second"),
+    ];
+    let mut h = create_history_with_items(items);
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(
+        h.raw_items(),
+        vec![
+            repair_function_call("call-dup"),
+            repair_function_call_output("call-dup", "second"),
+        ]
+    );
+}
+
+#[test]
+fn normalize_dedups_duplicate_custom_tool_outputs_keeping_last() {
+    // Shape produced by historical code-mode `notify()` poisoning: the exec
+    // call's own output plus an injected notification output for the same id.
+    let items = vec![
+        repair_custom_tool_call("call-exec"),
+        repair_custom_tool_call_output("call-exec", "Script running with cell ID cell-1"),
+        repair_custom_tool_call_output("call-exec", "notify text"),
+    ];
+    let mut h = create_history_with_items(items);
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(
+        h.raw_items(),
+        vec![
+            repair_custom_tool_call("call-exec"),
+            repair_custom_tool_call_output("call-exec", "notify text"),
+        ]
+    );
+}
+
+#[test]
+fn normalize_dedups_duplicate_calls_keeping_first() {
+    let items = vec![
+        repair_function_call("call-dup"),
+        repair_function_call("call-dup"),
+        repair_function_call_output("call-dup", "out"),
+    ];
+    let mut h = create_history_with_items(items);
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(
+        h.raw_items(),
+        vec![
+            repair_function_call("call-dup"),
+            repair_function_call_output("call-dup", "out"),
+        ]
+    );
+}
+
+#[test]
+fn normalize_moves_output_recorded_before_its_call() {
+    let items = vec![
+        repair_function_call_output("call-early", "out"),
+        repair_function_call("call-early"),
+    ];
+    let mut h = create_history_with_items(items);
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(
+        h.raw_items(),
+        vec![
+            repair_function_call("call-early"),
+            repair_function_call_output("call-early", "out"),
+        ]
+    );
+}
+
+#[test]
+fn repair_call_output_pairs_preserves_well_formed_interleaving() {
+    let mut items = vec![
+        repair_function_call_output("call-b", "b-out"),
+        repair_function_call("call-a"),
+        repair_function_call_output("call-a", "a-out"),
+        repair_function_call("call-b"),
+    ];
+
+    normalize::repair_call_output_pairs(&mut items);
+
+    assert_eq!(
+        items,
+        vec![
+            repair_function_call("call-a"),
+            repair_function_call_output("call-a", "a-out"),
+            repair_function_call("call-b"),
+            repair_function_call_output("call-b", "b-out"),
+        ]
+    );
+}
+
 #[test]
 fn normalize_adds_missing_output_for_function_call_inserts_output() {
     let items = vec![ResponseItem::FunctionCall {

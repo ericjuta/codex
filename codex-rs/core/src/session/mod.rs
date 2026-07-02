@@ -1442,6 +1442,10 @@ impl Session {
         // will be processed again if the rollout is reconstructed in a future session.
         // This meets image resizing requirements without modifying persisted rollouts.
         prepare_response_items(&mut history);
+        // Rollouts persisted by older builds can carry duplicate or misordered
+        // tool call/output pairs, which fail every subsequent model request.
+        // Repair them here so resume, fork, and rollback install valid history.
+        crate::context_manager::normalize::repair_call_output_pairs(&mut history);
         {
             let mut state = self.state.lock().await;
             state.replace_history(history, reference_context_item);

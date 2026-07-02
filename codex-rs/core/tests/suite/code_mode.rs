@@ -2702,7 +2702,7 @@ text("timer done");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_notify_injects_additional_exec_tool_output_into_active_context() -> Result<()> {
+async fn code_mode_notify_injects_developer_message_into_active_context() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -2718,25 +2718,40 @@ text("done");
     .await?;
 
     let req = second_mock.single_request();
-    let has_notify_output = req
+    let has_notify_message = req.inputs_of_type("message").iter().any(|item| {
+        item.get("role").and_then(serde_json::Value::as_str) == Some("developer")
+            && item
+                .get("content")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|content| {
+                    content.iter().any(|part| {
+                        part.get("text")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|text| {
+                                text.contains("code_mode_notify_marker")
+                                    && text.contains("<code_mode_notification")
+                                    && text.contains("call_id=\"call-1\"")
+                            })
+                    })
+                })
+    });
+    assert!(
+        has_notify_message,
+        "expected notify marker in developer message item: {:?}",
+        req.input()
+    );
+
+    // The exec call must keep exactly one output: a second output bound to the
+    // same call_id is rejected by the Responses API.
+    let exec_output_count = req
         .inputs_of_type("custom_tool_call_output")
         .iter()
-        .any(|item| {
-            item.get("call_id").and_then(serde_json::Value::as_str) == Some("call-1")
-                && match item.get("output") {
-                    Some(Value::String(text)) => text.contains("code_mode_notify_marker"),
-                    Some(Value::Array(items)) => items.iter().any(|item| {
-                        item.get("text")
-                            .and_then(serde_json::Value::as_str)
-                            .is_some_and(|text| text.contains("code_mode_notify_marker"))
-                    }),
-                    _ => false,
-                }
-                && item.get("name").and_then(serde_json::Value::as_str) == Some("exec")
-        });
-    assert!(
-        has_notify_output,
-        "expected notify marker in custom_tool_call_output item: {:?}",
+        .filter(|item| item.get("call_id").and_then(serde_json::Value::as_str) == Some("call-1"))
+        .count();
+    assert_eq!(
+        exec_output_count,
+        1,
+        "expected exactly one custom_tool_call_output for call-1: {:?}",
         req.input()
     );
 
