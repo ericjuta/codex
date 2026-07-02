@@ -676,6 +676,106 @@ async fn environment_count_controls_environment_backed_tools() {
 }
 
 #[tokio::test]
+async fn hashline_tools_follow_enablement_config() {
+    let legacy = probe(|turn| {
+        turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+    })
+    .await;
+    legacy.assert_visible_contains(&["apply_patch"]);
+    assert_eq!(
+        legacy.namespace_function_names("hashline"),
+        Vec::<String>::new().as_slice()
+    );
+
+    let additive = probe(|turn| {
+        turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+        update_config(turn, |config| {
+            config.hashline.enabled = true;
+        });
+    })
+    .await;
+    additive.assert_visible_contains(&["apply_patch"]);
+    assert_eq!(
+        additive.namespace_function_names("hashline"),
+        &[
+            "find_block".to_string(),
+            "patch".to_string(),
+            "read".to_string()
+        ]
+    );
+
+    let hashline_only = probe(|turn| {
+        turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+        update_config(turn, |config| {
+            config.hashline.enabled = true;
+            config.hashline.only = true;
+        });
+    })
+    .await;
+    hashline_only.assert_visible_lacks(&["apply_patch"]);
+    hashline_only.assert_registered_contains(&["apply_patch"]);
+    assert_eq!(hashline_only.exposure("apply_patch"), ToolExposure::Hidden);
+    assert_eq!(
+        hashline_only.namespace_function_names("hashline"),
+        &[
+            "find_block".to_string(),
+            "patch".to_string(),
+            "read".to_string()
+        ]
+    );
+}
+
+#[tokio::test]
+async fn hashline_file_tools_require_an_environment() {
+    let plan = probe(|turn| {
+        turn.environments.turn_environments.clear();
+        turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+        update_config(turn, |config| {
+            config.hashline.enabled = true;
+            config.hashline.only = true;
+        });
+    })
+    .await;
+
+    plan.assert_visible_lacks(&["apply_patch"]);
+    plan.assert_registered_lacks(&["apply_patch"]);
+    assert_eq!(
+        plan.namespace_function_names("hashline"),
+        Vec::<String>::new().as_slice()
+    );
+}
+
+#[tokio::test]
+async fn hashline_only_code_mode_prompt_advertises_hashline_not_apply_patch() {
+    let plan = probe(|turn| {
+        set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
+        turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+        update_config(turn, |config| {
+            config.hashline.enabled = true;
+            config.hashline.only = true;
+        });
+    })
+    .await;
+
+    plan.assert_visible_contains(&[
+        codex_code_mode::PUBLIC_TOOL_NAME,
+        codex_code_mode::WAIT_TOOL_NAME,
+    ]);
+    plan.assert_visible_lacks(&["apply_patch"]);
+    plan.assert_registered_contains(&["apply_patch"]);
+    assert_eq!(
+        plan.namespace_function_names("hashline"),
+        Vec::<String>::new().as_slice()
+    );
+
+    let ToolSpec::Freeform(exec) = plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME) else {
+        panic!("expected code mode exec tool");
+    };
+    assert!(exec.description.contains("hashline__patch"));
+    assert!(!exec.description.contains("apply_patch"));
+}
+
+#[tokio::test]
 async fn environment_tools_follow_the_step_context() {
     let (_session, mut turn) = make_session_and_context().await;
     set_feature(&mut turn, Feature::UnifiedExec, /*enabled*/ true);

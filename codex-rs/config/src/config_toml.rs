@@ -218,6 +218,12 @@ pub struct ConfigToml {
     #[serde(default)]
     pub notify: Option<Vec<String>>,
 
+    /// Enable native Hashline file tools alongside existing edit tools.
+    pub hashline: Option<bool>,
+
+    /// Hide direct apply_patch from model-visible tools when Hashline is enabled.
+    pub hashline_only: Option<bool>,
+
     /// System instructions.
     pub instructions: Option<String>,
 

@@ -197,6 +197,12 @@ impl Default for GhostSnapshotConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HashlineConfig {
+    pub enabled: bool,
+    pub only: bool,
+}
+
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
@@ -729,6 +735,9 @@ pub struct Config {
     ///
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
+
+    /// Native Hashline file-edit tool configuration.
+    pub hashline: HashlineConfig,
 
     /// TUI notification settings, including enabled events, delivery method, and focus condition.
     pub tui_notifications: TuiNotificationSettings,
@@ -2458,6 +2467,18 @@ fn resolve_orchestrator_feature_enabled(
     feature.and_then(|feature| feature.enabled).unwrap_or(true)
 }
 
+fn resolve_hashline_config(config_toml: &ConfigToml) -> std::io::Result<HashlineConfig> {
+    let enabled = config_toml.hashline.unwrap_or(false);
+    let only = config_toml.hashline_only.unwrap_or(false);
+    if only && !enabled {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "hashline_only requires hashline = true",
+        ));
+    }
+    Ok(HashlineConfig { enabled, only })
+}
+
 fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
     let base = code_mode_toml_config(config_toml.features.as_ref());
 
@@ -3380,6 +3401,7 @@ impl Config {
         let web_search_config = resolve_web_search_config(&cfg);
         let experimental_request_user_input_enabled =
             resolve_experimental_request_user_input_enabled(&cfg);
+        let hashline = resolve_hashline_config(&cfg)?;
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
         let token_budget = resolve_token_budget_config(&cfg, &features)?;
@@ -3785,6 +3807,7 @@ impl Config {
             approvals_reviewer: constrained_approvals_reviewer.value(),
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
+            hashline,
             base_instructions,
             personality,
             developer_instructions,

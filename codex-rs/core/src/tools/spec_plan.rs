@@ -13,6 +13,8 @@ use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ExecCommandHandlerOptions;
 use crate::tools::handlers::GetContextRemainingHandler;
+use crate::tools::handlers::HashlineHandler;
+use crate::tools::handlers::HashlineToolKind;
 use crate::tools::handlers::ListAvailablePluginsToInstallHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
@@ -769,11 +771,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
         ));
     }
 
-    if environment_mode.has_environment() && turn_context.model_info.apply_patch_tool_type.is_some()
-    {
-        let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
-        planned_tools.add(ApplyPatchHandler::new(include_environment_id));
-    }
+    add_file_edit_tools(turn_context, environment_mode, planned_tools);
 
     if turn_context
         .model_info
@@ -792,6 +790,41 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
             ),
             include_environment_id,
         }));
+    }
+}
+
+fn add_file_edit_tools(
+    turn_context: &TurnContext,
+    environment_mode: ToolEnvironmentMode,
+    planned_tools: &mut PlannedTools,
+) {
+    if !environment_mode.has_environment() {
+        return;
+    }
+
+    let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
+    if turn_context.config.hashline.enabled {
+        planned_tools.add(HashlineHandler::new(
+            HashlineToolKind::Read,
+            include_environment_id,
+        ));
+        planned_tools.add(HashlineHandler::new(
+            HashlineToolKind::Patch,
+            include_environment_id,
+        ));
+        planned_tools.add(HashlineHandler::new(
+            HashlineToolKind::FindBlock,
+            include_environment_id,
+        ));
+    }
+
+    if turn_context.model_info.apply_patch_tool_type.is_some() {
+        let handler = ApplyPatchHandler::new(include_environment_id);
+        if turn_context.config.hashline.only {
+            planned_tools.add_dispatch_only(handler);
+        } else {
+            planned_tools.add(handler);
+        }
     }
 }
 

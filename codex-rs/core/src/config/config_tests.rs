@@ -9391,6 +9391,88 @@ mcp_oauth_callback_port = 5678
 }
 
 #[tokio::test]
+async fn hashline_config_defaults_to_disabled() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.hashline, HashlineConfig::default());
+    Ok(())
+}
+
+#[tokio::test]
+async fn hashline_config_resolves_additive_mode() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg: ConfigToml = toml::from_str("hashline = true")
+        .expect("TOML deserialization should succeed for hashline");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.hashline,
+        HashlineConfig {
+            enabled: true,
+            only: false
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn hashline_config_resolves_hashline_only_mode() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+hashline = true
+hashline_only = true
+"#,
+    )
+    .expect("TOML deserialization should succeed for hashline-only");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.hashline,
+        HashlineConfig {
+            enabled: true,
+            only: true
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn hashline_only_requires_hashline() {
+    let codex_home = TempDir::new().expect("create temp dir");
+    let cfg: ConfigToml = toml::from_str("hashline_only = true")
+        .expect("TOML deserialization should succeed for hashline_only");
+
+    let error = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("hashline_only without hashline should fail");
+
+    assert_eq!(error.to_string(), "hashline_only requires hashline = true");
+}
+
+#[tokio::test]
 async fn config_loads_allow_login_shell_from_toml() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg: ConfigToml = toml::from_str(

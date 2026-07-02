@@ -13,3 +13,14 @@ Admins can set top-level `allow_managed_hooks_only = true` in
 still allowing managed hooks from requirements and managed config layers. This
 setting is only supported in `requirements.toml`; putting it in `config.toml`
 does not enable managed-hooks-only mode.
+
+## Hashline edit tools
+
+Set top-level `hashline = true` in `config.toml` to expose the native
+`hashline.read`, `hashline.patch`, and `hashline.find_block` tools alongside
+the existing edit tools.
+
+Set `hashline_only = true` together with `hashline = true` to make Hashline
+the model-visible edit surface while keeping `apply_patch` available for
+compatibility dispatch. `hashline_only = true` without `hashline = true` is
+rejected.

@@ -18,8 +18,8 @@ Live proof used for this spec:
 | MCP path | `codex-rs/codex-mcp/src/connection_manager.rs` and `core/src/tools/handlers/mcp.rs` | Hashline can be tried as MCP, but MCP is not the best default integration boundary. |
 
 Related spec: [Hashline Enablement Flags Spec](hashline_enablement_flags_spec.md)
-defines the proposed `hashline = true` and `hashline_only = true` config
-surface that gates this integration.
+defines the `hashline = true` and `hashline_only = true` config surface that
+gates this integration.
 
 ## Recommendation
 
@@ -76,7 +76,7 @@ Codex already has the pieces needed for a native integration:
 
 | Priority | Option | Current state | Proposed change | Rationale |
 | --- | --- | --- | --- | --- |
-| P0 | Native additive namespace | No native Hashline tools exist | Add `hashline.read`, `hashline.patch`, and `hashline.find_block` behind a gate | Best fit for Codex approvals, sandboxing, remote filesystems, code-mode, tests, and telemetry. |
+| P0 | Native additive namespace | Native Hashline tools are available behind `hashline = true` | Continue hardening parser parity, refreshed patch output, and integration coverage | Best fit for Codex approvals, sandboxing, remote filesystems, code-mode, tests, and telemetry. |
 | P1 | External MCP experiment | Hashline has a stdio MCP server | Allow users to configure `/tmp/hashline` or installed `hashline mcp` manually | Fastest smoke path, but weak for default UX because process lifecycle, filesystem permissions, and remote environments sit outside Codex's native edit path. |
 | P2 | Full `apply_patch` replacement | `apply_patch` is deeply integrated and compatibility-sensitive | Defer until Hashline has native parity and integration tests | Avoid breaking models, hooks, existing patch approvals, shell interception, and standalone `apply_patch` command behavior. |
 
