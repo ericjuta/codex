@@ -59,6 +59,7 @@ use crate::tasks::emit_compact_metric;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
+use crate::tools::registry::AnyToolResponse;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolRouterParams;
 use crate::tools::router::ToolSuggestCandidates;
@@ -93,7 +94,6 @@ use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentReasoningSectionBreakEvent;
@@ -1879,7 +1879,7 @@ async fn handle_assistant_item_done_in_plan_mode(
 
 #[instrument(level = "trace", skip_all)]
 async fn drain_in_flight(
-    in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
+    in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<AnyToolResponse>>>,
     wait_for_cancelled_drain: &mut VecDeque<bool>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -1905,10 +1905,15 @@ async fn drain_in_flight(
         };
         wait_for_cancelled_drain.pop_front();
         match res {
-            Ok(response_input) => {
-                let response_item = response_input.into();
+            Ok(tool_response) => {
+                let response_item = tool_response.response_input.into();
                 sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
                     .await;
+                if let Some(cell_id) = tool_response.disclosed_code_mode_cell_id {
+                    sess.services
+                        .code_mode_service
+                        .mark_cell_model_visible(&codex_code_mode::CellId::new(cell_id));
+                }
                 mark_thread_memory_mode_polluted_if_external_context(
                     sess.as_ref(),
                     turn_context.as_ref(),
@@ -1971,7 +1976,7 @@ async fn try_run_sampling_request(
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
         .await??;
-    let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
+    let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<AnyToolResponse>>> =
         FuturesOrdered::new();
     let mut wait_for_cancelled_drain: VecDeque<bool> = VecDeque::new();
     let mut needs_follow_up = false;

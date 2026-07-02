@@ -162,6 +162,28 @@ pub(crate) struct AnyToolResult {
     pub(crate) payload: ToolPayload,
     pub(crate) result: Box<dyn ToolOutput>,
     pub(crate) post_tool_use_payload: Option<PostToolUsePayload>,
+    pub(crate) disclosed_code_mode_cell_id: Option<String>,
+}
+
+pub(crate) struct AnyToolResponse {
+    pub(crate) response_input: ResponseInputItem,
+    pub(crate) disclosed_code_mode_cell_id: Option<String>,
+}
+
+impl AnyToolResponse {
+    pub(crate) fn new(
+        response_input: ResponseInputItem,
+        disclosed_code_mode_cell_id: Option<String>,
+    ) -> Self {
+        Self {
+            response_input,
+            disclosed_code_mode_cell_id,
+        }
+    }
+
+    pub(crate) fn from_response_input(response_input: ResponseInputItem) -> Self {
+        Self::new(response_input, None)
+    }
 }
 
 impl AnyToolResult {
@@ -173,6 +195,11 @@ impl AnyToolResult {
             ..
         } = self;
         result.to_response_item(&call_id, &payload)
+    }
+
+    pub(crate) fn into_response_with_metadata(self) -> AnyToolResponse {
+        let disclosed_code_mode_cell_id = self.disclosed_code_mode_cell_id.clone();
+        AnyToolResponse::new(self.into_response(), disclosed_code_mode_cell_id)
     }
 
     pub(crate) fn code_mode_result(self) -> serde_json::Value {
@@ -690,6 +717,7 @@ async fn handle_any_tool(
     let call_id = invocation.call_id.clone();
     let payload = invocation.payload.clone();
     let output = tool.handle(invocation.clone()).await?;
+    let disclosed_code_mode_cell_id = output.disclosed_code_mode_cell_id();
     if output.contains_external_context()
         && invocation.turn.config.memories.disable_on_external_context
     {
@@ -707,6 +735,7 @@ async fn handle_any_tool(
         payload,
         result: output,
         post_tool_use_payload,
+        disclosed_code_mode_cell_id,
     })
 }
 
