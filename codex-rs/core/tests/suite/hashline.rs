@@ -475,8 +475,10 @@ async fn hashline_remove_file_deletes_through_apply_patch() -> anyhow::Result<()
     let remove_output = request
         .function_call_output_text(call_id)
         .expect("remove output should be sent to model");
-    assert!(remove_output.contains("Success. Updated the following files:"));
-    assert!(remove_output.contains(file_name));
+    assert!(remove_output.contains("\"success\": true"));
+    assert!(remove_output.contains("\"operation\": \"remove_file\""));
+    assert!(remove_output.contains(&format!("\"path\": \"{file_name}\"")));
+    assert!(remove_output.contains("\"old_hash\""));
     Ok(())
 }
 
@@ -537,8 +539,11 @@ async fn hashline_rename_file_moves_through_apply_patch() -> anyhow::Result<()> 
     let rename_output = request
         .function_call_output_text(call_id)
         .expect("rename output should be sent to model");
-    assert!(rename_output.contains("Success. Updated the following files:"));
-    assert!(rename_output.contains(new_name));
+    assert!(rename_output.contains("\"success\": true"));
+    assert!(rename_output.contains("\"operation\": \"rename_file\""));
+    assert!(rename_output.contains(&format!("\"path\": \"{old_name}\"")));
+    assert!(rename_output.contains(&format!("\"new_path\": \"{new_name}\"")));
+    assert!(rename_output.contains(&format!("\"header\": \"[{new_name}#")));
     Ok(())
 }
 

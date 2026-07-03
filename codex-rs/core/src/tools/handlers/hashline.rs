@@ -699,6 +699,8 @@ async fn handle_remove_file(
 
     let apply_patch_text =
         apply_patch_for_hashline_remove(&args.path, args.environment_id.as_deref());
+    let post_remove_turn = std::sync::Arc::clone(turn);
+    let post_remove_step_context = std::sync::Arc::clone(step_context);
     let apply_patch_invocation = ToolInvocation {
         tool_name: ToolName::plain("apply_patch"),
         payload: ToolPayload::Custom {
@@ -708,7 +710,27 @@ async fn handle_remove_file(
     };
     ApplyPatchHandler::new(multi_environment)
         .handle(apply_patch_invocation)
-        .await
+        .await?;
+
+    ensure_selected_file_missing(
+        post_remove_turn.as_ref(),
+        post_remove_step_context.as_ref(),
+        &args.path,
+        args.environment_id.as_deref(),
+    )
+    .await?;
+    let body = json!({
+        "success": true,
+        "path": args.path,
+        "operation": "remove_file",
+        "old_hash": old_hash,
+    });
+    Ok(boxed_tool_output(FunctionToolOutput::from_text(
+        serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+            format!("failed to serialize hashline.remove_file output: {err}")
+        }),
+        Some(true),
+    )))
 }
 
 async fn handle_rename_file(
@@ -767,6 +789,8 @@ async fn handle_rename_file(
         &contents,
         args.environment_id.as_deref(),
     )?;
+    let post_rename_turn = std::sync::Arc::clone(turn);
+    let post_rename_step_context = std::sync::Arc::clone(step_context);
     let apply_patch_invocation = ToolInvocation {
         tool_name: ToolName::plain("apply_patch"),
         payload: ToolPayload::Custom {
@@ -776,7 +800,45 @@ async fn handle_rename_file(
     };
     ApplyPatchHandler::new(multi_environment)
         .handle(apply_patch_invocation)
-        .await
+        .await?;
+
+    ensure_selected_file_missing(
+        post_rename_turn.as_ref(),
+        post_rename_step_context.as_ref(),
+        &args.path,
+        args.environment_id.as_deref(),
+    )
+    .await?;
+    let renamed_contents = read_selected_file(
+        post_rename_turn.as_ref(),
+        post_rename_step_context.as_ref(),
+        &args.new_path,
+        args.environment_id.as_deref(),
+    )
+    .await?;
+    let new_hash = hash_hex(&renamed_contents, 4);
+    if new_hash != old_hash {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "hashline.rename_file completed but destination hash for {} was {}, expected {old_hash}",
+            args.new_path, new_hash
+        )));
+    }
+    let header = format!("[{}#{}]", args.new_path, new_hash);
+    let body = json!({
+        "success": true,
+        "path": &args.path,
+        "new_path": &args.new_path,
+        "operation": "rename_file",
+        "old_hash": old_hash,
+        "new_hash": new_hash,
+        "header": header,
+    });
+    Ok(boxed_tool_output(FunctionToolOutput::from_text(
+        serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+            format!("failed to serialize hashline.rename_file output: {err}")
+        }),
+        Some(true),
+    )))
 }
 
 async fn ensure_selected_file_missing(

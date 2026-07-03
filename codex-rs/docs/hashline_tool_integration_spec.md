@@ -92,8 +92,8 @@ Expose a namespace named `hashline` with these first-stage tools:
 | `hashline.read` | Read a bounded file range with Hashline anchors | `[path#HASH]` plus `line:hash|content`, with explicit truncation metadata when capped. |
 | `hashline.patch` | Apply a single-file Hashline patch string | Success/failure status; dry runs include old/new hashes and a compact changed-line preview. |
 | `hashline.find_block` | Resolve a block around an anchored line | Block span, language guess, and a small anchored excerpt. |
-| `hashline.remove_file` | Delete one text file after optional file-hash validation | Existing `apply_patch` delete-file success/failure output. |
-| `hashline.rename_file` | Move one non-empty newline-terminated text file after optional file-hash validation | Existing `apply_patch` move success/failure output. |
+| `hashline.remove_file` | Delete one text file after optional file-hash validation | Hashline success/failure status with old file hash after `apply_patch` verifies and applies the delete. |
+| `hashline.rename_file` | Move one non-empty newline-terminated text file after optional file-hash validation | Hashline success/failure status with old/new paths and refreshed destination header after `apply_patch` verifies and applies the move. |
 
 Use structured function tools for stage 1. A freeform `hashline_patch` tool can
 be added later if model behavior proves better with grammar-constrained patch
