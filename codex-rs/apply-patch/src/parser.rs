@@ -9,7 +9,7 @@
 //! end_patch: "*** End Patch" LF?
 //!
 //! hunk: add_hunk | delete_hunk | update_hunk
-//! add_hunk: "*** Add File: " filename LF add_line+
+//! add_hunk: "*** Add File: " filename LF add_line*
 //! delete_hunk: "*** Delete File: " filename LF
 //! update_hunk: "*** Update File: " filename LF change_move? change?
 //! filename: /(.+)/

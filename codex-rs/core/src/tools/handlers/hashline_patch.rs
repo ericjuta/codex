@@ -1121,11 +1121,6 @@ fn append_hashline_update_hunk(
 ) -> Result<(), FunctionCallError> {
     if update.create {
         let new_lines = split_lines_preserve(update.new_contents);
-        if new_lines.is_empty() {
-            return Err(FunctionCallError::RespondToModel(
-                "hashline.patch create=true produced an empty file, which apply_patch Add File cannot represent".to_string(),
-            ));
-        }
         patch.push_str("*** Add File: ");
         patch.push_str(update.path);
         patch.push('\n');

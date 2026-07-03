@@ -1,3 +1,4 @@
+use super::apply_hashline_patch_or_create_empty;
 use super::build_hashline_patch_success_body;
 use super::build_hashline_read_body;
 use super::hashline_block::find_block_span;
@@ -595,6 +596,63 @@ fn generated_create_patch_uses_add_file() {
     assert_eq!(
         patch,
         "*** Begin Patch\n*** Environment ID: env-1\n*** Add File: created.txt\n+hello\n+there\n*** End Patch"
+    );
+}
+
+#[test]
+fn generated_empty_create_patch_uses_empty_add_file() {
+    let patch = apply_patch_for_hashline_update(
+        "empty.txt",
+        "",
+        "",
+        /*create*/ true,
+        /*environment_id*/ None,
+    )
+    .expect("empty create patch should be generated");
+
+    assert_eq!(
+        patch,
+        "*** Begin Patch\n*** Add File: empty.txt\n*** End Patch"
+    );
+}
+
+#[test]
+fn create_empty_patch_accepts_no_operations() {
+    let created = apply_hashline_patch_or_create_empty("empty.txt", "", "", /*create*/ true)
+        .expect("empty create patch should apply");
+    let update_error =
+        apply_hashline_patch_or_create_empty("empty.txt", "", "", /*create*/ false)
+            .expect_err("empty update patch should still reject missing operations");
+
+    assert_eq!(created, "");
+    assert_eq!(
+        update_error.to_string(),
+        "hashline.patch did not contain any operations"
+    );
+}
+
+#[test]
+fn success_output_reports_empty_create() {
+    let output = build_hashline_patch_success_body("empty.txt", "", "", /*create*/ true)
+        .expect("empty create success body should be generated");
+
+    let empty_hash = hash_hex("", 4);
+    assert_eq!(
+        output,
+        serde_json::json!({
+            "success": true,
+            "path": "empty.txt",
+            "header": format!("[empty.txt#{empty_hash}]"),
+            "operation": "create",
+            "old_hash": empty_hash,
+            "new_hash": empty_hash,
+            "start_line": null,
+            "end_line": null,
+            "total_lines": 0,
+            "truncated": false,
+            "content": "",
+            "preview": null,
+        })
     );
 }
 

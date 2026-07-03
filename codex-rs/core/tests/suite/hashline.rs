@@ -601,7 +601,7 @@ async fn hashline_patch_can_create_multi_file_sections() -> anyhow::Result<()> {
     let patch_args = json!({
         "path": first_name,
         "patch": format!(
-            "[{first_name}]\nINS.TAIL |created alpha\n[{second_name}]\nINS.TAIL:\n+created beta"
+            "[{first_name}]\n[{second_name}]\nINS.TAIL:\n+created beta"
         ),
         "create": true
     });
@@ -635,7 +635,8 @@ async fn hashline_patch_can_create_multi_file_sections() -> anyhow::Result<()> {
     })
     .await;
 
-    assert_eq!(fs::read_to_string(first_path)?, "created alpha\n");
+    assert!(first_path.exists());
+    assert_eq!(fs::metadata(&first_path)?.len(), 0);
     assert_eq!(fs::read_to_string(second_path)?, "created beta\n");
     let request = final_mock.single_request();
     let patch_output = request
@@ -645,8 +646,69 @@ async fn hashline_patch_can_create_multi_file_sections() -> anyhow::Result<()> {
     assert!(patch_output.contains("\"operation\": \"multi_file_create\""));
     assert!(patch_output.contains(&format!("\"header\": \"[{first_name}#")));
     assert!(patch_output.contains(&format!("\"header\": \"[{second_name}#")));
-    assert!(patch_output.contains("|created alpha"));
     assert!(patch_output.contains("|created beta"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_write_creates_empty_file_through_apply_patch() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let file_name = "hashline-write-empty.txt";
+    let file_path = test.cwd.path().join(file_name);
+
+    let call_id = "hashline-write-empty-call";
+    let write_args = json!({
+        "path": file_name,
+        "content": ""
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                "write",
+                &serde_json::to_string(&write_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline empty file written"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, "write an empty file with hashline").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert!(file_path.exists());
+    assert_eq!(fs::metadata(&file_path)?.len(), 0);
+    let request = final_mock.single_request();
+    let write_output = request
+        .function_call_output_text(call_id)
+        .expect("write output should be sent to model");
+    assert!(write_output.contains("\"success\": true"));
+    assert!(write_output.contains(&format!("\"header\": \"[{file_name}#")));
+    assert!(write_output.contains("\"operation\": \"create\""));
+    assert!(write_output.contains("\"total_lines\": 0"));
+    assert!(write_output.contains("\"content\": \"\""));
     Ok(())
 }
 

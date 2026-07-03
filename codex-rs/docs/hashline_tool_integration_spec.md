@@ -91,7 +91,7 @@ Expose a namespace named `hashline` with these first-stage tools:
 | Tool | Purpose | Model-visible output |
 | --- | --- | --- |
 | `hashline.read` | Read a bounded file range with Hashline anchors | `[path#HASH]` plus `line:hash|content`, with explicit truncation metadata when capped. |
-| `hashline.write` | Write normalized content to a new file or overwrite with `force=true` | Success/failure status plus a refreshed bounded `[path#HASH]` read view after writing. |
+| `hashline.write` | Write normalized content, including empty content, to a new file or overwrite with `force=true` | Success/failure status plus a refreshed bounded `[path#HASH]` read view after writing. |
 | `hashline.patch` | Apply a Hashline patch string to one file, to multiple existing files with `[path#HASH]` sections, or to multiple missing files with `create=true` and `[path]` sections | Success/failure status; dry runs include old/new hashes, file operations, and compact changed-line previews. |
 | `hashline.find_block` | Resolve a block around an anchored line | Block span, language guess, and a small anchored excerpt. |
 | `hashline.remove_file` | Delete one text file after optional file-hash validation | Hashline success/failure status with old file hash after `apply_patch` verifies and applies the delete. |
@@ -130,7 +130,7 @@ bodies.
 | `path` | string | yes | Default target path when `patch` has no file sections. |
 | `patch` | string | yes | Hashline ops such as `SWAP 12:ab:`, `SWAP 12:ab..14:cd:`, a `[path#HASH]` section plus ops, multiple `[path#HASH]` sections for existing-file multi-file edits, or `[path]` sections with `create=true` for missing-file creation. Payload rows use `++` for literal `+` and `+-` for literal `-`. Sectioned patches also accept reference-style `REM` and `MV <path>` file ops; `*** Abort` suppresses an embedded patch without writing. |
 | `dry_run` | boolean | no | Defaults to false. Validates without writing and returns old/new hashes plus a compact changed-line preview. |
-| `create` | boolean | no | Defaults to false. When true, every target must be missing and the patch is applied to empty file contents before routing through `apply_patch` add-file handling. Use `[path]` sections for multi-file creation. |
+| `create` | boolean | no | Defaults to false. When true, every target must be missing and the patch is applied to empty file contents before routing through `apply_patch` add-file handling. Empty patches create zero-byte files. Use `[path]` sections for multi-file creation. |
 | `environment_id` | string | only when multiple environments exist | Match `apply_patch` environment selection behavior. |
 
 `hashline.remove_file`:
@@ -304,7 +304,7 @@ after all of these are true:
 | --- | --- |
 | Sandbox parity | Hashline writes obey the same local and remote filesystem sandbox behavior as `apply_patch`. |
 | Approval parity | Granular approvals, Guardian reviews, hooks, and cached approvals work for Hashline patches. |
-| File operation parity | Add, delete, rename/move, overwrite, and multi-file operations are supported or intentionally delegated. Existing-file multi-file `hashline.patch` is supported, including sectioned `REM` and `MV`; multi-file creation is supported with `create=true` and `[path]` sections. |
+| File operation parity | Add, delete, rename/move, overwrite, zero-byte creation, and multi-file operations are supported or intentionally delegated. Existing-file multi-file `hashline.patch` is supported, including sectioned `REM` and `MV`; multi-file creation is supported with `create=true` and `[path]` sections. |
 | Output parity | TUI transcript, app-server events, telemetry, and model-facing outputs are stable and bounded. |
 | Compatibility | Existing `apply_patch` shell interception and standalone invocation behavior remain available. |
 | Tests | Integration tests cover stale hash failure, successful patch, dry run, multi-environment selection, remote exec-server read/write/patch filesystem routing, sandbox denial, and approval. |
@@ -378,9 +378,10 @@ If TUI-rendered text changes, add or update `insta` snapshots in `codex-tui`.
    benchmark history around line navigation, but the inspected CLI exposes
    `read` and `find_block`, not a complete search replacement. Keep search out
    of stage 1 unless a concrete model workflow needs it.
-5. Should Hashline support zero-byte file creation? `apply_patch` add-file
-   hunks cannot represent an empty file, so `hashline.write`/`hashline.patch`
-   still reject that shape unless Codex adds a separate approved write path.
+5. Should empty-file rename/move be supported? `hashline.write` and
+   `hashline.patch create=true` support zero-byte creation through approved
+   `apply_patch` add-file hunks, but `apply_patch` move hunks still require
+   at least one context line to preserve file contents.
 
 ## Non-Goals
 

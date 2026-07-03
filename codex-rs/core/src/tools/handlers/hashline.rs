@@ -39,6 +39,7 @@ use self::hashline_hash::normalize_file_text;
 use self::hashline_patch::HashlinePatchFileMutation;
 use self::hashline_patch::HashlinePatchFileOperation;
 use self::hashline_patch::HashlinePatchFileUpdate;
+use self::hashline_patch::HashlinePatchPreview;
 use self::hashline_patch::HashlinePatchSection;
 use self::hashline_patch::apply_hashline_patch;
 use self::hashline_patch::apply_patch_for_hashline_mutations;
@@ -281,7 +282,7 @@ fn write_tool_spec(multi_environment: bool) -> ResponsesApiTool {
     ResponsesApiTool {
         name: WRITE_TOOL.to_string(),
         description:
-            "Write normalized content to a new file, or overwrite an existing file with force=true."
+            "Write normalized content, including empty content, to a new file, or overwrite an existing file with force=true."
                 .to_string(),
         strict: false,
         defer_loading: None,
@@ -290,7 +291,7 @@ fn write_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "content".to_string(),
                     JsonSchema::string(Some(
-                        "Complete file content to write. Content is normalized to LF line endings and a leading UTF-8 BOM is stripped."
+                        "Complete file content to write. Content is normalized to LF line endings and a leading UTF-8 BOM is stripped. Empty content creates a zero-byte file when the target is missing."
                             .to_string(),
                     )),
                 ),
@@ -326,7 +327,7 @@ fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "patch".to_string(),
                     JsonSchema::string(Some(
-                        "Hashline operations. Use README-style bodies such as SWAP 12:\n+replacement, SWAP 12:ab..14:cd:\n+replacement, DEL 12..=14, DEL 12-14, INS.POST 12:\n+text, INS.HEAD:\n+text, SWAP.BLK 12:\n+replacement block, DEL.BLK 12, INS.BLK.POST 12:\n+block, INS.BLK.PRE 12:\n+block, INS.BLK 12:\n+block, compact forms such as SWAP 12:ab|replacement and INS.TAIL|text, [path#HASH] sections for existing-file multi-file edits, or [path] sections with create=true for missing files. In payload bodies, use ++ for literal + and +- for literal -. Sectioned patches also accept REM, MV <path>, and *** Abort to suppress an embedded patch."
+                        "Hashline operations. Use README-style bodies such as SWAP 12:\n+replacement, SWAP 12:ab..14:cd:\n+replacement, DEL 12..=14, DEL 12-14, INS.POST 12:\n+text, INS.HEAD:\n+text, SWAP.BLK 12:\n+replacement block, DEL.BLK 12, INS.BLK.POST 12:\n+block, INS.BLK.PRE 12:\n+block, INS.BLK 12:\n+block, compact forms such as SWAP 12:ab|replacement and INS.TAIL|text, [path#HASH] sections for existing-file multi-file edits, or [path] sections with create=true for missing files. Empty create sections create zero-byte files. In payload bodies, use ++ for literal + and +- for literal -. Sectioned patches also accept REM, MV <path>, and *** Abort to suppress an embedded patch."
                             .to_string(),
                     )),
                 ),
@@ -340,7 +341,7 @@ fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "create".to_string(),
                     JsonSchema::boolean(Some(
-                        "Create missing target files. When true, every target must not already exist; use [path] sections for multi-file creation."
+                        "Create missing target files. When true, every target must not already exist; empty patches create zero-byte files; use [path] sections for multi-file creation."
                             .to_string(),
                     )),
                 ),
@@ -589,12 +590,6 @@ async fn handle_write(
     if create && !write_contents.is_empty() && !write_contents.ends_with('\n') {
         write_contents.push('\n');
     }
-    if create && write_contents.is_empty() {
-        return Err(FunctionCallError::RespondToModel(
-            "hashline.write cannot create an empty file through apply_patch".to_string(),
-        ));
-    }
-
     let operation = if create { "create" } else { "update" };
     let new_hash = hash_hex(&write_contents, 4);
     if args.dry_run.unwrap_or(false) {
@@ -617,7 +612,7 @@ async fn handle_write(
         )));
     }
 
-    if old_contents != write_contents {
+    if create || old_contents != write_contents {
         let apply_patch_text = apply_patch_for_hashline_update(
             &args.path,
             &old_contents,
@@ -891,7 +886,8 @@ async fn handle_patch(
         .await;
     }
 
-    let mut patched = apply_hashline_patch(target_path, &contents, &section.patch)?;
+    let mut patched =
+        apply_hashline_patch_or_create_empty(target_path, &contents, &section.patch, create)?;
     if create && !patched.is_empty() && !patched.ends_with('\n') {
         patched.push('\n');
     }
@@ -905,7 +901,7 @@ async fn handle_patch(
     )?;
 
     if args.dry_run.unwrap_or(false) {
-        let preview = build_hashline_patch_preview(&contents, &patched)?;
+        let preview = build_hashline_patch_preview_or_none(&contents, &patched, create)?;
         let body = json!({
             "path": target_path,
             "dry_run": true,
@@ -1189,7 +1185,12 @@ async fn handle_multi_file_patch(
             continue;
         }
 
-        let mut new_contents = apply_hashline_patch(&section.path, &old_contents, &section.patch)?;
+        let mut new_contents = apply_hashline_patch_or_create_empty(
+            &section.path,
+            &old_contents,
+            &section.patch,
+            create,
+        )?;
         if create && !new_contents.is_empty() && !new_contents.ends_with('\n') {
             new_contents.push('\n');
         }
@@ -1228,7 +1229,8 @@ async fn handle_multi_file_patch(
                     new_hash,
                     create,
                 } => {
-                    let preview = build_hashline_patch_preview(old_contents, new_contents)?;
+                    let preview =
+                        build_hashline_patch_preview_or_none(old_contents, new_contents, *create)?;
                     Ok(json!({
                         "path": path,
                         "operation": if *create { "create" } else { "update" },
@@ -1414,19 +1416,20 @@ fn build_hashline_patch_success_body(
     written_contents: &str,
     create: bool,
 ) -> Result<serde_json::Value, FunctionCallError> {
-    let preview = build_hashline_patch_preview(old_contents, written_contents)?;
+    let preview = build_hashline_patch_preview_or_none(old_contents, written_contents, create)?;
     let total_lines = count_lines(written_contents);
     let (start_line, end_line, excerpt_truncated) = if total_lines == 0 {
         (None, None, false)
     } else {
         let start_line = preview
-            .new_start_line
-            .or(preview.old_start_line)
+            .as_ref()
+            .and_then(|preview| preview.new_start_line.or(preview.old_start_line))
             .unwrap_or(1)
             .min(total_lines)
             .max(1);
         let requested_end_line = preview
-            .new_end_line
+            .as_ref()
+            .and_then(|preview| preview.new_end_line)
             .unwrap_or(start_line)
             .clamp(start_line, total_lines);
         let capped_end_line = requested_end_line.min(
@@ -1458,10 +1461,35 @@ fn build_hashline_patch_success_body(
         "start_line": start_line,
         "end_line": end_line,
         "total_lines": total_lines,
-        "truncated": preview.truncated || excerpt_truncated,
+        "truncated": preview.as_ref().is_some_and(|preview| preview.truncated) || excerpt_truncated,
         "content": content,
         "preview": preview,
     }))
+}
+
+fn apply_hashline_patch_or_create_empty(
+    target_path: &str,
+    contents: &str,
+    patch: &str,
+    create: bool,
+) -> Result<String, FunctionCallError> {
+    if create && patch.trim().is_empty() {
+        Ok(String::new())
+    } else {
+        apply_hashline_patch(target_path, contents, patch)
+    }
+}
+
+fn build_hashline_patch_preview_or_none(
+    old_contents: &str,
+    new_contents: &str,
+    create: bool,
+) -> Result<Option<HashlinePatchPreview>, FunctionCallError> {
+    if create && old_contents == new_contents {
+        Ok(None)
+    } else {
+        build_hashline_patch_preview(old_contents, new_contents).map(Some)
+    }
 }
 
 async fn handle_remove_file(

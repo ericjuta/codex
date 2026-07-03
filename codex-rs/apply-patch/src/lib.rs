@@ -935,6 +935,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_add_file_hunk_creates_empty_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("empty.txt");
+        let patch = wrap_patch(&format!("*** Add File: {}", path.display()));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        apply_patch(
+            &patch,
+            &PathUri::from_host_native_path(dir.path()).expect("absolute test path"),
+            &mut stdout,
+            &mut stderr,
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+        )
+        .await
+        .unwrap();
+
+        let stdout_str = String::from_utf8(stdout).unwrap();
+        let stderr_str = String::from_utf8(stderr).unwrap();
+        let expected_out = format!(
+            "Success. Updated the following files:\nA {}\n",
+            path.display()
+        );
+
+        assert_eq!(stdout_str, expected_out);
+        assert_eq!(stderr_str, "");
+        assert_eq!(fs::metadata(path).unwrap().len(), 0);
+    }
+
+    #[tokio::test]
     async fn test_apply_patch_hunks_accept_relative_and_absolute_paths() {
         let dir = tempdir().unwrap();
         let cwd = PathUri::from_host_native_path(dir.path()).expect("absolute test path");
