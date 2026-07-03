@@ -546,19 +546,7 @@ fn build_hashline_read_body(
     let next_start_line = truncated.then_some(end_line.saturating_add(1));
     let path_hash = hash_hex(contents, 4);
     let content = format_hashline_excerpt(contents, start_line, end_line);
-    let lines = split_lines_preserve(contents)
-        .into_iter()
-        .enumerate()
-        .skip(start_line.saturating_sub(1))
-        .take(end_line.saturating_sub(start_line).saturating_add(1))
-        .map(|(index, line)| {
-            json!({
-                "n": index + 1,
-                "hash": line_hash(line),
-                "content": line,
-            })
-        })
-        .collect::<Vec<_>>();
+    let lines = build_hashline_line_rows(contents, start_line, end_line);
     json!({
         "path": path,
         "hash": path_hash,
@@ -571,6 +559,25 @@ fn build_hashline_read_body(
         "content": content,
         "lines": lines,
     })
+}
+
+fn build_hashline_line_rows(contents: &str, start_line: usize, end_line: usize) -> Vec<Value> {
+    if start_line > end_line {
+        return Vec::new();
+    }
+    split_lines_preserve(contents)
+        .into_iter()
+        .enumerate()
+        .skip(start_line.saturating_sub(1))
+        .take(end_line.saturating_sub(start_line).saturating_add(1))
+        .map(|(index, line)| {
+            json!({
+                "n": index + 1,
+                "hash": line_hash(line),
+                "content": line,
+            })
+        })
+        .collect()
 }
 
 async fn handle_write(
@@ -1491,6 +1498,12 @@ fn build_hashline_patch_success_body(
             format_hashline_excerpt(written_contents, start_line, end_line)
         })
         .unwrap_or_default();
+    let lines = start_line
+        .zip(end_line)
+        .map(|(start_line, end_line)| {
+            build_hashline_line_rows(written_contents, start_line, end_line)
+        })
+        .unwrap_or_default();
     let new_hash = hash_hex(written_contents, 4);
 
     Ok(json!({
@@ -1505,6 +1518,7 @@ fn build_hashline_patch_success_body(
         "total_lines": total_lines,
         "truncated": preview.as_ref().is_some_and(|preview| preview.truncated) || excerpt_truncated,
         "content": content,
+        "lines": lines,
         "preview": preview,
     }))
 }

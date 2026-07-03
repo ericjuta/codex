@@ -760,6 +760,13 @@ fn success_output_reports_fresh_hashline_excerpt() {
             "total_lines": 3,
             "truncated": false,
             "content": format!("2:{}|bravo", line_hash("bravo")),
+            "lines": [
+                {
+                    "n": 2,
+                    "hash": line_hash("bravo"),
+                    "content": "bravo",
+                },
+            ],
             "preview": {
                 "old_start_line": 2,
                 "old_end_line": 2,
@@ -845,6 +852,7 @@ fn success_output_reports_empty_create() {
             "total_lines": 0,
             "truncated": false,
             "content": "",
+            "lines": [],
             "preview": null,
         })
     );
