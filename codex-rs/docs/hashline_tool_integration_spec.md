@@ -308,7 +308,7 @@ after all of these are true:
 | File operation parity | Add, delete, rename/move, overwrite, and multi-file operations are supported or intentionally delegated. Existing-file multi-file `hashline.patch` is supported, including sectioned `REM` and `MV`; multi-file creation is still delegated. |
 | Output parity | TUI transcript, app-server events, telemetry, and model-facing outputs are stable and bounded. |
 | Compatibility | Existing `apply_patch` shell interception and standalone invocation behavior remain available. |
-| Tests | Integration tests cover stale hash failure, successful patch, dry run, multi-environment selection, remote exec-server filesystem, sandbox denial, and approval. |
+| Tests | Integration tests cover stale hash failure, successful patch, dry run, multi-environment selection, remote exec-server read/write/patch filesystem routing, sandbox denial, and approval. |
 
 Even after these gates, prefer a staged default switch:
 
@@ -347,7 +347,7 @@ Prefer integration tests under `core/suite`:
 | Dry run | Changed-line preview is returned and file is unchanged. |
 | Multi-environment | `environment_id` selects the correct filesystem. |
 | Sandbox denied | Runtime requests/uses approval consistently with `apply_patch`. |
-| Remote filesystem | Reads and writes go through exec-server FS, not host `std::fs`. |
+| Remote filesystem | Reads, writes, and patches go through exec-server FS, not host `std::fs`. |
 
 If TUI-rendered text changes, add or update `insta` snapshots in `codex-tui`.
 

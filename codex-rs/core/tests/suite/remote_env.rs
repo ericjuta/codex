@@ -1574,6 +1574,158 @@ async fn hashline_patch_routes_to_selected_remote_environment() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_read_and_write_route_to_selected_remote_environment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    // TODO(anp): Remove after remote path fixtures use target-native paths.
+    skip_if_target_windows!(Ok(()), "requires the Docker-backed POSIX executor");
+    skip_if_no_remote_env!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.hashline.enabled = true;
+    });
+    let test = builder.build_with_remote_and_local_env(&server).await?;
+    let local_cwd = TempDir::new()?;
+    let read_file_name = "hashline-remote-read.txt";
+    let write_file_name = "hashline-remote-write.txt";
+    fs::write(local_cwd.path().join(read_file_name), "local-read\n")?;
+    fs::write(local_cwd.path().join(write_file_name), "local-write\n")?;
+
+    let remote_cwd = PathBuf::from(format!(
+        "/tmp/codex-remote-hashline-read-write-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    ))
+    .abs();
+    let remote_cwd_uri = PathUri::from_host_native_path(&remote_cwd)?;
+    let remote_read_file_uri = PathUri::from_host_native_path(remote_cwd.join(read_file_name))?;
+    let remote_write_file_uri = PathUri::from_host_native_path(remote_cwd.join(write_file_name))?;
+    test.fs()
+        .create_directory(
+            &remote_cwd_uri,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+    test.fs()
+        .write_file(
+            &remote_read_file_uri,
+            b"remote-read\n".to_vec(),
+            /*sandbox*/ None,
+        )
+        .await?;
+    test.fs()
+        .write_file(
+            &remote_write_file_uri,
+            b"remote-before\n".to_vec(),
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    let read_call_id = "hashline-remote-read-call";
+    let write_call_id = "hashline-remote-write-call";
+    let read_args = json!({
+        "path": read_file_name,
+        "environment_id": REMOTE_ENVIRONMENT_ID,
+    });
+    let write_args = json!({
+        "path": write_file_name,
+        "content": "remote-written\n",
+        "force": true,
+        "environment_id": REMOTE_ENVIRONMENT_ID,
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                read_call_id,
+                "hashline",
+                "read",
+                &serde_json::to_string(&read_args)?,
+            ),
+            ev_function_call_with_namespace(
+                write_call_id,
+                "hashline",
+                "write",
+                &serde_json::to_string(&write_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn_with_environments(
+        "read and write the remote files with hashline",
+        Some(vec![
+            local(local_cwd.path().abs()),
+            TurnEnvironmentSelection {
+                environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                cwd: PathUri::from_abs_path(&remote_cwd),
+            },
+        ]),
+    )
+    .await?;
+
+    let remote_read_contents = test
+        .fs()
+        .read_file_text(&remote_read_file_uri, /*sandbox*/ None)
+        .await?;
+    let remote_write_contents = test
+        .fs()
+        .read_file_text(&remote_write_file_uri, /*sandbox*/ None)
+        .await?;
+    assert_eq!(remote_read_contents, "remote-read\n");
+    assert_eq!(remote_write_contents, "remote-written\n");
+    assert_eq!(
+        fs::read_to_string(local_cwd.path().join(read_file_name))?,
+        "local-read\n"
+    );
+    assert_eq!(
+        fs::read_to_string(local_cwd.path().join(write_file_name))?,
+        "local-write\n"
+    );
+
+    let request = final_mock.single_request();
+    let read_output = request
+        .function_call_output_text(read_call_id)
+        .context("hashline read output should be sent to model")?;
+    assert!(read_output.contains(&format!("[{read_file_name}#")));
+    assert!(read_output.contains("|remote-read"));
+    assert!(!read_output.contains("|local-read"));
+
+    let write_output = request
+        .function_call_output_text(write_call_id)
+        .context("hashline write output should be sent to model")?;
+    assert!(write_output.contains("\"success\": true"));
+    assert!(write_output.contains("\"operation\": \"update\""));
+    assert!(write_output.contains(&format!("\"header\": \"[{write_file_name}#")));
+    assert!(write_output.contains("|remote-written"));
+    assert!(!write_output.contains("|local-write"));
+
+    test.fs()
+        .remove(
+            &remote_cwd_uri,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
     skip_if_no_network!(Ok(()));
     // TODO(anp): Remove after remote path fixtures use target-native paths.
