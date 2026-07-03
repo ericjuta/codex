@@ -144,6 +144,7 @@ fn validate_patch_headers(
     contents: &str,
     patch: &str,
 ) -> Result<(), FunctionCallError> {
+    let mut section_hash = None;
     for raw_line in patch.lines() {
         let line = raw_line.trim();
         if !line.starts_with('[') {
@@ -164,11 +165,23 @@ fn validate_patch_headers(
         };
         if header_path != path {
             return Err(FunctionCallError::RespondToModel(format!(
-                "Hashline file header path {header_path} does not match target path {path}"
+                "Hashline file header path {header_path} does not match target path {path}; multi-file Hashline patches are not supported by hashline.patch yet"
             )));
         }
         validate_hash_token(path, expected_hash)?;
-        validate_file_hash(path, contents, Some(&expected_hash.to_ascii_lowercase()))?;
+        let expected_hash = expected_hash.to_ascii_lowercase();
+        match &section_hash {
+            Some(previous_hash) if previous_hash != &expected_hash => {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "conflicting hash tags for {path}: {previous_hash} vs {expected_hash}"
+                )));
+            }
+            None => section_hash = Some(expected_hash),
+            Some(_) => {}
+        }
+    }
+    if let Some(expected_hash) = section_hash {
+        validate_file_hash(path, contents, Some(&expected_hash))?;
     }
     Ok(())
 }
@@ -194,6 +207,9 @@ fn parse_hashline_patch(patch: &str) -> Result<Vec<HashlineOperation>, FunctionC
         if is_ignorable_patch_line(line) {
             index += 1;
             continue;
+        }
+        if let Some(message) = apply_patch_contamination_message(line) {
+            return Err(FunctionCallError::RespondToModel(message));
         }
         let (op, rest) = split_hashline_operation(line)?;
         let op = op.to_ascii_uppercase();
@@ -315,6 +331,9 @@ fn collect_payload_lines(
             }
             break;
         }
+        if let Some(message) = apply_patch_contamination_message(line) {
+            return Err(FunctionCallError::RespondToModel(message));
+        }
         if is_hashline_operation_line(line) {
             break;
         }
@@ -327,6 +346,31 @@ fn collect_payload_lines(
         *index += 1;
     }
     Ok(payload)
+}
+
+fn apply_patch_contamination_message(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("*** Update File:")
+        || trimmed.starts_with("*** Add File:")
+        || trimmed.starts_with("*** Delete File:")
+        || trimmed.starts_with("*** Move to:")
+    {
+        let preview = if trimmed.chars().count() > 48 {
+            format!("{}...", trimmed.chars().take(48).collect::<String>())
+        } else {
+            trimmed.to_string()
+        };
+        return Some(format!(
+            "apply_patch sentinel {preview:?} is not valid in hashline. File sections start with [path#HASH]. Use SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, INS.TAIL, or block ops."
+        ));
+    }
+    if trimmed.starts_with("@@ ") && trimmed.contains("@@") {
+        return Some(
+            "unified-diff hunk header is not valid in hashline. Use SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, INS.TAIL, or block ops."
+                .to_string(),
+        );
+    }
+    None
 }
 
 fn is_hashline_operation_line(line: &str) -> bool {

@@ -76,6 +76,44 @@ fn patch_accepts_matching_file_header() {
 }
 
 #[test]
+fn patch_accepts_repeated_matching_file_sections() {
+    let original = "alpha\nbeta\ngamma\n";
+    let file_hash = hash_hex(original, 4);
+    let patch = format!(
+        "[notes.txt#{file_hash}]\nSWAP 2:{}|bravo\n[notes.txt#{file_hash}]\nINS.TAIL:\n+delta",
+        line_hash("beta")
+    );
+
+    let updated = apply_hashline_patch("notes.txt", original, &patch).expect("patch should apply");
+
+    assert_eq!(updated, "alpha\nbravo\ngamma\ndelta\n");
+}
+
+#[test]
+fn patch_rejects_conflicting_same_path_file_section_hashes() {
+    let original = "alpha\nbeta\n";
+    let actual_hash = hash_hex(original, 4);
+    let stale_hash = if actual_hash == "0000" {
+        "0001"
+    } else {
+        "0000"
+    };
+    let patch = format!(
+        "[notes.txt#{actual_hash}]\nSWAP 1:{}|ALPHA\n[notes.txt#{stale_hash}]\nDEL 2:{}",
+        line_hash("alpha"),
+        line_hash("beta")
+    );
+
+    let error = apply_hashline_patch("notes.txt", original, &patch)
+        .expect_err("conflicting section hashes should be rejected");
+
+    assert!(
+        error.to_string().contains("conflicting hash tags"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn patch_rejects_stale_file_header() {
     let original = "alpha\nbeta\n";
     let actual_hash = hash_hex(original, 4);
@@ -105,6 +143,49 @@ fn patch_rejects_wrong_file_header_path() {
 
     assert!(
         error.to_string().contains("does not match target path"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn patch_rejects_multi_file_sections_with_clear_message() {
+    let original = "alpha\nbeta\n";
+    let patch = format!(
+        "[notes.txt#{}]\nDEL 2\n[other.txt#0000]\nDEL 1",
+        hash_hex(original, 4)
+    );
+
+    let error = apply_hashline_patch("notes.txt", original, &patch)
+        .expect_err("multi-file sections should be rejected");
+
+    assert!(
+        error.to_string().contains("multi-file Hashline patches"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn patch_rejects_apply_patch_contamination() {
+    let error = apply_hashline_patch(
+        "notes.txt",
+        "alpha\n",
+        "*** Begin Patch\n*** Update File: notes.txt\n@@\n-alpha\n+omega\n*** End Patch",
+    )
+    .expect_err("apply_patch syntax should be rejected");
+
+    assert!(
+        error.to_string().contains("apply_patch sentinel"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn patch_rejects_unified_diff_contamination() {
+    let error = apply_hashline_patch("notes.txt", "alpha\n", "@@ -1 +1 @@\n-alpha\n+omega")
+        .expect_err("unified diff syntax should be rejected");
+
+    assert!(
+        error.to_string().contains("unified-diff hunk header"),
         "unexpected error: {error}"
     );
 }
