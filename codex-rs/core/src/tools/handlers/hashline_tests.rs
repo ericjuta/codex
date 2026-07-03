@@ -597,6 +597,18 @@ fn strips_uniform_read_output_payload_prefixes() {
 }
 
 #[test]
+fn keeps_uniform_read_output_payload_prefixes_for_scalar_literals() {
+    let updated = apply_hashline_patch(
+        "notes.txt",
+        "alpha\nbeta\ngamma\n",
+        "SWAP 2:\n1:aa|123\n2:bb|\"name\"",
+    )
+    .expect("scalar-looking read output rows should stay literal");
+
+    assert_eq!(updated, "alpha\n1:aa|123\n2:bb|\"name\"\ngamma\n");
+}
+
+#[test]
 fn strips_decorated_read_output_payload_prefixes() {
     let updated = apply_hashline_patch(
         "notes.txt",
