@@ -423,6 +423,191 @@ async fn hashline_patch_create_rejects_existing_file() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_write_creates_missing_file_through_apply_patch() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let file_name = "hashline-write-created.txt";
+    let file_path = test.cwd.path().join(file_name);
+
+    let call_id = "hashline-write-create-call";
+    let write_args = json!({
+        "path": file_name,
+        "content": "\u{feff}alpha\r\nbeta"
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                "write",
+                &serde_json::to_string(&write_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline file written"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, "write the file with hashline").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(fs::read_to_string(file_path)?, "alpha\nbeta\n");
+    let request = final_mock.single_request();
+    let write_output = request
+        .function_call_output_text(call_id)
+        .expect("write output should be sent to model");
+    assert!(write_output.contains("\"success\": true"));
+    assert!(write_output.contains(&format!("\"header\": \"[{file_name}#")));
+    assert!(write_output.contains("\"operation\": \"create\""));
+    assert!(write_output.contains("1:"));
+    assert!(write_output.contains("|alpha"));
+    assert!(write_output.contains("|beta"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_write_rejects_existing_file_without_force() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let file_name = "hashline-write-existing.txt";
+    let file_path = test.cwd.path().join(file_name);
+    fs::write(&file_path, "keep me\n")?;
+
+    let call_id = "hashline-write-existing-call";
+    let write_args = json!({
+        "path": file_name,
+        "content": "replace me\n"
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                "write",
+                &serde_json::to_string(&write_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline write rejected"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, "try to overwrite the file with hashline").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(fs::read_to_string(file_path)?, "keep me\n");
+    let request = final_mock.single_request();
+    let write_output = request
+        .function_call_output_text(call_id)
+        .expect("write output should be sent to model");
+    assert!(write_output.contains("hashline.write refuses to overwrite existing file"));
+    assert!(write_output.contains("force=true"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_write_overwrites_existing_file_with_force() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let file_name = "hashline-write-force.txt";
+    let file_path = test.cwd.path().join(file_name);
+    fs::write(&file_path, "alpha\nbeta\n")?;
+
+    let call_id = "hashline-write-force-call";
+    let write_args = json!({
+        "path": file_name,
+        "content": "omega\r\ntheta\n",
+        "force": true
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                "write",
+                &serde_json::to_string(&write_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline file overwritten"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, "force overwrite the file with hashline").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(fs::read_to_string(file_path)?, "omega\ntheta\n");
+    let request = final_mock.single_request();
+    let write_output = request
+        .function_call_output_text(call_id)
+        .expect("write output should be sent to model");
+    assert!(write_output.contains("\"success\": true"));
+    assert!(write_output.contains("\"operation\": \"update\""));
+    assert!(write_output.contains("\"old_hash\""));
+    assert!(write_output.contains("\"new_hash\""));
+    assert!(write_output.contains("|omega"));
+    assert!(write_output.contains("|theta"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hashline_remove_file_deletes_through_apply_patch() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let test = test_codex()
@@ -661,6 +846,7 @@ async fn hashline_only_hides_apply_patch_from_model_visible_tools() -> anyhow::R
     assert!(namespace_child_tool(&body, "hashline", "find_block").is_some());
     assert!(namespace_child_tool(&body, "hashline", "remove_file").is_some());
     assert!(namespace_child_tool(&body, "hashline", "rename_file").is_some());
+    assert!(namespace_child_tool(&body, "hashline", "write").is_some());
     assert!(!request_tools_include(&body, "apply_patch"));
 
     Ok(())

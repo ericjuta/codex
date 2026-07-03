@@ -16,7 +16,7 @@ pub(super) fn line_hash(input: &str) -> String {
     )
 }
 
-fn normalize_file_text(input: &str) -> String {
+pub(super) fn normalize_file_text(input: &str) -> String {
     let input = input.strip_prefix('\u{feff}').unwrap_or(input);
     let mut output = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();

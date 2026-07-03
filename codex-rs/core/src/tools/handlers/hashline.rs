@@ -35,6 +35,7 @@ use self::hashline_format::format_hashline_excerpt;
 use self::hashline_format::split_lines_preserve;
 use self::hashline_hash::hash_hex;
 use self::hashline_hash::line_hash;
+use self::hashline_hash::normalize_file_text;
 use self::hashline_patch::apply_hashline_patch;
 use self::hashline_patch::apply_patch_for_hashline_remove;
 use self::hashline_patch::apply_patch_for_hashline_rename;
@@ -44,11 +45,13 @@ use self::hashline_patch::ensure_rename_representable;
 use self::hashline_patch::parse_anchor_hash;
 use self::hashline_patch::parse_anchor_line;
 use self::hashline_patch::validate_file_hash;
+use serde_json::Value;
 
 const PATCH_OUTPUT_MAX_LINES: usize = 40;
 
 const NAMESPACE: &str = "hashline";
 const READ_TOOL: &str = "read";
+const WRITE_TOOL: &str = "write";
 const PATCH_TOOL: &str = "patch";
 const FIND_BLOCK_TOOL: &str = "find_block";
 const REMOVE_FILE_TOOL: &str = "remove_file";
@@ -61,6 +64,7 @@ const HARD_FIND_BLOCK_MAX_LINES: usize = 300;
 #[derive(Clone, Copy)]
 pub(crate) enum HashlineToolKind {
     Read,
+    Write,
     Patch,
     FindBlock,
     RemoveFile,
@@ -83,6 +87,7 @@ impl HashlineHandler {
     fn tool_name_str(&self) -> &'static str {
         match self.kind {
             HashlineToolKind::Read => READ_TOOL,
+            HashlineToolKind::Write => WRITE_TOOL,
             HashlineToolKind::Patch => PATCH_TOOL,
             HashlineToolKind::FindBlock => FIND_BLOCK_TOOL,
             HashlineToolKind::RemoveFile => REMOVE_FILE_TOOL,
@@ -98,6 +103,16 @@ struct ReadArgs {
     start_line: Option<usize>,
     end_line: Option<usize>,
     max_lines: Option<usize>,
+    environment_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WriteArgs {
+    path: String,
+    content: String,
+    force: Option<bool>,
+    dry_run: Option<bool>,
     environment_id: Option<String>,
 }
 
@@ -151,6 +166,7 @@ impl ToolExecutor<ToolInvocation> for HashlineHandler {
                 .to_string(),
             tools: vec![ResponsesApiNamespaceTool::Function(match self.kind {
                 HashlineToolKind::Read => read_tool_spec(self.multi_environment),
+                HashlineToolKind::Write => write_tool_spec(self.multi_environment),
                 HashlineToolKind::Patch => patch_tool_spec(self.multi_environment),
                 HashlineToolKind::FindBlock => find_block_tool_spec(self.multi_environment),
                 HashlineToolKind::RemoveFile => remove_file_tool_spec(self.multi_environment),
@@ -163,6 +179,7 @@ impl ToolExecutor<ToolInvocation> for HashlineHandler {
         Box::pin(async move {
             match self.kind {
                 HashlineToolKind::Read => handle_read(invocation).await,
+                HashlineToolKind::Write => handle_write(invocation, self.multi_environment).await,
                 HashlineToolKind::Patch => handle_patch(invocation, self.multi_environment).await,
                 HashlineToolKind::FindBlock => handle_find_block(invocation).await,
                 HashlineToolKind::RemoveFile => {
@@ -219,6 +236,43 @@ fn read_tool_spec(multi_environment: bool) -> ResponsesApiTool {
             "required": ["path", "header", "start_line", "end_line", "total_lines", "truncated", "next_start_line", "content"],
             "additionalProperties": false
         })),
+    }
+}
+
+fn write_tool_spec(multi_environment: bool) -> ResponsesApiTool {
+    ResponsesApiTool {
+        name: WRITE_TOOL.to_string(),
+        description:
+            "Write normalized content to a new file, or overwrite an existing file with force=true."
+                .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: schema_with_common_path(
+            BTreeMap::from([
+                (
+                    "content".to_string(),
+                    JsonSchema::string(Some(
+                        "Complete file content to write. Content is normalized to LF line endings and a leading UTF-8 BOM is stripped."
+                            .to_string(),
+                    )),
+                ),
+                (
+                    "force".to_string(),
+                    JsonSchema::boolean(Some(
+                        "Overwrite the target if it already exists. Defaults to false.".to_string(),
+                    )),
+                ),
+                (
+                    "dry_run".to_string(),
+                    JsonSchema::boolean(Some(
+                        "Validate and report the resulting file hash without writing.".to_string(),
+                    )),
+                ),
+            ]),
+            multi_environment,
+            vec!["path".to_string(), "content".to_string()],
+        ),
+        output_schema: None,
     }
 }
 
@@ -406,33 +460,203 @@ async fn handle_read(
         args.environment_id.as_deref(),
     )
     .await?;
-    let total_lines = count_lines(&contents);
-    let max_lines = args
-        .max_lines
-        .unwrap_or(DEFAULT_READ_MAX_LINES)
-        .clamp(1, HARD_READ_MAX_LINES);
-    let start_line = args.start_line.unwrap_or(1).max(1);
-    let requested_end_line = args.end_line.unwrap_or(usize::MAX).max(start_line);
+    let body = build_hashline_read_body(
+        &args.path,
+        &contents,
+        args.start_line.unwrap_or(1),
+        args.end_line,
+        args.max_lines.unwrap_or(DEFAULT_READ_MAX_LINES),
+    );
+    Ok(boxed_tool_output(FunctionToolOutput::from_text(
+        serde_json::to_string_pretty(&body)
+            .unwrap_or_else(|err| format!("failed to serialize hashline.read output: {err}")),
+        Some(true),
+    )))
+}
+
+fn build_hashline_read_body(
+    path: &str,
+    contents: &str,
+    start_line: usize,
+    requested_end_line: Option<usize>,
+    max_lines: usize,
+) -> Value {
+    let total_lines = count_lines(contents);
+    let max_lines = max_lines.clamp(1, HARD_READ_MAX_LINES);
+    let start_line = start_line.max(1);
+    let requested_end_line = requested_end_line
+        .unwrap_or_else(|| total_lines.max(start_line))
+        .max(start_line);
     let end_line = requested_end_line
         .min(start_line.saturating_add(max_lines).saturating_sub(1))
         .min(total_lines.max(1));
     let truncated = requested_end_line > end_line || end_line < total_lines;
     let next_start_line = truncated.then_some(end_line.saturating_add(1));
-    let path_hash = hash_hex(&contents, 4);
-    let content = format_hashline_excerpt(&contents, start_line, end_line);
-    let body = json!({
-        "path": args.path,
-        "header": format!("[{}#{}]", args.path, path_hash),
+    let path_hash = hash_hex(contents, 4);
+    let content = format_hashline_excerpt(contents, start_line, end_line);
+    json!({
+        "path": path,
+        "header": format!("[{path}#{path_hash}]"),
         "start_line": start_line,
         "end_line": end_line,
         "total_lines": total_lines,
         "truncated": truncated,
         "next_start_line": next_start_line,
         "content": content,
-    });
+    })
+}
+
+async fn handle_write(
+    invocation: ToolInvocation,
+    multi_environment: bool,
+) -> Result<Box<dyn codex_tools::ToolOutput>, FunctionCallError> {
+    let ToolInvocation {
+        turn,
+        step_context,
+        payload,
+        ..
+    } = &invocation;
+    let ToolPayload::Function { arguments } = payload else {
+        return Err(FunctionCallError::RespondToModel(
+            "hashline.write handler received unsupported payload".to_string(),
+        ));
+    };
+    let args: WriteArgs = parse_arguments(arguments)?;
+    let create = !selected_file_exists(
+        turn.as_ref(),
+        step_context.as_ref(),
+        &args.path,
+        args.environment_id.as_deref(),
+    )
+    .await?;
+    if !create && !args.force.unwrap_or(false) {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "hashline.write refuses to overwrite existing file {}; set force=true to overwrite",
+            args.path
+        )));
+    }
+
+    let old_contents = if create {
+        String::new()
+    } else {
+        read_selected_file(
+            turn.as_ref(),
+            step_context.as_ref(),
+            &args.path,
+            args.environment_id.as_deref(),
+        )
+        .await?
+    };
+    let mut write_contents = normalize_file_text(&args.content);
+    if create && !write_contents.is_empty() && !write_contents.ends_with('\n') {
+        write_contents.push('\n');
+    }
+    if create && write_contents.is_empty() {
+        return Err(FunctionCallError::RespondToModel(
+            "hashline.write cannot create an empty file through apply_patch".to_string(),
+        ));
+    }
+
+    let operation = if create { "create" } else { "update" };
+    let new_hash = hash_hex(&write_contents, 4);
+    if args.dry_run.unwrap_or(false) {
+        let preview = (old_contents != write_contents)
+            .then(|| build_hashline_patch_preview(&old_contents, &write_contents))
+            .transpose()?;
+        let body = json!({
+            "path": args.path,
+            "dry_run": true,
+            "operation": operation,
+            "old_hash": hash_hex(&old_contents, 4),
+            "new_hash": new_hash,
+            "preview": preview,
+        });
+        return Ok(boxed_tool_output(FunctionToolOutput::from_text(
+            serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+                format!("failed to serialize hashline.write dry-run output: {err}")
+            }),
+            Some(true),
+        )));
+    }
+
+    if old_contents != write_contents {
+        let apply_patch_text = apply_patch_for_hashline_update(
+            &args.path,
+            &old_contents,
+            &write_contents,
+            create,
+            args.environment_id.as_deref(),
+        )?;
+        let post_write_turn = std::sync::Arc::clone(turn);
+        let post_write_step_context = std::sync::Arc::clone(step_context);
+        let apply_patch_invocation = ToolInvocation {
+            tool_name: ToolName::plain("apply_patch"),
+            payload: ToolPayload::Custom {
+                input: apply_patch_text,
+            },
+            ..invocation
+        };
+        ApplyPatchHandler::new(multi_environment)
+            .handle(apply_patch_invocation)
+            .await?;
+
+        let written_contents = read_selected_file(
+            post_write_turn.as_ref(),
+            post_write_step_context.as_ref(),
+            &args.path,
+            args.environment_id.as_deref(),
+        )
+        .await?;
+        let written_hash = hash_hex(&written_contents, 4);
+        if written_hash != new_hash {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "hashline.write applied but post-write file hash for {} was {}, expected {new_hash}",
+                args.path, written_hash
+            )));
+        }
+        return build_hashline_write_output(
+            &args.path,
+            &old_contents,
+            &written_contents,
+            operation,
+        );
+    }
+
+    build_hashline_write_output(&args.path, &old_contents, &write_contents, operation)
+}
+
+fn build_hashline_write_output(
+    path: &str,
+    old_contents: &str,
+    written_contents: &str,
+    operation: &str,
+) -> Result<Box<dyn codex_tools::ToolOutput>, FunctionCallError> {
+    let mut body = build_hashline_read_body(
+        path,
+        written_contents,
+        /*start_line*/ 1,
+        None,
+        DEFAULT_READ_MAX_LINES,
+    );
+    let new_hash = hash_hex(written_contents, 4);
+    let Some(body_object) = body.as_object_mut() else {
+        return Err(FunctionCallError::RespondToModel(
+            "failed to construct hashline.write output".to_string(),
+        ));
+    };
+    body_object.insert("success".to_string(), Value::Bool(true));
+    body_object.insert(
+        "operation".to_string(),
+        Value::String(operation.to_string()),
+    );
+    body_object.insert(
+        "old_hash".to_string(),
+        Value::String(hash_hex(old_contents, 4)),
+    );
+    body_object.insert("new_hash".to_string(), Value::String(new_hash));
     Ok(boxed_tool_output(FunctionToolOutput::from_text(
         serde_json::to_string_pretty(&body)
-            .unwrap_or_else(|err| format!("failed to serialize hashline.read output: {err}")),
+            .unwrap_or_else(|err| format!("failed to serialize hashline.write output: {err}")),
         Some(true),
     )))
 }
@@ -847,6 +1071,20 @@ async fn ensure_selected_file_missing(
     path: &str,
     environment_id: Option<&str>,
 ) -> Result<(), FunctionCallError> {
+    if selected_file_exists(turn, step_context, path, environment_id).await? {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "Hashline operation requires {path} to be missing, but it already exists"
+        )));
+    }
+    Ok(())
+}
+
+async fn selected_file_exists(
+    turn: &crate::session::turn_context::TurnContext,
+    step_context: &crate::session::step_context::StepContext,
+    path: &str,
+    environment_id: Option<&str>,
+) -> Result<bool, FunctionCallError> {
     let Some(turn_environment) =
         resolve_tool_environment(&step_context.environments, environment_id)?
     else {
@@ -864,12 +1102,10 @@ async fn ensure_selected_file_missing(
         .file_system_sandbox_context(/*additional_permissions*/ None, turn_environment.cwd());
     let fs = turn_environment.environment.get_filesystem();
     match fs.get_metadata(&path_uri, Some(&sandbox)).await {
-        Ok(_) => Err(FunctionCallError::RespondToModel(format!(
-            "Hashline operation requires {path} to be missing, but it already exists"
-        ))),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(FunctionCallError::RespondToModel(format!(
-            "unable to inspect {path} before create: {error}"
+            "unable to inspect {path}: {error}"
         ))),
     }
 }

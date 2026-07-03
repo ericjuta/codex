@@ -1,4 +1,5 @@
 use super::build_hashline_patch_success_body;
+use super::build_hashline_read_body;
 use super::hashline_block::find_block_span;
 use super::hashline_block::language_for_path;
 use super::hashline_hash::hash_hex;
@@ -9,6 +10,7 @@ use super::hashline_patch::apply_patch_for_hashline_rename;
 use super::hashline_patch::apply_patch_for_hashline_update;
 use super::hashline_patch::build_hashline_patch_preview;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 
 #[test]
 fn applies_basic_line_operations() {
@@ -60,6 +62,32 @@ fn file_hash_matches_reference_normalization_behavior() {
         hash_hex("alpha\nbeta\n", 4)
     );
     assert_eq!(hash_hex("\u{feff}alpha\n", 4), hash_hex("alpha\n", 4));
+}
+
+#[test]
+fn read_body_without_end_line_only_truncates_when_capped() {
+    let contents = "alpha\nbeta\n";
+    let body = build_hashline_read_body(
+        "notes.txt",
+        contents,
+        /*start_line*/ 1,
+        /*requested_end_line*/ None,
+        /*max_lines*/ 200,
+    );
+
+    assert_eq!(
+        body,
+        json!({
+            "path": "notes.txt",
+            "header": format!("[notes.txt#{}]", hash_hex(contents, 4)),
+            "start_line": 1,
+            "end_line": 2,
+            "total_lines": 2,
+            "truncated": false,
+            "next_start_line": null,
+            "content": format!("1:{}|alpha\n2:{}|beta", line_hash("alpha"), line_hash("beta")),
+        })
+    );
 }
 
 #[test]

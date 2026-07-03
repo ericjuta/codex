@@ -31,8 +31,9 @@ The preferred first landing stage is:
 1. Keep parser, hashing, formatting, and text-application logic outside the
    root handler. Handler-private modules are acceptable for the initial hardening
    pass; extract `codex-hashline` when the logic needs a reusable crate boundary.
-2. Add native Codex handlers for `hashline.read`, `hashline.patch`,
-   `hashline.find_block`, `hashline.remove_file`, and `hashline.rename_file`.
+2. Add native Codex handlers for `hashline.read`, `hashline.write`,
+   `hashline.patch`, `hashline.find_block`, `hashline.remove_file`, and
+   `hashline.rename_file`.
 3. Keep `apply_patch` registered and unchanged.
 4. Gate the new tools behind a feature flag, model capability check, or config
    knob until integration tests prove behavior across local, remote, sandboxed,
@@ -90,6 +91,7 @@ Expose a namespace named `hashline` with these first-stage tools:
 | Tool | Purpose | Model-visible output |
 | --- | --- | --- |
 | `hashline.read` | Read a bounded file range with Hashline anchors | `[path#HASH]` plus `line:hash|content`, with explicit truncation metadata when capped. |
+| `hashline.write` | Write normalized content to a new file or overwrite with `force=true` | Success/failure status plus a refreshed bounded `[path#HASH]` read view after writing. |
 | `hashline.patch` | Apply a single-file Hashline patch string | Success/failure status; dry runs include old/new hashes and a compact changed-line preview. |
 | `hashline.find_block` | Resolve a block around an anchored line | Block span, language guess, and a small anchored excerpt. |
 | `hashline.remove_file` | Delete one text file after optional file-hash validation | Hashline success/failure status with old file hash after `apply_patch` verifies and applies the delete. |
@@ -110,6 +112,16 @@ bodies.
 | `end_line` | integer | no | 1-indexed inclusive. |
 | `max_lines` | integer | no | Default 200, hard cap 1000. |
 | `environment_id` | string | only when multiple environments exist | Match existing multi-environment patterns. |
+
+`hashline.write`:
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `path` | string | yes | Resolved relative to selected environment cwd. |
+| `content` | string | yes | Complete file content to write. Content is normalized to LF line endings and a leading UTF-8 BOM is stripped. |
+| `force` | boolean | no | Defaults to false. Existing files are rejected unless this is true. |
+| `dry_run` | boolean | no | Defaults to false. Validates without writing and returns old/new hashes plus a compact changed-line preview when content would change. |
+| `environment_id` | string | only when multiple environments exist | Match `apply_patch` environment selection behavior. |
 
 `hashline.patch`:
 
@@ -157,6 +169,7 @@ Required caps:
 | Output | Default cap | Hard cap | Behavior on overflow |
 | --- | --- | --- | --- |
 | `read` lines | 200 lines | 1000 lines | Return selected range plus `truncated=true`, `next_start_line`, and file total when available. |
+| `write` refreshed lines | 200 lines | 1000 lines | Return bounded post-write hashline output using the same cap shape as `read`. |
 | `patch` diff/excerpt | 200 lines | 1000 lines | Return compact diff first, then refreshed anchors for changed region only. |
 | `find_block` excerpt | 80 lines | 300 lines | Return span metadata even when excerpt is capped. |
 | Any single textual payload | provider/model truncation policy plus local byte cap | less than 10k tokens equivalent | Truncate before building `FunctionCallOutputPayload`. |
@@ -249,11 +262,12 @@ The tool guidance should be short and operational:
    read with Hashline anchors.
 2. Prefer `line:hash` anchors in patch operations.
 3. Re-read when a stale file or line hash is reported.
-4. Use `create=true` for single-file creation, `hashline.remove_file` for
-   single-file deletion, and `hashline.rename_file` for single-file moves that
-   the tool can represent without changing file contents. Use `apply_patch`
-   for broad legacy patch operations until Hashline multi-file parity is
-   implemented.
+4. Use `hashline.write` for direct single-file creation or force overwrites,
+   `hashline.patch create=true` when creating via line operations,
+   `hashline.remove_file` for single-file deletion, and
+   `hashline.rename_file` for single-file moves that the tool can represent
+   without changing file contents. Use `apply_patch` for broad legacy patch
+   operations until Hashline multi-file parity is implemented.
 
 Do not present Hashline as a universal replacement during the additive stage.
 
@@ -323,6 +337,7 @@ Prefer integration tests under `core/suite`:
 | Scenario | Expected proof |
 | --- | --- |
 | `hashline.read` on text file | Model receives bounded `[path#HASH]` output. |
+| `hashline.write` create/overwrite | File changes through the native tool and response includes refreshed hashline output. |
 | `hashline.patch` after read | File changes and response includes refreshed hash. |
 | Stale file hash | File operations are rejected without writing. |
 | Stale line hash | Patch is rejected without writing and points to re-read. |

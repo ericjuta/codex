@@ -703,6 +703,7 @@ async fn hashline_tools_follow_enablement_config() {
             "read".to_string(),
             "remove_file".to_string(),
             "rename_file".to_string(),
+            "write".to_string(),
         ]
     );
 
@@ -725,6 +726,7 @@ async fn hashline_tools_follow_enablement_config() {
             "read".to_string(),
             "remove_file".to_string(),
             "rename_file".to_string(),
+            "write".to_string(),
         ]
     );
 }

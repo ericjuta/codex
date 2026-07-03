@@ -809,6 +809,10 @@ fn add_file_edit_tools(
             include_environment_id,
         ));
         planned_tools.add(HashlineHandler::new(
+            HashlineToolKind::Write,
+            include_environment_id,
+        ));
+        planned_tools.add(HashlineHandler::new(
             HashlineToolKind::Patch,
             include_environment_id,
         ));
