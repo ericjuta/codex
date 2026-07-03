@@ -46,6 +46,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
@@ -1448,6 +1449,115 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
         !local_cwd.path().join(file_name).exists(),
         "freeform apply_patch should not create the file in the local environment"
     );
+
+    test.fs()
+        .remove(
+            &remote_cwd_uri,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_patch_routes_to_selected_remote_environment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    // TODO(anp): Remove after remote path fixtures use target-native paths.
+    skip_if_target_windows!(Ok(()), "requires the Docker-backed POSIX executor");
+    skip_if_no_remote_env!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.hashline.enabled = true;
+    });
+    let test = builder.build_with_remote_and_local_env(&server).await?;
+    let local_cwd = TempDir::new()?;
+    let file_name = "hashline-remote-routing.txt";
+    fs::write(local_cwd.path().join(file_name), "local\n")?;
+
+    let remote_cwd = PathBuf::from(format!(
+        "/tmp/codex-remote-hashline-routing-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    ))
+    .abs();
+    let remote_cwd_uri = PathUri::from_host_native_path(&remote_cwd)?;
+    let remote_file_uri = PathUri::from_host_native_path(remote_cwd.join(file_name))?;
+    test.fs()
+        .create_directory(
+            &remote_cwd_uri,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+    test.fs()
+        .write_file(
+            &remote_file_uri,
+            b"remote\n".to_vec(),
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    let call_id = "hashline-remote-routing-call";
+    let patch_args = json!({
+        "path": file_name,
+        "patch": "SWAP 1|remote-updated",
+        "environment_id": REMOTE_ENVIRONMENT_ID,
+    });
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call_with_namespace(
+                    call_id,
+                    "hashline",
+                    "patch",
+                    &serde_json::to_string(&patch_args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.submit_turn_with_environments(
+        "patch the remote file with hashline",
+        Some(vec![
+            local(local_cwd.path().abs()),
+            TurnEnvironmentSelection {
+                environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                cwd: PathUri::from_abs_path(&remote_cwd),
+            },
+        ]),
+    )
+    .await?;
+
+    let remote_contents = test
+        .fs()
+        .read_file_text(&remote_file_uri, /*sandbox*/ None)
+        .await?;
+    assert_eq!(remote_contents, "remote-updated\n");
+    assert_eq!(
+        fs::read_to_string(local_cwd.path().join(file_name))?,
+        "local\n"
+    );
+    let output = response_mock
+        .last_request()
+        .context("missing request containing hashline output")?
+        .function_call_output_text(call_id)
+        .context("hashline output should be sent to model")?;
+    assert!(output.contains("\"success\": true"));
+    assert!(output.contains("|remote-updated"));
 
     test.fs()
         .remove(
