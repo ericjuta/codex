@@ -19,6 +19,20 @@ pub(super) struct HashlinePatchPreview {
     pub(super) content: String,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct HashlinePatchSection {
+    pub(super) path: String,
+    pub(super) expected_hash: Option<String>,
+    pub(super) patch: String,
+}
+
+pub(super) struct HashlinePatchFileUpdate<'a> {
+    pub(super) path: &'a str,
+    pub(super) old_contents: &'a str,
+    pub(super) new_contents: &'a str,
+    pub(super) create: bool,
+}
+
 #[derive(Clone, Copy)]
 struct ChangeBounds {
     old_start: usize,
@@ -139,6 +153,124 @@ pub(super) fn validate_file_hash(
     Ok(())
 }
 
+pub(super) fn split_hashline_patch_sections(
+    default_path: &str,
+    patch: &str,
+) -> Result<Vec<HashlinePatchSection>, FunctionCallError> {
+    let mut has_header = false;
+    for line in patch.lines() {
+        if parse_patch_file_header(default_path, line)?.is_some() {
+            has_header = true;
+            break;
+        }
+    }
+    if !has_header {
+        return Ok(vec![HashlinePatchSection {
+            path: default_path.to_string(),
+            expected_hash: None,
+            patch: patch.to_string(),
+        }]);
+    }
+
+    let mut sections = Vec::<HashlinePatchSection>::new();
+    let mut current_index = None;
+    for raw_line in patch.lines() {
+        let line = raw_line.trim_end_matches('\r');
+        if let Some((path, expected_hash)) = parse_patch_file_header(default_path, line)? {
+            let section_index = match sections.iter().position(|section| section.path == path) {
+                Some(index) => {
+                    merge_section_hash(&mut sections[index], expected_hash)?;
+                    index
+                }
+                None => {
+                    sections.push(HashlinePatchSection {
+                        path,
+                        expected_hash,
+                        patch: String::new(),
+                    });
+                    sections.len() - 1
+                }
+            };
+            current_index = Some(section_index);
+            continue;
+        }
+
+        let Some(section_index) = current_index else {
+            if is_ignorable_patch_line(line) {
+                continue;
+            }
+            if let Some(message) = apply_patch_contamination_message(line) {
+                return Err(FunctionCallError::RespondToModel(message));
+            }
+            return Err(FunctionCallError::RespondToModel(format!(
+                "Hashline operation {line:?} appears before the first [path#HASH] section header"
+            )));
+        };
+
+        if !sections[section_index].patch.is_empty() {
+            sections[section_index].patch.push('\n');
+        }
+        sections[section_index].patch.push_str(line);
+    }
+
+    if sections.is_empty() {
+        return Err(FunctionCallError::RespondToModel(
+            "hashline.patch did not contain any file sections".to_string(),
+        ));
+    }
+    Ok(sections)
+}
+
+fn parse_patch_file_header(
+    target_path: &str,
+    line: &str,
+) -> Result<Option<(String, Option<String>)>, FunctionCallError> {
+    let line = line.trim();
+    if !line.starts_with('[') {
+        return Ok(None);
+    }
+    let Some(header) = line
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+    else {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "invalid Hashline file header {line}; expected [{target_path}#HASH]"
+        )));
+    };
+    let Some((header_path, expected_hash)) = header.rsplit_once('#') else {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "invalid Hashline file header {line}; expected [{target_path}#HASH]"
+        )));
+    };
+    validate_hash_token(header_path, expected_hash)?;
+    Ok(Some((
+        header_path.to_string(),
+        Some(expected_hash.to_ascii_lowercase()),
+    )))
+}
+
+fn merge_section_hash(
+    section: &mut HashlinePatchSection,
+    expected_hash: Option<String>,
+) -> Result<(), FunctionCallError> {
+    let Some(expected_hash) = expected_hash else {
+        return Ok(());
+    };
+    match &section.expected_hash {
+        Some(previous_hash) if previous_hash != &expected_hash => {
+            Err(FunctionCallError::RespondToModel(format!(
+                "conflicting hash tags for {}: {} vs {}",
+                section.path, previous_hash, expected_hash
+            )))
+        }
+        None => {
+            section.expected_hash = Some(expected_hash);
+            Ok(())
+        }
+        Some(_) => Ok(()),
+    }
+}
+
 fn validate_patch_headers(
     path: &str,
     contents: &str,
@@ -165,7 +297,7 @@ fn validate_patch_headers(
         };
         if header_path != path {
             return Err(FunctionCallError::RespondToModel(format!(
-                "Hashline file header path {header_path} does not match target path {path}; multi-file Hashline patches are not supported by hashline.patch yet"
+                "Hashline file header path {header_path} does not match target path {path}; this single-file patch application only accepts headers for {path}"
             )));
         }
         validate_hash_token(path, expected_hash)?;
@@ -742,22 +874,42 @@ pub(super) fn apply_patch_for_hashline_update(
     create: bool,
     environment_id: Option<&str>,
 ) -> Result<String, FunctionCallError> {
-    let mut patch = String::from("*** Begin Patch\n");
-    if let Some(environment_id) = environment_id {
-        patch.push_str("*** Environment ID: ");
-        patch.push_str(environment_id);
-        patch.push('\n');
-    }
+    apply_patch_for_hashline_updates(
+        &[HashlinePatchFileUpdate {
+            path,
+            old_contents,
+            new_contents,
+            create,
+        }],
+        environment_id,
+    )
+}
 
-    if create {
-        let new_lines = split_lines_preserve(new_contents);
+pub(super) fn apply_patch_for_hashline_updates(
+    updates: &[HashlinePatchFileUpdate<'_>],
+    environment_id: Option<&str>,
+) -> Result<String, FunctionCallError> {
+    let mut patch = apply_patch_header(environment_id);
+    for update in updates {
+        append_hashline_update_hunk(&mut patch, update)?;
+    }
+    patch.push_str("*** End Patch");
+    Ok(patch)
+}
+
+fn append_hashline_update_hunk(
+    patch: &mut String,
+    update: &HashlinePatchFileUpdate<'_>,
+) -> Result<(), FunctionCallError> {
+    if update.create {
+        let new_lines = split_lines_preserve(update.new_contents);
         if new_lines.is_empty() {
             return Err(FunctionCallError::RespondToModel(
                 "hashline.patch create=true produced an empty file, which apply_patch Add File cannot represent".to_string(),
             ));
         }
         patch.push_str("*** Add File: ");
-        patch.push_str(path);
+        patch.push_str(update.path);
         patch.push('\n');
         for line in new_lines {
             patch.push('+');
@@ -765,10 +917,9 @@ pub(super) fn apply_patch_for_hashline_update(
             patch.push('\n');
         }
     } else {
-        append_localized_update_hunk(&mut patch, path, old_contents, new_contents)?;
+        append_localized_update_hunk(patch, update.path, update.old_contents, update.new_contents)?;
     }
-    patch.push_str("*** End Patch");
-    Ok(patch)
+    Ok(())
 }
 
 pub(super) fn apply_patch_for_hashline_remove(path: &str, environment_id: Option<&str>) -> String {

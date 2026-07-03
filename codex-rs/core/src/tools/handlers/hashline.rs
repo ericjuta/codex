@@ -36,14 +36,18 @@ use self::hashline_format::split_lines_preserve;
 use self::hashline_hash::hash_hex;
 use self::hashline_hash::line_hash;
 use self::hashline_hash::normalize_file_text;
+use self::hashline_patch::HashlinePatchFileUpdate;
+use self::hashline_patch::HashlinePatchSection;
 use self::hashline_patch::apply_hashline_patch;
 use self::hashline_patch::apply_patch_for_hashline_remove;
 use self::hashline_patch::apply_patch_for_hashline_rename;
 use self::hashline_patch::apply_patch_for_hashline_update;
+use self::hashline_patch::apply_patch_for_hashline_updates;
 use self::hashline_patch::build_hashline_patch_preview;
 use self::hashline_patch::ensure_rename_representable;
 use self::hashline_patch::parse_anchor_hash;
 use self::hashline_patch::parse_anchor_line;
+use self::hashline_patch::split_hashline_patch_sections;
 use self::hashline_patch::validate_file_hash;
 use serde_json::Value;
 
@@ -152,6 +156,13 @@ struct RenameFileArgs {
     expected_hash: Option<String>,
     dry_run: Option<bool>,
     environment_id: Option<String>,
+}
+
+struct PreparedHashlinePatchFile {
+    path: String,
+    old_contents: String,
+    new_contents: String,
+    new_hash: String,
 }
 
 impl ToolExecutor<ToolInvocation> for HashlineHandler {
@@ -279,7 +290,7 @@ fn write_tool_spec(multi_environment: bool) -> ResponsesApiTool {
 fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
     ResponsesApiTool {
         name: PATCH_TOOL.to_string(),
-        description: "Apply a single-file Hashline line operation patch. Supported operations: SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, INS.TAIL, SWAP.BLK, DEL.BLK, and INS.BLK.POST, using either README-style + payload bodies or compact |text forms where supported."
+        description: "Apply a Hashline line operation patch. Supports one target file by default, or multiple existing files when the patch is split into [path#HASH] sections. Supported operations: SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, INS.TAIL, SWAP.BLK, DEL.BLK, and INS.BLK.POST, using either README-style + payload bodies or compact |text forms where supported."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -288,7 +299,7 @@ fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "patch".to_string(),
                     JsonSchema::string(Some(
-                        "Hashline operations. Use README-style bodies such as SWAP 12:\n+replacement, SWAP 12..14:\n+replacement, DEL 12..14, INS.POST 12:\n+text, INS.HEAD:\n+text, SWAP.BLK 12:\n+replacement block, DEL.BLK 12, INS.BLK.POST 12:\n+block, or compact forms such as SWAP 12:ab|replacement and INS.TAIL|text."
+                        "Hashline operations. Use README-style bodies such as SWAP 12:\n+replacement, SWAP 12..14:\n+replacement, DEL 12..14, INS.POST 12:\n+text, INS.HEAD:\n+text, SWAP.BLK 12:\n+replacement block, DEL.BLK 12, INS.BLK.POST 12:\n+block, compact forms such as SWAP 12:ab|replacement and INS.TAIL|text, or multiple [path#HASH] sections for existing-file multi-file edits."
                             .to_string(),
                     )),
                 ),
@@ -739,6 +750,16 @@ async fn handle_patch(
     };
     let args: PatchArgs = parse_arguments(arguments)?;
     let create = args.create.unwrap_or(false);
+    let sections = split_hashline_patch_sections(&args.path, &args.patch)?;
+    if sections.len() > 1 {
+        if create {
+            return Err(FunctionCallError::RespondToModel(
+                "hashline.patch create=true is only supported for a single target file".to_string(),
+            ));
+        }
+        return handle_multi_file_patch(&invocation, &args, &sections, multi_environment).await;
+    }
+
     let contents = if create {
         ensure_selected_file_missing(
             turn.as_ref(),
@@ -820,6 +841,121 @@ async fn handle_patch(
     Ok(boxed_tool_output(FunctionToolOutput::from_text(
         serde_json::to_string_pretty(&body)
             .unwrap_or_else(|err| format!("failed to serialize hashline.patch output: {err}")),
+        Some(true),
+    )))
+}
+
+async fn handle_multi_file_patch(
+    invocation: &ToolInvocation,
+    args: &PatchArgs,
+    sections: &[HashlinePatchSection],
+    multi_environment: bool,
+) -> Result<Box<dyn codex_tools::ToolOutput>, FunctionCallError> {
+    let mut prepared_files = Vec::new();
+    for section in sections {
+        let old_contents = read_selected_file(
+            invocation.turn.as_ref(),
+            invocation.step_context.as_ref(),
+            &section.path,
+            args.environment_id.as_deref(),
+        )
+        .await?;
+        validate_file_hash(
+            &section.path,
+            &old_contents,
+            section.expected_hash.as_deref(),
+        )?;
+        let new_contents = apply_hashline_patch(&section.path, &old_contents, &section.patch)?;
+        let new_hash = hash_hex(&new_contents, 4);
+        prepared_files.push(PreparedHashlinePatchFile {
+            path: section.path.clone(),
+            old_contents,
+            new_contents,
+            new_hash,
+        });
+    }
+
+    if args.dry_run.unwrap_or(false) {
+        let files = prepared_files
+            .iter()
+            .map(|file| {
+                let preview = build_hashline_patch_preview(&file.old_contents, &file.new_contents)?;
+                Ok(json!({
+                    "path": &file.path,
+                    "old_hash": hash_hex(&file.old_contents, 4),
+                    "new_hash": &file.new_hash,
+                    "preview": preview,
+                }))
+            })
+            .collect::<Result<Vec<_>, FunctionCallError>>()?;
+        let body = json!({
+            "dry_run": true,
+            "operation": "multi_file_update",
+            "files": files,
+        });
+        return Ok(boxed_tool_output(FunctionToolOutput::from_text(
+            serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+                format!("failed to serialize hashline.patch multi-file dry-run output: {err}")
+            }),
+            Some(true),
+        )));
+    }
+
+    let updates = prepared_files
+        .iter()
+        .map(|file| HashlinePatchFileUpdate {
+            path: &file.path,
+            old_contents: &file.old_contents,
+            new_contents: &file.new_contents,
+            create: false,
+        })
+        .collect::<Vec<_>>();
+    let apply_patch_text =
+        apply_patch_for_hashline_updates(&updates, args.environment_id.as_deref())?;
+    let apply_patch_invocation = ToolInvocation {
+        tool_name: ToolName::plain("apply_patch"),
+        payload: ToolPayload::Custom {
+            input: apply_patch_text,
+        },
+        ..invocation.clone()
+    };
+    ApplyPatchHandler::new(multi_environment)
+        .handle(apply_patch_invocation)
+        .await?;
+
+    let mut files = Vec::new();
+    for file in &prepared_files {
+        let written_contents = read_selected_file(
+            invocation.turn.as_ref(),
+            invocation.step_context.as_ref(),
+            &file.path,
+            args.environment_id.as_deref(),
+        )
+        .await?;
+        let written_hash = hash_hex(&written_contents, 4);
+        if written_hash != file.new_hash {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "hashline.patch applied but post-write file hash for {} was {}, expected {}",
+                file.path, written_hash, file.new_hash
+            )));
+        }
+        files.push(build_hashline_patch_success_body(
+            &file.path,
+            &file.old_contents,
+            &written_contents,
+            /*create*/ false,
+        )?);
+    }
+
+    let body = json!({
+        "success": true,
+        "operation": "multi_file_update",
+        "files": files,
+    });
+    Ok(boxed_tool_output(FunctionToolOutput::from_text(
+        serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+            format!("failed to serialize hashline.patch multi-file output: {err}")
+        }),
         Some(true),
     )))
 }

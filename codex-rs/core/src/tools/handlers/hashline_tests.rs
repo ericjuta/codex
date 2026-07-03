@@ -4,11 +4,15 @@ use super::hashline_block::find_block_span;
 use super::hashline_block::language_for_path;
 use super::hashline_hash::hash_hex;
 use super::hashline_hash::line_hash;
+use super::hashline_patch::HashlinePatchFileUpdate;
+use super::hashline_patch::HashlinePatchSection;
 use super::hashline_patch::apply_hashline_patch;
 use super::hashline_patch::apply_patch_for_hashline_remove;
 use super::hashline_patch::apply_patch_for_hashline_rename;
 use super::hashline_patch::apply_patch_for_hashline_update;
+use super::hashline_patch::apply_patch_for_hashline_updates;
 use super::hashline_patch::build_hashline_patch_preview;
+use super::hashline_patch::split_hashline_patch_sections;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -119,6 +123,29 @@ fn patch_accepts_repeated_matching_file_sections() {
 }
 
 #[test]
+fn patch_sections_group_targets_for_multi_file_handler() {
+    let patch = "[a.txt#1111]\nSWAP 1:\n+uno\n[b.txt#2222]\nDEL 2\n[a.txt#1111]\nINS.TAIL:\n+tres";
+
+    let sections = split_hashline_patch_sections("a.txt", patch).expect("sections should parse");
+
+    assert_eq!(
+        sections,
+        vec![
+            HashlinePatchSection {
+                path: "a.txt".to_string(),
+                expected_hash: Some("1111".to_string()),
+                patch: "SWAP 1:\n+uno\nINS.TAIL:\n+tres".to_string(),
+            },
+            HashlinePatchSection {
+                path: "b.txt".to_string(),
+                expected_hash: Some("2222".to_string()),
+                patch: "DEL 2".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
 fn patch_rejects_conflicting_same_path_file_section_hashes() {
     let original = "alpha\nbeta\n";
     let actual_hash = hash_hex(original, 4);
@@ -134,6 +161,19 @@ fn patch_rejects_conflicting_same_path_file_section_hashes() {
     );
 
     let error = apply_hashline_patch("notes.txt", original, &patch)
+        .expect_err("conflicting section hashes should be rejected");
+
+    assert!(
+        error.to_string().contains("conflicting hash tags"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn patch_sections_reject_conflicting_same_path_hashes() {
+    let patch = "[a.txt#1111]\nSWAP 1:\n+uno\n[a.txt#2222]\nDEL 2";
+
+    let error = split_hashline_patch_sections("a.txt", patch)
         .expect_err("conflicting section hashes should be rejected");
 
     assert!(
@@ -177,7 +217,7 @@ fn patch_rejects_wrong_file_header_path() {
 }
 
 #[test]
-fn patch_rejects_multi_file_sections_with_clear_message() {
+fn single_file_applier_rejects_multi_file_sections_with_clear_message() {
     let original = "alpha\nbeta\n";
     let patch = format!(
         "[notes.txt#{}]\nDEL 2\n[other.txt#0000]\nDEL 1",
@@ -188,7 +228,7 @@ fn patch_rejects_multi_file_sections_with_clear_message() {
         .expect_err("multi-file sections should be rejected");
 
     assert!(
-        error.to_string().contains("multi-file Hashline patches"),
+        error.to_string().contains("single-file patch application"),
         "unexpected error: {error}"
     );
 }
@@ -424,6 +464,31 @@ fn generated_create_patch_uses_add_file() {
     assert_eq!(
         patch,
         "*** Begin Patch\n*** Environment ID: env-1\n*** Add File: created.txt\n+hello\n+there\n*** End Patch"
+    );
+}
+
+#[test]
+fn generated_multi_file_patch_uses_one_apply_patch_envelope() {
+    let updates = [
+        HashlinePatchFileUpdate {
+            path: "a.txt",
+            old_contents: "one\n",
+            new_contents: "uno\n",
+            create: false,
+        },
+        HashlinePatchFileUpdate {
+            path: "b.txt",
+            old_contents: "two\n",
+            new_contents: "two\ntres\n",
+            create: false,
+        },
+    ];
+    let patch = apply_patch_for_hashline_updates(&updates, /*environment_id*/ Some("env-1"))
+        .expect("multi-file patch should be generated");
+
+    assert_eq!(
+        patch,
+        "*** Begin Patch\n*** Environment ID: env-1\n*** Update File: a.txt\n@@\n-one\n+uno\n*** Update File: b.txt\n@@\n two\n+tres\n*** End Patch"
     );
 }
 

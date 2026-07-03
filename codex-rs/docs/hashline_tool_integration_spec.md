@@ -92,7 +92,7 @@ Expose a namespace named `hashline` with these first-stage tools:
 | --- | --- | --- |
 | `hashline.read` | Read a bounded file range with Hashline anchors | `[path#HASH]` plus `line:hash|content`, with explicit truncation metadata when capped. |
 | `hashline.write` | Write normalized content to a new file or overwrite with `force=true` | Success/failure status plus a refreshed bounded `[path#HASH]` read view after writing. |
-| `hashline.patch` | Apply a single-file Hashline patch string | Success/failure status; dry runs include old/new hashes and a compact changed-line preview. |
+| `hashline.patch` | Apply a Hashline patch string to one file or to multiple existing files with `[path#HASH]` sections | Success/failure status; dry runs include old/new hashes and compact changed-line previews. |
 | `hashline.find_block` | Resolve a block around an anchored line | Block span, language guess, and a small anchored excerpt. |
 | `hashline.remove_file` | Delete one text file after optional file-hash validation | Hashline success/failure status with old file hash after `apply_patch` verifies and applies the delete. |
 | `hashline.rename_file` | Move one non-empty newline-terminated text file after optional file-hash validation | Hashline success/failure status with old/new paths and refreshed destination header after `apply_patch` verifies and applies the move. |
@@ -127,10 +127,10 @@ bodies.
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `path` | string | yes | Stage 1 is intentionally single-file. |
-| `patch` | string | yes | Hashline ops such as `SWAP 12:ab:` or a `[path#HASH]` section plus ops. |
+| `path` | string | yes | Default target path when `patch` has no file sections. |
+| `patch` | string | yes | Hashline ops such as `SWAP 12:ab:`, a `[path#HASH]` section plus ops, or multiple `[path#HASH]` sections for existing-file multi-file edits. |
 | `dry_run` | boolean | no | Defaults to false. Validates without writing and returns old/new hashes plus a compact changed-line preview. |
-| `create` | boolean | no | Defaults to false. When true, the target must be missing and the patch is applied to an empty file before routing through `apply_patch` add-file handling. |
+| `create` | boolean | no | Defaults to false. When true, the target must be missing and the patch is applied to an empty file before routing through `apply_patch` add-file handling. Multi-file sectioned patches require existing files. |
 | `environment_id` | string | only when multiple environments exist | Match `apply_patch` environment selection behavior. |
 
 `hashline.remove_file`:
@@ -266,8 +266,9 @@ The tool guidance should be short and operational:
    `hashline.patch create=true` when creating via line operations,
    `hashline.remove_file` for single-file deletion, and
    `hashline.rename_file` for single-file moves that the tool can represent
-   without changing file contents. Use `apply_patch` for broad legacy patch
-   operations until Hashline multi-file parity is implemented.
+   without changing file contents. Use sectioned `hashline.patch` for
+   existing-file multi-file edits, and keep `apply_patch` for broad legacy
+   patch operations until full add/move/delete multi-file parity is implemented.
 
 Do not present Hashline as a universal replacement during the additive stage.
 
@@ -303,7 +304,7 @@ after all of these are true:
 | --- | --- |
 | Sandbox parity | Hashline writes obey the same local and remote filesystem sandbox behavior as `apply_patch`. |
 | Approval parity | Granular approvals, Guardian reviews, hooks, and cached approvals work for Hashline patches. |
-| File operation parity | Add, delete, rename/move, overwrite, and multi-file operations are supported or intentionally delegated. |
+| File operation parity | Add, delete, rename/move, overwrite, and multi-file operations are supported or intentionally delegated. Existing-file multi-file `hashline.patch` is supported; multi-file creation is still delegated. |
 | Output parity | TUI transcript, app-server events, telemetry, and model-facing outputs are stable and bounded. |
 | Compatibility | Existing `apply_patch` shell interception and standalone invocation behavior remain available. |
 | Tests | Integration tests cover stale hash failure, successful patch, dry run, multi-environment selection, remote exec-server filesystem, sandbox denial, and approval. |
@@ -339,6 +340,7 @@ Prefer integration tests under `core/suite`:
 | `hashline.read` on text file | Model receives bounded `[path#HASH]` output. |
 | `hashline.write` create/overwrite | File changes through the native tool and response includes refreshed hashline output. |
 | `hashline.patch` after read | File changes and response includes refreshed hash. |
+| Sectioned multi-file `hashline.patch` | Multiple existing files change through one Hashline tool call and response includes per-file refreshed hashes. |
 | Stale file hash | File operations are rejected without writing. |
 | Stale line hash | Patch is rejected without writing and points to re-read. |
 | Dry run | Changed-line preview is returned and file is unchanged. |
@@ -375,9 +377,10 @@ If TUI-rendered text changes, add or update `insta` snapshots in `codex-tui`.
    benchmark history around line navigation, but the inspected CLI exposes
    `read` and `find_block`, not a complete search replacement. Keep search out
    of stage 1 unless a concrete model workflow needs it.
-5. Should Hashline patches support multi-file sections immediately? Single-file
-   patching is easier to approve and test. Multi-file can follow after the
-   single-file runtime proves itself.
+5. Should Hashline patches support multi-file creation immediately?
+   Existing-file multi-file patching is supported; creating multiple files is
+   still easier to delegate to `hashline.write` or legacy `apply_patch` until
+   add-file approval output is hardened for that shape.
 
 ## Non-Goals
 
