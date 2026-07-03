@@ -300,6 +300,41 @@ fn applies_readme_style_swap_body() {
 }
 
 #[test]
+fn applies_bare_payload_lines() {
+    let updated = apply_hashline_patch(
+        "notes.txt",
+        "alpha\nbeta\ngamma\n",
+        "SWAP 2:\nbravo\ncharlie",
+    )
+    .expect("bare payload lines should apply");
+
+    assert_eq!(updated, "alpha\nbravo\ncharlie\ngamma\n");
+}
+
+#[test]
+fn bare_payload_stops_before_next_operation() {
+    let updated = apply_hashline_patch(
+        "notes.txt",
+        "alpha\nbeta\ngamma\ndelta\n",
+        "SWAP 2:\nbravo\nDEL 4",
+    )
+    .expect("operation-looking rows should start the next operation");
+
+    assert_eq!(updated, "alpha\nbravo\ngamma\n");
+}
+
+#[test]
+fn rejects_minus_payload_rows() {
+    let error = apply_hashline_patch("notes.txt", "alpha\nbeta\n", "SWAP 2:\n-bravo")
+        .expect_err("minus rows should reject");
+
+    assert!(
+        error.to_string().contains("- rows are not accepted"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn applies_escaped_payload_prefixes() {
     let updated = apply_hashline_patch(
         "notes.txt",

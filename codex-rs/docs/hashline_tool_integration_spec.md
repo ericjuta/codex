@@ -128,7 +128,7 @@ bodies.
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `path` | string | yes | Default target path when `patch` has no file sections. |
-| `patch` | string | yes | Hashline ops such as `SWAP 12:ab:`, `SWAP 12:ab..14:cd:`, a `[path#HASH]` section plus ops, multiple `[path#HASH]` sections for existing-file multi-file edits, or `[path]` sections with `create=true` for missing-file creation. Payload rows use `++` for literal `+` and `+-` for literal `-`. Sectioned patches also accept reference-style `REM` and `MV <path>` file ops; `*** Abort` suppresses an embedded patch without writing. |
+| `patch` | string | yes | Hashline ops such as `SWAP 12:ab:`, `SWAP 12:ab..14:cd:`, a `[path#HASH]` section plus ops, multiple `[path#HASH]` sections for existing-file multi-file edits, or `[path]` sections with `create=true` for missing-file creation. Payload rows may use README-style `+` prefixes or bare replacement lines; `++` emits a literal `+` and `+-` emits a literal `-`. Sectioned patches also accept reference-style `REM` and `MV <path>` file ops; `*** Abort` suppresses an embedded patch without writing. |
 | `dry_run` | boolean | no | Defaults to false. Validates without writing and returns old/new hashes plus a compact changed-line preview. |
 | `create` | boolean | no | Defaults to false. When true, every target must be missing and the patch is applied to empty file contents before routing through `apply_patch` add-file handling. Empty patches create zero-byte files. Use `[path]` sections for multi-file creation. |
 | `environment_id` | string | only when multiple environments exist | Match `apply_patch` environment selection behavior. |

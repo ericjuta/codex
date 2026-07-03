@@ -578,12 +578,13 @@ fn collect_payload_lines(
         if is_hashline_operation_line(line) {
             break;
         }
-        let Some(stripped) = line.strip_prefix('+') else {
+        if line.trim_start().starts_with('-') {
             return Err(FunctionCallError::RespondToModel(format!(
-                "Hashline payload line {line:?} must start with +"
+                "Hashline payload line {line:?} must start with + or be a bare replacement line; - rows are not accepted"
             )));
-        };
-        payload.push(stripped.to_string());
+        }
+        let text = line.strip_prefix('+').unwrap_or(line);
+        payload.push(text.to_string());
         *index += 1;
     }
     Ok(payload)
