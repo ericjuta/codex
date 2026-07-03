@@ -47,6 +47,7 @@ use self::hashline_patch::apply_patch_for_hashline_rename;
 use self::hashline_patch::apply_patch_for_hashline_update;
 use self::hashline_patch::build_hashline_patch_preview;
 use self::hashline_patch::ensure_rename_representable;
+use self::hashline_patch::hashline_patch_is_aborted;
 use self::hashline_patch::parse_anchor_hash;
 use self::hashline_patch::parse_anchor_line;
 use self::hashline_patch::parse_hashline_patch_file_operation;
@@ -320,7 +321,7 @@ fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "patch".to_string(),
                     JsonSchema::string(Some(
-                        "Hashline operations. Use README-style bodies such as SWAP 12:\n+replacement, SWAP 12..14:\n+replacement, DEL 12..14, INS.POST 12:\n+text, INS.HEAD:\n+text, SWAP.BLK 12:\n+replacement block, DEL.BLK 12, INS.BLK.POST 12:\n+block, INS.BLK.PRE 12:\n+block, INS.BLK 12:\n+block, compact forms such as SWAP 12:ab|replacement and INS.TAIL|text, or multiple [path#HASH] sections for existing-file multi-file edits. Sectioned patches also accept REM and MV <path> file ops."
+                        "Hashline operations. Use README-style bodies such as SWAP 12:\n+replacement, SWAP 12..14:\n+replacement, DEL 12..14, INS.POST 12:\n+text, INS.HEAD:\n+text, SWAP.BLK 12:\n+replacement block, DEL.BLK 12, INS.BLK.POST 12:\n+block, INS.BLK.PRE 12:\n+block, INS.BLK 12:\n+block, compact forms such as SWAP 12:ab|replacement and INS.TAIL|text, or multiple [path#HASH] sections for existing-file multi-file edits. Sectioned patches also accept REM, MV <path>, and *** Abort to suppress an embedded patch."
                             .to_string(),
                     )),
                 ),
@@ -770,6 +771,12 @@ async fn handle_patch(
         ));
     };
     let args: PatchArgs = parse_arguments(arguments)?;
+    if hashline_patch_is_aborted(&args.patch) {
+        return Ok(build_hashline_patch_aborted_output(
+            &args.path,
+            args.dry_run.unwrap_or(false),
+        ));
+    }
     let create = args.create.unwrap_or(false);
     let sections = split_hashline_patch_sections(&args.path, &args.patch)?;
     if sections.len() > 1 {
@@ -897,6 +904,25 @@ async fn handle_patch(
             .unwrap_or_else(|err| format!("failed to serialize hashline.patch output: {err}")),
         Some(true),
     )))
+}
+
+fn build_hashline_patch_aborted_output(
+    path: &str,
+    dry_run: bool,
+) -> Box<dyn codex_tools::ToolOutput> {
+    let body = json!({
+        "success": true,
+        "path": path,
+        "operation": "abort",
+        "aborted": true,
+        "dry_run": dry_run,
+    });
+    boxed_tool_output(FunctionToolOutput::from_text(
+        serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+            format!("failed to serialize hashline.patch abort output: {err}")
+        }),
+        Some(true),
+    ))
 }
 
 async fn handle_patch_file_operation(

@@ -120,6 +120,9 @@ pub(super) fn apply_hashline_patch(
     contents: &str,
     patch: &str,
 ) -> Result<String, FunctionCallError> {
+    if hashline_patch_is_aborted(patch) {
+        return Ok(contents.to_string());
+    }
     validate_patch_headers(path, contents, patch)?;
     let operations = parse_hashline_patch(patch)?;
     if operations.iter().any(HashlineOperation::is_file_operation) {
@@ -535,6 +538,12 @@ fn parse_hashline_patch(patch: &str) -> Result<Vec<HashlineOperation>, FunctionC
         operations.push(operation);
     }
     Ok(operations)
+}
+
+pub(super) fn hashline_patch_is_aborted(patch: &str) -> bool {
+    patch
+        .lines()
+        .any(|line| line.trim_end_matches('\r').trim_end() == "*** Abort")
 }
 
 fn is_ignorable_patch_line(line: &str) -> bool {

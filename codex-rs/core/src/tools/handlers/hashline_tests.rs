@@ -15,6 +15,7 @@ use super::hashline_patch::apply_patch_for_hashline_rename;
 use super::hashline_patch::apply_patch_for_hashline_update;
 use super::hashline_patch::apply_patch_for_hashline_updates;
 use super::hashline_patch::build_hashline_patch_preview;
+use super::hashline_patch::hashline_patch_is_aborted;
 use super::hashline_patch::parse_hashline_patch_file_operation;
 use super::hashline_patch::split_hashline_patch_sections;
 use pretty_assertions::assert_eq;
@@ -313,6 +314,16 @@ fn accepts_patch_envelope_markers() {
     .expect("Hashline patch envelope should be ignored");
 
     assert_eq!(updated, "alpha\nbravo\n");
+}
+
+#[test]
+fn abort_marker_suppresses_hashline_patch() {
+    let patch = "*** Begin Patch\nSWAP 2:\n+bravo\n*** Abort\n*** End Patch";
+    let updated = apply_hashline_patch("notes.txt", "alpha\nbeta\n", patch)
+        .expect("abort marker should suppress the embedded patch");
+
+    assert!(hashline_patch_is_aborted(patch));
+    assert_eq!(updated, "alpha\nbeta\n");
 }
 
 #[test]
