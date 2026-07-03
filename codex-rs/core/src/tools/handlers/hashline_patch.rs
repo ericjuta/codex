@@ -33,6 +33,18 @@ pub(super) struct HashlinePatchFileUpdate<'a> {
     pub(super) create: bool,
 }
 
+pub(super) enum HashlinePatchFileMutation<'a> {
+    Update(HashlinePatchFileUpdate<'a>),
+    Remove {
+        path: &'a str,
+    },
+    Rename {
+        path: &'a str,
+        new_path: &'a str,
+        contents: &'a str,
+    },
+}
+
 #[derive(Clone, Copy)]
 struct ChangeBounds {
     old_start: usize,
@@ -91,6 +103,16 @@ enum HashlineOperation {
         anchor: LineAnchor,
         inserted: Vec<String>,
     },
+    RemoveFile,
+    RenameFile {
+        new_path: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum HashlinePatchFileOperation {
+    Remove,
+    Rename { new_path: String },
 }
 
 pub(super) fn apply_hashline_patch(
@@ -100,6 +122,12 @@ pub(super) fn apply_hashline_patch(
 ) -> Result<String, FunctionCallError> {
     validate_patch_headers(path, contents, patch)?;
     let operations = parse_hashline_patch(patch)?;
+    if operations.iter().any(HashlineOperation::is_file_operation) {
+        return Err(FunctionCallError::RespondToModel(
+            "REM and MV are file operations; use a sectioned hashline.patch or the dedicated hashline file tools"
+                .to_string(),
+        ));
+    }
     let mut lines = split_lines_preserve(contents)
         .into_iter()
         .map(ToString::to_string)
@@ -118,6 +146,68 @@ pub(super) fn apply_hashline_patch(
         output.push('\n');
     }
     Ok(output)
+}
+
+pub(super) fn parse_hashline_patch_file_operation(
+    patch: &str,
+) -> Result<Option<HashlinePatchFileOperation>, FunctionCallError> {
+    let operations = parse_hashline_patch(patch)?;
+    let mut file_operation = None;
+    let mut has_line_operation = false;
+    for operation in operations {
+        match operation {
+            HashlineOperation::RemoveFile => {
+                set_file_operation(&mut file_operation, HashlinePatchFileOperation::Remove)?;
+            }
+            HashlineOperation::RenameFile { new_path } => {
+                set_file_operation(
+                    &mut file_operation,
+                    HashlinePatchFileOperation::Rename { new_path },
+                )?;
+            }
+            HashlineOperation::Swap { .. }
+            | HashlineOperation::Delete { .. }
+            | HashlineOperation::InsertBefore { .. }
+            | HashlineOperation::InsertAfter { .. }
+            | HashlineOperation::InsertHead { .. }
+            | HashlineOperation::InsertTail { .. }
+            | HashlineOperation::SwapBlock { .. }
+            | HashlineOperation::DeleteBlock { .. }
+            | HashlineOperation::InsertBlockBefore { .. }
+            | HashlineOperation::InsertBlockAfter { .. } => {
+                has_line_operation = true;
+            }
+        }
+    }
+    if file_operation.is_some() && has_line_operation {
+        return Err(FunctionCallError::RespondToModel(
+            "Hashline file operations REM and MV cannot be combined with line operations in the same file section"
+                .to_string(),
+        ));
+    }
+    Ok(file_operation)
+}
+
+fn set_file_operation(
+    file_operation: &mut Option<HashlinePatchFileOperation>,
+    next_operation: HashlinePatchFileOperation,
+) -> Result<(), FunctionCallError> {
+    if let Some(previous_operation) = file_operation {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "only one Hashline file operation is allowed per file section; found {previous_operation:?} and {next_operation:?}"
+        )));
+    }
+    *file_operation = Some(next_operation);
+    Ok(())
+}
+
+impl HashlineOperation {
+    fn is_file_operation(&self) -> bool {
+        matches!(
+            self,
+            HashlineOperation::RemoveFile | HashlineOperation::RenameFile { .. }
+        )
+    }
 }
 
 pub(super) fn parse_anchor_line(anchor: &str) -> Result<usize, FunctionCallError> {
@@ -429,6 +519,13 @@ fn parse_hashline_patch(patch: &str) -> Result<Vec<HashlineOperation>, FunctionC
                 anchor: parse_line_anchor(rest)?,
                 inserted: collect_payload_lines(&raw_lines, &mut index)?,
             },
+            "REM" => {
+                validate_empty_target(rest, "REM")?;
+                HashlineOperation::RemoveFile
+            }
+            "MV" => HashlineOperation::RenameFile {
+                new_path: parse_move_target(rest)?,
+            },
             _ => {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "unsupported Hashline operation {op}"
@@ -522,6 +619,8 @@ fn is_hashline_operation_line(line: &str) -> bool {
             | "INS.BLK"
             | "INS.BLK.POST"
             | "INS.BLK.PRE"
+            | "REM"
+            | "MV"
     )
 }
 
@@ -532,6 +631,54 @@ fn validate_empty_target(rest: &str, op: &str) -> Result<(), FunctionCallError> 
     }
     Err(FunctionCallError::RespondToModel(format!(
         "{op} does not accept a line target"
+    )))
+}
+
+fn parse_move_target(rest: &str) -> Result<String, FunctionCallError> {
+    let rest = rest.trim().strip_prefix(':').map_or(rest.trim(), str::trim);
+    if rest.is_empty() {
+        return Err(FunctionCallError::RespondToModel(
+            "MV requires a destination path".to_string(),
+        ));
+    }
+    let mut chars = rest.char_indices();
+    let Some((_, first)) = chars.next() else {
+        return Err(FunctionCallError::RespondToModel(
+            "MV requires a destination path".to_string(),
+        ));
+    };
+    if first != '\'' && first != '"' {
+        return Ok(rest.to_string());
+    }
+
+    let mut escaped = false;
+    for (index, ch) in chars {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == first {
+            let after = rest[index + ch.len_utf8()..].trim();
+            if !after.is_empty() {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "invalid MV destination {rest:?}: unexpected trailing text {after:?}"
+                )));
+            }
+            let inner = &rest[first.len_utf8()..index];
+            if inner.is_empty() {
+                return Err(FunctionCallError::RespondToModel(
+                    "MV requires a destination path".to_string(),
+                ));
+            }
+            return Ok(inner.to_string());
+        }
+    }
+    Err(FunctionCallError::RespondToModel(format!(
+        "invalid MV destination {rest:?}: missing closing quote"
     )))
 }
 
@@ -728,6 +875,11 @@ fn apply_operations(
                 }
                 apply_delta_after(&mut shifts, original_span.1, inserted.len() as isize);
             }
+            HashlineOperation::RemoveFile | HashlineOperation::RenameFile { .. } => {
+                return Err(FunctionCallError::RespondToModel(
+                    "REM and MV are file operations, not line operations".to_string(),
+                ));
+            }
         }
     }
     Ok(())
@@ -889,9 +1041,41 @@ pub(super) fn apply_patch_for_hashline_updates(
     updates: &[HashlinePatchFileUpdate<'_>],
     environment_id: Option<&str>,
 ) -> Result<String, FunctionCallError> {
+    let mutations = updates
+        .iter()
+        .map(|update| {
+            HashlinePatchFileMutation::Update(HashlinePatchFileUpdate {
+                path: update.path,
+                old_contents: update.old_contents,
+                new_contents: update.new_contents,
+                create: update.create,
+            })
+        })
+        .collect::<Vec<_>>();
+    apply_patch_for_hashline_mutations(&mutations, environment_id)
+}
+
+pub(super) fn apply_patch_for_hashline_mutations(
+    mutations: &[HashlinePatchFileMutation<'_>],
+    environment_id: Option<&str>,
+) -> Result<String, FunctionCallError> {
     let mut patch = apply_patch_header(environment_id);
-    for update in updates {
-        append_hashline_update_hunk(&mut patch, update)?;
+    for mutation in mutations {
+        match mutation {
+            HashlinePatchFileMutation::Update(update) => {
+                append_hashline_update_hunk(&mut patch, update)?;
+            }
+            HashlinePatchFileMutation::Remove { path } => {
+                append_hashline_remove_hunk(&mut patch, path);
+            }
+            HashlinePatchFileMutation::Rename {
+                path,
+                new_path,
+                contents,
+            } => {
+                append_hashline_rename_hunk(&mut patch, path, new_path, contents)?;
+            }
+        }
     }
     patch.push_str("*** End Patch");
     Ok(patch)
@@ -924,9 +1108,7 @@ fn append_hashline_update_hunk(
 
 pub(super) fn apply_patch_for_hashline_remove(path: &str, environment_id: Option<&str>) -> String {
     let mut patch = apply_patch_header(environment_id);
-    patch.push_str("*** Delete File: ");
-    patch.push_str(path);
-    patch.push('\n');
+    append_hashline_remove_hunk(&mut patch, path);
     patch.push_str("*** End Patch");
     patch
 }
@@ -937,20 +1119,36 @@ pub(super) fn apply_patch_for_hashline_rename(
     contents: &str,
     environment_id: Option<&str>,
 ) -> Result<String, FunctionCallError> {
+    let mut patch = apply_patch_header(environment_id);
+    append_hashline_rename_hunk(&mut patch, path, new_path, contents)?;
+    patch.push_str("*** End Patch");
+    Ok(patch)
+}
+
+fn append_hashline_remove_hunk(patch: &mut String, path: &str) {
+    patch.push_str("*** Delete File: ");
+    patch.push_str(path);
+    patch.push('\n');
+}
+
+fn append_hashline_rename_hunk(
+    patch: &mut String,
+    path: &str,
+    new_path: &str,
+    contents: &str,
+) -> Result<(), FunctionCallError> {
     let Some(first_line) = split_lines_preserve(contents).first().copied() else {
         return Err(FunctionCallError::RespondToModel(format!(
             "hashline.rename_file cannot move empty file {path} through apply_patch"
         )));
     };
-    let mut patch = apply_patch_header(environment_id);
     patch.push_str("*** Update File: ");
     patch.push_str(path);
     patch.push_str("\n*** Move to: ");
     patch.push_str(new_path);
     patch.push_str("\n@@\n");
-    append_apply_patch_line(&mut patch, ' ', first_line);
-    patch.push_str("*** End Patch");
-    Ok(patch)
+    append_apply_patch_line(patch, ' ', first_line);
+    Ok(())
 }
 
 pub(super) fn build_hashline_patch_preview(
@@ -1001,9 +1199,9 @@ pub(super) fn build_hashline_patch_preview(
 
 fn split_hashline_operation(input: &str) -> Result<(&str, &str), FunctionCallError> {
     let line = input.trim_start();
-    let Some(op_end) = line.find(|ch: char| ch.is_whitespace() || ch == '|' || ch == ':') else {
-        return Err(invalid_operation_error(line));
-    };
+    let op_end = line
+        .find(|ch: char| ch.is_whitespace() || ch == '|' || ch == ':')
+        .unwrap_or(line.len());
     let (op, rest) = line.split_at(op_end);
     if op.is_empty() {
         return Err(invalid_operation_error(line));

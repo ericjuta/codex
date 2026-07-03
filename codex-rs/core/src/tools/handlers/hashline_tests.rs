@@ -4,14 +4,18 @@ use super::hashline_block::find_block_span;
 use super::hashline_block::language_for_path;
 use super::hashline_hash::hash_hex;
 use super::hashline_hash::line_hash;
+use super::hashline_patch::HashlinePatchFileMutation;
+use super::hashline_patch::HashlinePatchFileOperation;
 use super::hashline_patch::HashlinePatchFileUpdate;
 use super::hashline_patch::HashlinePatchSection;
 use super::hashline_patch::apply_hashline_patch;
+use super::hashline_patch::apply_patch_for_hashline_mutations;
 use super::hashline_patch::apply_patch_for_hashline_remove;
 use super::hashline_patch::apply_patch_for_hashline_rename;
 use super::hashline_patch::apply_patch_for_hashline_update;
 use super::hashline_patch::apply_patch_for_hashline_updates;
 use super::hashline_patch::build_hashline_patch_preview;
+use super::hashline_patch::parse_hashline_patch_file_operation;
 use super::hashline_patch::split_hashline_patch_sections;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -489,6 +493,57 @@ fn generated_multi_file_patch_uses_one_apply_patch_envelope() {
     assert_eq!(
         patch,
         "*** Begin Patch\n*** Environment ID: env-1\n*** Update File: a.txt\n@@\n-one\n+uno\n*** Update File: b.txt\n@@\n two\n+tres\n*** End Patch"
+    );
+}
+
+#[test]
+fn file_operation_parser_accepts_remove_and_rename() {
+    assert_eq!(
+        parse_hashline_patch_file_operation("REM").expect("REM should parse"),
+        Some(HashlinePatchFileOperation::Remove)
+    );
+    assert_eq!(
+        parse_hashline_patch_file_operation("MV 'new name.txt'").expect("MV should parse"),
+        Some(HashlinePatchFileOperation::Rename {
+            new_path: "new name.txt".to_string(),
+        })
+    );
+}
+
+#[test]
+fn file_operation_parser_rejects_line_ops_in_same_section() {
+    let error = parse_hashline_patch_file_operation("REM\nSWAP 1:\n+omega")
+        .expect_err("file op and line op should not combine");
+
+    assert_eq!(
+        error.to_string(),
+        "Hashline file operations REM and MV cannot be combined with line operations in the same file section"
+    );
+}
+
+#[test]
+fn generated_mixed_file_patch_uses_one_apply_patch_envelope() {
+    let mutations = [
+        HashlinePatchFileMutation::Update(HashlinePatchFileUpdate {
+            path: "a.txt",
+            old_contents: "alpha\nbeta\n",
+            new_contents: "alpha\nbravo\n",
+            create: false,
+        }),
+        HashlinePatchFileMutation::Remove { path: "b.txt" },
+        HashlinePatchFileMutation::Rename {
+            path: "c.txt",
+            new_path: "d.txt",
+            contents: "move me\n",
+        },
+    ];
+    let patch =
+        apply_patch_for_hashline_mutations(&mutations, /*environment_id*/ Some("env-1"))
+            .expect("mixed file patch should be generated");
+
+    assert_eq!(
+        patch,
+        "*** Begin Patch\n*** Environment ID: env-1\n*** Update File: a.txt\n@@\n alpha\n-beta\n+bravo\n*** Delete File: b.txt\n*** Update File: c.txt\n*** Move to: d.txt\n@@\n move me\n*** End Patch"
     );
 }
 

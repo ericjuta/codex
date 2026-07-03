@@ -375,6 +375,91 @@ async fn hashline_patch_applies_multi_file_sections_through_apply_patch() -> any
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_patch_applies_mixed_multi_file_sections_through_apply_patch() -> anyhow::Result<()>
+{
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let update_name = "hashline-mixed-update.txt";
+    let remove_name = "hashline-mixed-remove.txt";
+    let move_name = "hashline-mixed-move.txt";
+    let moved_name = "hashline-mixed-moved.txt";
+    let update_path = test.cwd.path().join(update_name);
+    let remove_path = test.cwd.path().join(remove_name);
+    let move_path = test.cwd.path().join(move_name);
+    let moved_path = test.cwd.path().join(moved_name);
+    let update_contents = "alpha\nbeta\n";
+    let remove_contents = "remove me\n";
+    let move_contents = "move me\n";
+    fs::write(&update_path, update_contents)?;
+    fs::write(&remove_path, remove_contents)?;
+    fs::write(&move_path, move_contents)?;
+    let update_hash = format!("{:04x}", xxh3_64(update_contents.as_bytes()) >> 48);
+    let remove_hash = format!("{:04x}", xxh3_64(remove_contents.as_bytes()) >> 48);
+    let move_hash = format!("{:04x}", xxh3_64(move_contents.as_bytes()) >> 48);
+
+    let call_id = "hashline-mixed-multi-file-call";
+    let patch_args = json!({
+        "path": update_name,
+        "patch": format!(
+            "[{update_name}#{update_hash}]\nSWAP 2:\n+bravo\n[{remove_name}#{remove_hash}]\nREM\n[{move_name}#{move_hash}]\nMV {moved_name}"
+        )
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                "patch",
+                &serde_json::to_string(&patch_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline mixed multi-file patch complete"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, "patch, remove, and move files with hashline").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(fs::read_to_string(update_path)?, "alpha\nbravo\n");
+    assert!(!remove_path.exists());
+    assert!(!move_path.exists());
+    assert_eq!(fs::read_to_string(moved_path)?, move_contents);
+    let request = final_mock.single_request();
+    let patch_output = request
+        .function_call_output_text(call_id)
+        .expect("patch output should be sent to model");
+    assert!(patch_output.contains("\"success\": true"));
+    assert!(patch_output.contains("\"operation\": \"multi_file_operation\""));
+    assert!(patch_output.contains(&format!("\"path\": \"{update_name}\"")));
+    assert!(patch_output.contains(&format!("\"path\": \"{remove_name}\"")));
+    assert!(patch_output.contains(&format!("\"path\": \"{move_name}\"")));
+    assert!(patch_output.contains(&format!("\"new_path\": \"{moved_name}\"")));
+    assert!(patch_output.contains("\"operation\": \"remove_file\""));
+    assert!(patch_output.contains("\"operation\": \"rename_file\""));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hashline_patch_can_create_missing_file() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let test = test_codex()
