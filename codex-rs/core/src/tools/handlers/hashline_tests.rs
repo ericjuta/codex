@@ -285,6 +285,50 @@ fn applies_readme_style_range_swap() {
 }
 
 #[test]
+fn applies_readme_style_hashed_range_anchors() {
+    let original = "alpha\nbeta\ngamma\ndelta\n";
+    let patch = format!(
+        "SWAP 2:{}..3:{}:\n+bravo\n+charlie",
+        line_hash("beta"),
+        line_hash("gamma")
+    );
+
+    let updated = apply_hashline_patch("notes.txt", original, &patch)
+        .expect("hashed range endpoints should apply");
+
+    assert_eq!(updated, "alpha\nbravo\ncharlie\ndelta\n");
+}
+
+#[test]
+fn accepts_reference_range_separators() {
+    let spaced_equals = apply_hashline_patch(
+        "notes.txt",
+        "alpha\nbeta\ngamma\ndelta\n",
+        "SWAP 2 ..= 3:\n+bravo\n+charlie",
+    )
+    .expect("..= range separator should apply");
+    let hyphen = apply_hashline_patch("notes.txt", "alpha\nbeta\ngamma\ndelta\n", "DEL 2-3")
+        .expect("hyphen range separator should apply");
+
+    assert_eq!(spaced_equals, "alpha\nbravo\ncharlie\ndelta\n");
+    assert_eq!(hyphen, "alpha\ndelta\n");
+}
+
+#[test]
+fn rejects_stale_range_end_hash() {
+    let original = "alpha\nbeta\ngamma\ndelta\n";
+    let patch = format!("DEL 2:{}..3:00", line_hash("beta"));
+
+    let error = apply_hashline_patch("notes.txt", original, &patch)
+        .expect_err("stale end hash should reject the range");
+
+    assert!(
+        error.to_string().contains("line 3 hash mismatch"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn applies_readme_style_delete_range() {
     let updated = apply_hashline_patch("notes.txt", "alpha\nbeta\ngamma\ndelta\n", "DEL 2..3")
         .expect("README-style delete range should apply");

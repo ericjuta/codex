@@ -62,7 +62,7 @@ struct LineAnchor {
 #[derive(Debug, Clone)]
 struct LineRange {
     start: LineAnchor,
-    end_line: usize,
+    end: LineAnchor,
 }
 
 #[derive(Debug, Clone)]
@@ -693,33 +693,26 @@ fn parse_move_target(rest: &str) -> Result<String, FunctionCallError> {
 
 fn parse_line_range(input: &str) -> Result<LineRange, FunctionCallError> {
     let normalized = normalize_anchor_target(input);
-    let Some((range_text, expected_hash)) = split_optional_anchor_hash(&normalized) else {
-        return Err(invalid_operation_error(input));
+    let (start, end) = if let Some((start, end)) = split_range_anchor_text(&normalized) {
+        (
+            parse_line_anchor_text(start.trim(), input)?,
+            parse_line_anchor_text(end.trim(), input)?,
+        )
+    } else {
+        let anchor = parse_line_anchor_text(&normalized, input)?;
+        (anchor.clone(), anchor)
     };
-    let (start_text, end_text) = range_text
-        .split_once("..")
-        .map_or((range_text, range_text), |(start, end)| {
-            (start.trim(), end.trim())
-        });
-    let start_line = parse_positive_line_number(start_text, input)?;
-    let end_line = parse_positive_line_number(end_text, input)?;
-    if end_line < start_line {
+    if end.line < start.line {
         return Err(FunctionCallError::RespondToModel(format!(
             "Hashline range {input} ends before it starts"
         )));
     }
-    Ok(LineRange {
-        start: LineAnchor {
-            line: start_line,
-            expected_hash,
-        },
-        end_line,
-    })
+    Ok(LineRange { start, end })
 }
 
 fn parse_line_anchor(input: &str) -> Result<LineAnchor, FunctionCallError> {
     let range = parse_line_range(input)?;
-    if range.start.line != range.end_line {
+    if range.start.line != range.end.line {
         return Err(FunctionCallError::RespondToModel(format!(
             "Hashline insert anchor {input} must be a single line"
         )));
@@ -729,6 +722,28 @@ fn parse_line_anchor(input: &str) -> Result<LineAnchor, FunctionCallError> {
 
 fn normalize_anchor_target(input: &str) -> String {
     input.trim().trim_end_matches(':').trim().to_string()
+}
+
+fn split_range_anchor_text(input: &str) -> Option<(&str, &str)> {
+    if let Some(index) = input.find("..=") {
+        return Some((&input[..index], &input[index + 3..]));
+    }
+    if let Some(index) = input.find("..") {
+        return Some((&input[..index], &input[index + 2..]));
+    }
+    input
+        .find('-')
+        .map(|index| (&input[..index], &input[index + 1..]))
+}
+
+fn parse_line_anchor_text(input: &str, source: &str) -> Result<LineAnchor, FunctionCallError> {
+    let Some((line_text, expected_hash)) = split_optional_anchor_hash(input.trim()) else {
+        return Err(invalid_operation_error(source));
+    };
+    Ok(LineAnchor {
+        line: parse_positive_line_number(line_text, source)?,
+        expected_hash,
+    })
 }
 
 fn split_optional_anchor_hash(input: &str) -> Option<(&str, Option<String>)> {
@@ -779,22 +794,22 @@ fn apply_operations(
             HashlineOperation::Swap { range, replacement } => {
                 validate_range(&original_lines, &deleted, range)?;
                 let start_index = adjusted_index(range.start.line, &shifts)?;
-                let replaced_count = range.end_line - range.start.line + 1;
+                let replaced_count = range.end.line - range.start.line + 1;
                 replace_current_range(lines, start_index, replaced_count, replacement)?;
-                mark_deleted(&mut deleted, range.start.line, range.end_line);
+                mark_deleted(&mut deleted, range.start.line, range.end.line);
                 apply_delta_after(
                     &mut shifts,
-                    range.end_line,
+                    range.end.line,
                     replacement.len() as isize - replaced_count as isize,
                 );
             }
             HashlineOperation::Delete { range } => {
                 validate_range(&original_lines, &deleted, range)?;
                 let start_index = adjusted_index(range.start.line, &shifts)?;
-                let deleted_count = range.end_line - range.start.line + 1;
+                let deleted_count = range.end.line - range.start.line + 1;
                 replace_current_range(lines, start_index, deleted_count, &[])?;
-                mark_deleted(&mut deleted, range.start.line, range.end_line);
-                apply_delta_after(&mut shifts, range.end_line, -(deleted_count as isize));
+                mark_deleted(&mut deleted, range.start.line, range.end.line);
+                apply_delta_after(&mut shifts, range.end.line, -(deleted_count as isize));
             }
             HashlineOperation::InsertBefore { anchor, inserted } => {
                 validate_anchor(&original_lines, &deleted, anchor)?;
@@ -915,15 +930,22 @@ fn validate_range(
     range: &LineRange,
 ) -> Result<(), FunctionCallError> {
     validate_anchor(original_lines, deleted, &range.start)?;
-    if range.end_line > original_lines.len() {
+    if range.end.line > original_lines.len() {
         return Err(FunctionCallError::RespondToModel(format!(
             "line {} is outside file range 1..={}",
-            range.end_line,
+            range.end.line,
             original_lines.len()
         )));
     }
-    for line in range.start.line..=range.end_line {
+    for line in range.start.line..=range.end.line {
         validate_not_deleted(deleted, line, line)?;
+    }
+    if range.end.line != range.start.line {
+        validate_line_hash(
+            original_lines,
+            range.end.line,
+            range.end.expected_hash.as_deref(),
+        )?;
     }
     Ok(())
 }

@@ -55,7 +55,7 @@ Hashline provides:
 | Capability | Reference files | Notes |
 | --- | --- | --- |
 | Snapshot read format | `/tmp/hashline/crates/core/src/commands/read.rs`, `/tmp/hashline/crates/core/src/document.rs`, `/tmp/hashline/crates/core/src/hash.rs` | Emits `[path#HASH]` plus `line:hash|content`; file hash is 4 hex chars from xxh3 top 16 bits; line hash is 2 hex chars from xxh32 low 8 bits. |
-| Patch grammar | `/tmp/hashline/crates/core/src/tokenizer.rs`, `/tmp/hashline/crates/core/src/parser.rs` | Supports `SWAP`, `DEL`, `INS.PRE`, `INS.POST`, `INS.HEAD`, `INS.TAIL`, block operations (`SWAP.BLK`, `DEL.BLK`, `INS.BLK.POST`, `INS.BLK.PRE`, `INS.BLK`), sectioned `REM`/`MV`, envelope markers, and `*** Abort`. |
+| Patch grammar | `/tmp/hashline/crates/core/src/tokenizer.rs`, `/tmp/hashline/crates/core/src/parser.rs` | Supports `SWAP`, `DEL`, `INS.PRE`, `INS.POST`, `INS.HEAD`, `INS.TAIL`, hashed range endpoints such as `SWAP 12:ab..14:cd`, `..=`, and `-` range separators, block operations (`SWAP.BLK`, `DEL.BLK`, `INS.BLK.POST`, `INS.BLK.PRE`, `INS.BLK`), sectioned `REM`/`MV`, envelope markers, and `*** Abort`. |
 | Patch application | `/tmp/hashline/crates/core/src/commands/patch.rs` | Applies parsed edits against current lines and optional per-line expected hashes. |
 | Block finding | `/tmp/hashline/crates/core/src/commands/find_block.rs`, `/tmp/hashline/crates/core/src/block.rs` | Uses extension-driven brace, indent, and Ruby-ish block rules. |
 | CLI/MCP | `/tmp/hashline/crates/core/src/cli.rs`, `/tmp/hashline/crates/core/src/mcp.rs` | Exposes `read`, `patch`, `write`, `find_block`, `remove_file`, and `rename_file`. |
@@ -128,7 +128,7 @@ bodies.
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `path` | string | yes | Default target path when `patch` has no file sections. |
-| `patch` | string | yes | Hashline ops such as `SWAP 12:ab:`, a `[path#HASH]` section plus ops, or multiple `[path#HASH]` sections for existing-file multi-file edits. Sectioned patches also accept reference-style `REM` and `MV <path>` file ops; `*** Abort` suppresses an embedded patch without writing. |
+| `patch` | string | yes | Hashline ops such as `SWAP 12:ab:`, `SWAP 12:ab..14:cd:`, a `[path#HASH]` section plus ops, or multiple `[path#HASH]` sections for existing-file multi-file edits. Sectioned patches also accept reference-style `REM` and `MV <path>` file ops; `*** Abort` suppresses an embedded patch without writing. |
 | `dry_run` | boolean | no | Defaults to false. Validates without writing and returns old/new hashes plus a compact changed-line preview. |
 | `create` | boolean | no | Defaults to false. When true, the target must be missing and the patch is applied to an empty file before routing through `apply_patch` add-file handling. Multi-file sectioned patches require existing files. |
 | `environment_id` | string | only when multiple environments exist | Match `apply_patch` environment selection behavior. |
