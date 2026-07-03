@@ -222,7 +222,7 @@ fn read_tool_spec(multi_environment: bool) -> ResponsesApiTool {
 fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
     ResponsesApiTool {
         name: PATCH_TOOL.to_string(),
-        description: "Apply a single-file Hashline line operation patch. Supported operations: SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, and INS.TAIL, using either README-style + payload bodies or compact |text forms."
+        description: "Apply a single-file Hashline line operation patch. Supported operations: SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, INS.TAIL, SWAP.BLK, DEL.BLK, and INS.BLK.POST, using either README-style + payload bodies or compact |text forms where supported."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -231,7 +231,7 @@ fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "patch".to_string(),
                     JsonSchema::string(Some(
-                        "Hashline operations. Use README-style bodies such as SWAP 12:\n+replacement, SWAP 12..14:\n+replacement, DEL 12..14, INS.POST 12:\n+text, INS.HEAD:\n+text, or compact forms such as SWAP 12:ab|replacement and INS.TAIL|text."
+                        "Hashline operations. Use README-style bodies such as SWAP 12:\n+replacement, SWAP 12..14:\n+replacement, DEL 12..14, INS.POST 12:\n+text, INS.HEAD:\n+text, SWAP.BLK 12:\n+replacement block, DEL.BLK 12, INS.BLK.POST 12:\n+block, or compact forms such as SWAP 12:ab|replacement and INS.TAIL|text."
                             .to_string(),
                     )),
                 ),

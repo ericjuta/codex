@@ -1,6 +1,7 @@
 use crate::function_tool::FunctionCallError;
 use serde::Serialize;
 
+use super::hashline_block::find_block_span;
 use super::hashline_format::split_lines_preserve;
 use super::hashline_hash::hash_hex;
 use super::hashline_hash::line_hash;
@@ -61,6 +62,21 @@ enum HashlineOperation {
     InsertTail {
         inserted: Vec<String>,
     },
+    SwapBlock {
+        anchor: LineAnchor,
+        replacement: Vec<String>,
+    },
+    DeleteBlock {
+        anchor: LineAnchor,
+    },
+    InsertBlockBefore {
+        anchor: LineAnchor,
+        inserted: Vec<String>,
+    },
+    InsertBlockAfter {
+        anchor: LineAnchor,
+        inserted: Vec<String>,
+    },
 }
 
 pub(super) fn apply_hashline_patch(
@@ -81,7 +97,7 @@ pub(super) fn apply_hashline_patch(
         ));
     }
 
-    apply_operations(&mut lines, &operations, contents)?;
+    apply_operations(path, &mut lines, &operations, contents)?;
 
     let mut output = lines.join("\n");
     if contents.ends_with('\n') {
@@ -250,6 +266,21 @@ fn parse_hashline_patch(patch: &str) -> Result<Vec<HashlineOperation>, FunctionC
                     }
                 }
             }
+            "SWAP.BLK" => HashlineOperation::SwapBlock {
+                anchor: parse_line_anchor(rest)?,
+                replacement: collect_payload_lines(&raw_lines, &mut index)?,
+            },
+            "DEL.BLK" => HashlineOperation::DeleteBlock {
+                anchor: parse_line_anchor(rest)?,
+            },
+            "INS.BLK.POST" | "INS.BLK" => HashlineOperation::InsertBlockAfter {
+                anchor: parse_line_anchor(rest)?,
+                inserted: collect_payload_lines(&raw_lines, &mut index)?,
+            },
+            "INS.BLK.PRE" => HashlineOperation::InsertBlockBefore {
+                anchor: parse_line_anchor(rest)?,
+                inserted: collect_payload_lines(&raw_lines, &mut index)?,
+            },
             _ => {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "unsupported Hashline operation {op}"
@@ -304,7 +335,17 @@ fn is_hashline_operation_line(line: &str) -> bool {
     };
     matches!(
         op.to_ascii_uppercase().as_str(),
-        "SWAP" | "DEL" | "INS.PRE" | "INS.POST" | "INS.HEAD" | "INS.TAIL"
+        "SWAP"
+            | "DEL"
+            | "INS.PRE"
+            | "INS.POST"
+            | "INS.HEAD"
+            | "INS.TAIL"
+            | "SWAP.BLK"
+            | "DEL.BLK"
+            | "INS.BLK"
+            | "INS.BLK.POST"
+            | "INS.BLK.PRE"
     )
 }
 
@@ -389,6 +430,7 @@ fn parse_positive_line_number(input: &str, source: &str) -> Result<usize, Functi
 }
 
 fn apply_operations(
+    path: &str,
     lines: &mut Vec<String>,
     operations: &[HashlineOperation],
     original_contents: &str,
@@ -447,9 +489,87 @@ fn apply_operations(
             HashlineOperation::InsertTail { inserted } => {
                 lines.extend(inserted.iter().cloned());
             }
+            HashlineOperation::SwapBlock {
+                anchor,
+                replacement,
+            } => {
+                validate_anchor(&original_lines, &deleted, anchor)?;
+                let original_span = block_span(path, &original_lines, anchor.line)?;
+                validate_not_deleted(&deleted, original_span.0, original_span.1)?;
+                let current_line = adjusted_index(anchor.line, &shifts)?.saturating_add(1);
+                let current_span = block_span(path, lines, current_line)?;
+                replace_current_range(
+                    lines,
+                    current_span.0 - 1,
+                    current_span.1 - current_span.0 + 1,
+                    replacement,
+                )?;
+                mark_deleted(&mut deleted, original_span.0, original_span.1);
+                apply_delta_after(
+                    &mut shifts,
+                    original_span.1,
+                    replacement.len() as isize - (original_span.1 - original_span.0 + 1) as isize,
+                );
+            }
+            HashlineOperation::DeleteBlock { anchor } => {
+                validate_anchor(&original_lines, &deleted, anchor)?;
+                let original_span = block_span(path, &original_lines, anchor.line)?;
+                validate_not_deleted(&deleted, original_span.0, original_span.1)?;
+                let current_line = adjusted_index(anchor.line, &shifts)?.saturating_add(1);
+                let current_span = block_span(path, lines, current_line)?;
+                replace_current_range(
+                    lines,
+                    current_span.0 - 1,
+                    current_span.1 - current_span.0 + 1,
+                    &[],
+                )?;
+                mark_deleted(&mut deleted, original_span.0, original_span.1);
+                apply_delta_after(
+                    &mut shifts,
+                    original_span.1,
+                    -((original_span.1 - original_span.0 + 1) as isize),
+                );
+            }
+            HashlineOperation::InsertBlockBefore { anchor, inserted } => {
+                validate_anchor(&original_lines, &deleted, anchor)?;
+                let original_span = block_span(path, &original_lines, anchor.line)?;
+                validate_not_deleted(&deleted, original_span.0, original_span.1)?;
+                let current_line = adjusted_index(anchor.line, &shifts)?.saturating_add(1);
+                let current_span = block_span(path, lines, current_line)?;
+                for (offset, line) in inserted.iter().enumerate() {
+                    lines.insert(current_span.0 - 1 + offset, line.clone());
+                }
+                apply_delta_from(&mut shifts, original_span.0, inserted.len() as isize);
+            }
+            HashlineOperation::InsertBlockAfter { anchor, inserted } => {
+                validate_anchor(&original_lines, &deleted, anchor)?;
+                let original_span = block_span(path, &original_lines, anchor.line)?;
+                validate_not_deleted(&deleted, original_span.0, original_span.1)?;
+                let current_line = adjusted_index(anchor.line, &shifts)?.saturating_add(1);
+                let current_span = block_span(path, lines, current_line)?;
+                for (offset, line) in inserted.iter().enumerate() {
+                    lines.insert(current_span.1 + offset, line.clone());
+                }
+                apply_delta_after(&mut shifts, original_span.1, inserted.len() as isize);
+            }
         }
     }
     Ok(())
+}
+
+fn block_span(
+    path: &str,
+    lines: &[String],
+    anchor_line: usize,
+) -> Result<(usize, usize), FunctionCallError> {
+    if anchor_line == 0 || anchor_line > lines.len().max(1) {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "block anchor line {anchor_line} is outside file range 1..={}",
+            lines.len()
+        )));
+    }
+    let refs = lines.iter().map(String::as_str).collect::<Vec<_>>();
+    Ok(find_block_span(path, &refs, anchor_line))
 }
 
 fn validate_range(
@@ -466,6 +586,17 @@ fn validate_range(
         )));
     }
     for line in range.start.line..=range.end_line {
+        validate_not_deleted(deleted, line, line)?;
+    }
+    Ok(())
+}
+
+fn validate_not_deleted(
+    deleted: &[bool],
+    start_line: usize,
+    end_line: usize,
+) -> Result<(), FunctionCallError> {
+    for line in start_line..=end_line {
         if deleted[line - 1] {
             return Err(FunctionCallError::RespondToModel(format!(
                 "line {line} has already been deleted by an earlier Hashline operation"

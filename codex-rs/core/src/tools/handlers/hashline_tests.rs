@@ -172,6 +172,47 @@ fn subsequent_operations_use_original_line_anchors() {
 }
 
 #[test]
+fn applies_swap_block_operation() {
+    let original = "fn hello() {\n    let x = 1;\n}\n";
+
+    let updated = apply_hashline_patch(
+        "src/main.rs",
+        original,
+        "SWAP.BLK 1:\n+fn replaced() {\n+    let y = 2;\n+}",
+    )
+    .expect("SWAP.BLK should replace the resolved block");
+
+    assert_eq!(updated, "fn replaced() {\n    let y = 2;\n}\n");
+}
+
+#[test]
+fn applies_delete_block_operation() {
+    let original = "fn hello() {\n    let x = 1;\n}\nfn keep() {}\n";
+
+    let updated = apply_hashline_patch("src/main.rs", original, "DEL.BLK 1")
+        .expect("DEL.BLK should delete the resolved block");
+
+    assert_eq!(updated, "fn keep() {}\n");
+}
+
+#[test]
+fn applies_insert_block_post_operation() {
+    let original = "fn hello() {\n    let x = 1;\n}\n";
+
+    let updated = apply_hashline_patch(
+        "src/main.rs",
+        original,
+        "INS.BLK.POST 1:\n+fn world() {\n+    let y = 2;\n+}",
+    )
+    .expect("INS.BLK.POST should insert after the resolved block");
+
+    assert_eq!(
+        updated,
+        "fn hello() {\n    let x = 1;\n}\nfn world() {\n    let y = 2;\n}\n"
+    );
+}
+
+#[test]
 fn generated_update_patch_is_localized() {
     let original = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\n";
     let updated = "one\ntwo\nthree\nfour\nFIVE\nsix\nseven\neight\nnine\n";
