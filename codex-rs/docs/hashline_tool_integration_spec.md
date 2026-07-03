@@ -105,6 +105,9 @@ Successful dry runs for write, patch, remove, and rename tools include
 `"success": true` with `"dry_run": true`. Multi-file patch dry runs also mark
 each per-file entry with `"success": true`.
 
+Empty-file reads and refreshed empty write/create outputs return no line range:
+`start_line` and `end_line` are `null`, with empty `content` and `lines`.
+
 ### Arguments
 
 The advertised Codex argument names remain `path` and `new_path`, but handlers

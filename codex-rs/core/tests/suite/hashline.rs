@@ -981,6 +981,8 @@ async fn hashline_write_creates_empty_file_through_apply_patch() -> anyhow::Resu
     assert!(write_output.contains("\"success\": true"));
     assert!(write_output.contains(&format!("\"header\": \"[{file_name}#")));
     assert!(write_output.contains("\"operation\": \"create\""));
+    assert!(write_output.contains("\"start_line\": null"));
+    assert!(write_output.contains("\"end_line\": null"));
     assert!(write_output.contains("\"total_lines\": 0"));
     assert!(write_output.contains("\"content\": \"\""));
     Ok(())

@@ -543,19 +543,31 @@ fn build_hashline_read_body(
     max_lines: usize,
 ) -> Value {
     let total_lines = count_lines(contents);
-    let max_lines = max_lines.clamp(1, HARD_READ_MAX_LINES);
-    let start_line = start_line.max(1);
-    let requested_end_line = requested_end_line
-        .unwrap_or_else(|| total_lines.max(start_line))
-        .max(start_line);
-    let end_line = requested_end_line
-        .min(start_line.saturating_add(max_lines).saturating_sub(1))
-        .min(total_lines.max(1));
-    let truncated = requested_end_line > end_line || end_line < total_lines;
-    let next_start_line = truncated.then_some(end_line.saturating_add(1));
     let path_hash = hash_hex(contents, 4);
-    let content = format_hashline_excerpt(contents, start_line, end_line);
-    let lines = build_hashline_line_rows(contents, start_line, end_line);
+    let (start_line, end_line, truncated, next_start_line, content, lines) = if total_lines == 0 {
+        (None, None, false, None, String::new(), Vec::new())
+    } else {
+        let max_lines = max_lines.clamp(1, HARD_READ_MAX_LINES);
+        let start_line = start_line.max(1);
+        let requested_end_line = requested_end_line
+            .unwrap_or_else(|| total_lines.max(start_line))
+            .max(start_line);
+        let end_line = requested_end_line
+            .min(start_line.saturating_add(max_lines).saturating_sub(1))
+            .min(total_lines.max(1));
+        let truncated = requested_end_line > end_line || end_line < total_lines;
+        let next_start_line = truncated.then_some(end_line.saturating_add(1));
+        let content = format_hashline_excerpt(contents, start_line, end_line);
+        let lines = build_hashline_line_rows(contents, start_line, end_line);
+        (
+            Some(start_line),
+            Some(end_line),
+            truncated,
+            next_start_line,
+            content,
+            lines,
+        )
+    };
     json!({
         "path": path,
         "hash": path_hash,

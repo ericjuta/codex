@@ -214,6 +214,34 @@ fn read_body_normalizes_model_visible_rows() {
 }
 
 #[test]
+fn read_body_reports_empty_file_without_line_range() {
+    let body = build_hashline_read_body(
+        "empty.txt",
+        "",
+        /*start_line*/ 1,
+        /*requested_end_line*/ None,
+        /*max_lines*/ 200,
+    );
+
+    let empty_hash = hash_hex("", 4);
+    assert_eq!(
+        body,
+        json!({
+            "path": "empty.txt",
+            "hash": empty_hash,
+            "header": format!("[empty.txt#{empty_hash}]"),
+            "start_line": null,
+            "end_line": null,
+            "total_lines": 0,
+            "truncated": false,
+            "next_start_line": null,
+            "content": "",
+            "lines": [],
+        })
+    );
+}
+
+#[test]
 fn tool_args_accept_reference_path_aliases() {
     let read: super::ReadArgs = serde_json::from_value(json!({
         "file": "notes.txt",
