@@ -18,6 +18,7 @@ use super::hashline_patch::apply_patch_for_hashline_update;
 use super::hashline_patch::apply_patch_for_hashline_updates;
 use super::hashline_patch::build_hashline_patch_preview;
 use super::hashline_patch::hashline_patch_is_aborted;
+use super::hashline_patch::hashline_patch_warnings;
 use super::hashline_patch::parse_hashline_patch_file_operation;
 use super::hashline_patch::split_hashline_patch_sections;
 use super::resolve_find_block_anchor;
@@ -80,6 +81,24 @@ fn accepts_single_hex_line_hash_anchor() {
         .expect("one-hex line hash should validate as the same numeric hash");
 
     assert_eq!(updated, "omega\n");
+}
+
+#[test]
+fn patch_warnings_report_bare_line_anchors() {
+    let warnings = hashline_patch_warnings("SWAP 2:\n+bravo\nINS.POST 3:ab|delta")
+        .expect("warnings should be computed");
+
+    assert_eq!(
+        warnings,
+        vec![
+            "hashline.patch used bare line anchors; prefer line:hash anchors from hashline.read when editing existing files".to_string()
+        ]
+    );
+    assert_eq!(
+        hashline_patch_warnings("SWAP 2:ab|bravo\nINS.TAIL|omega")
+            .expect("warnings should be computed"),
+        Vec::<String>::new()
+    );
 }
 
 #[test]

@@ -9,6 +9,7 @@ use super::hashline_hash::normalize_file_text;
 
 const APPLY_PATCH_CONTEXT_LINES: usize = 3;
 const PATCH_PREVIEW_MAX_LINES: usize = 40;
+const BARE_LINE_ANCHOR_WARNING: &str = "hashline.patch used bare line anchors; prefer line:hash anchors from hashline.read when editing existing files";
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
 pub(super) struct HashlinePatchPreview {
@@ -231,6 +232,36 @@ impl HashlineOperation {
             self,
             HashlineOperation::RemoveFile | HashlineOperation::RenameFile { .. }
         )
+    }
+
+    fn uses_bare_line_anchor(&self) -> bool {
+        match self {
+            HashlineOperation::Swap { range, .. } | HashlineOperation::Delete { range } => {
+                range.start.expected_hash.is_none() || range.end.expected_hash.is_none()
+            }
+            HashlineOperation::InsertBefore { anchor, .. }
+            | HashlineOperation::InsertAfter { anchor, .. }
+            | HashlineOperation::SwapBlock { anchor, .. }
+            | HashlineOperation::DeleteBlock { anchor }
+            | HashlineOperation::InsertBlockBefore { anchor, .. }
+            | HashlineOperation::InsertBlockAfter { anchor, .. } => anchor.expected_hash.is_none(),
+            HashlineOperation::InsertHead { .. }
+            | HashlineOperation::InsertTail { .. }
+            | HashlineOperation::RemoveFile
+            | HashlineOperation::RenameFile { .. } => false,
+        }
+    }
+}
+
+pub(super) fn hashline_patch_warnings(patch: &str) -> Result<Vec<String>, FunctionCallError> {
+    let operations = parse_hashline_patch(patch)?;
+    if operations
+        .iter()
+        .any(HashlineOperation::uses_bare_line_anchor)
+    {
+        Ok(vec![BARE_LINE_ANCHOR_WARNING.to_string()])
+    } else {
+        Ok(Vec::new())
     }
 }
 

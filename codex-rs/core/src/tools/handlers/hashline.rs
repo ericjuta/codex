@@ -48,6 +48,7 @@ use self::hashline_patch::apply_patch_for_hashline_rename;
 use self::hashline_patch::apply_patch_for_hashline_update;
 use self::hashline_patch::build_hashline_patch_preview;
 use self::hashline_patch::hashline_patch_is_aborted;
+use self::hashline_patch::hashline_patch_warnings;
 use self::hashline_patch::parse_anchor_hash;
 use self::hashline_patch::parse_anchor_line;
 use self::hashline_patch::parse_hashline_patch_file_operation;
@@ -175,6 +176,7 @@ enum PreparedHashlinePatchFile {
         old_contents: String,
         new_contents: String,
         new_hash: String,
+        warnings: Vec<String>,
         create: bool,
     },
     Remove {
@@ -947,6 +949,7 @@ async fn handle_patch(
     if create && !patched.is_empty() && !patched.ends_with('\n') {
         patched.push('\n');
     }
+    let warnings = hashline_patch_warnings(&section.patch)?;
     let new_hash = hash_hex(&patched, 4);
     let apply_patch_text = apply_patch_for_hashline_update(
         target_path,
@@ -958,7 +961,7 @@ async fn handle_patch(
 
     if args.dry_run.unwrap_or(false) {
         let preview = build_hashline_patch_preview_or_none(&contents, &patched, create)?;
-        let body = json!({
+        let mut body = json!({
             "path": target_path,
             "dry_run": true,
             "operation": if create { "create" } else { "update" },
@@ -966,6 +969,7 @@ async fn handle_patch(
             "new_hash": new_hash,
             "preview": preview,
         });
+        add_hashline_warnings(&mut body, &warnings);
         return Ok(boxed_tool_output(FunctionToolOutput::from_text(
             serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
                 format!("failed to serialize hashline.patch dry-run output: {err}")
@@ -998,8 +1002,9 @@ async fn handle_patch(
     )
     .await?;
 
-    let body =
+    let mut body =
         build_hashline_patch_success_body(target_path, &contents, &written_contents, create)?;
+    add_hashline_warnings(&mut body, &warnings);
     Ok(boxed_tool_output(FunctionToolOutput::from_text(
         serde_json::to_string_pretty(&body)
             .unwrap_or_else(|err| format!("failed to serialize hashline.patch output: {err}")),
@@ -1250,11 +1255,13 @@ async fn handle_multi_file_patch(
             new_contents.push('\n');
         }
         let new_hash = hash_hex(&new_contents, 4);
+        let warnings = hashline_patch_warnings(&section.patch)?;
         prepared_files.push(PreparedHashlinePatchFile::Update {
             path: section.path.clone(),
             old_contents,
             new_contents,
             new_hash,
+            warnings,
             create,
         });
     }
@@ -1282,17 +1289,20 @@ async fn handle_multi_file_patch(
                     old_contents,
                     new_contents,
                     new_hash,
+                    warnings,
                     create,
                 } => {
                     let preview =
                         build_hashline_patch_preview_or_none(old_contents, new_contents, *create)?;
-                    Ok(json!({
+                    let mut body = json!({
                         "path": path,
                         "operation": if *create { "create" } else { "update" },
                         "old_hash": hash_hex(old_contents, 4),
                         "new_hash": new_hash,
                         "preview": preview,
-                    }))
+                    });
+                    add_hashline_warnings(&mut body, warnings);
+                    Ok(body)
                 }
                 PreparedHashlinePatchFile::Remove { path, old_hash, .. } => Ok(json!({
                     "path": path,
@@ -1378,6 +1388,7 @@ async fn handle_multi_file_patch(
                 old_contents,
                 new_contents,
                 new_hash,
+                warnings,
                 create,
             } => {
                 let written_contents = read_selected_file_after_update(
@@ -1390,12 +1401,14 @@ async fn handle_multi_file_patch(
                     "hashline.patch",
                 )
                 .await?;
-                files.push(build_hashline_patch_success_body(
+                let mut body = build_hashline_patch_success_body(
                     path,
                     old_contents,
                     &written_contents,
                     *create,
-                )?);
+                )?;
+                add_hashline_warnings(&mut body, warnings);
+                files.push(body);
             }
             PreparedHashlinePatchFile::Remove { path, old_hash, .. } => {
                 ensure_selected_file_missing(
@@ -1528,6 +1541,15 @@ fn build_hashline_patch_success_body(
         "lines": lines,
         "preview": preview,
     }))
+}
+
+fn add_hashline_warnings(body: &mut Value, warnings: &[String]) {
+    if warnings.is_empty() {
+        return;
+    }
+    if let Some(body_object) = body.as_object_mut() {
+        body_object.insert("warnings".to_string(), json!(warnings));
+    }
 }
 
 fn apply_hashline_patch_or_create_empty(

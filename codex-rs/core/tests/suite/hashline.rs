@@ -174,6 +174,8 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
     assert!(patch_output.contains("\"operation\": \"update\""));
     assert!(patch_output.contains("|bravo"));
     assert!(!patch_output.contains("\\r"));
+    assert!(patch_output.contains("\"warnings\""));
+    assert!(patch_output.contains("line:hash anchors"));
     assert!(patch_output.contains("\"preview\""));
 
     Ok(())
