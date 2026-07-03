@@ -330,16 +330,19 @@ fn parse_patch_file_header(
             "invalid Hashline file header {line}; expected [{target_path}#HASH]"
         )));
     };
-    let Some((header_path, expected_hash)) = header.rsplit_once('#') else {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "invalid Hashline file header {line}; expected [{target_path}#HASH]"
-        )));
+    let (header_path, expected_hash) = match header.rsplit_once('#') {
+        Some((header_path, expected_hash)) => {
+            validate_hash_token(header_path, expected_hash)?;
+            (header_path, Some(expected_hash.to_ascii_lowercase()))
+        }
+        None => (header, None),
     };
-    validate_hash_token(header_path, expected_hash)?;
-    Ok(Some((
-        header_path.to_string(),
-        Some(expected_hash.to_ascii_lowercase()),
-    )))
+    if header_path.trim().is_empty() || header_path.contains('#') {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "invalid Hashline file header {line}; expected [{target_path}#HASH] or [{target_path}]"
+        )));
+    }
+    Ok(Some((header_path.to_string(), expected_hash)))
 }
 
 fn merge_section_hash(

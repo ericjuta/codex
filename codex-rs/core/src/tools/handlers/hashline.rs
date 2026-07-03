@@ -168,6 +168,7 @@ enum PreparedHashlinePatchFile {
         old_contents: String,
         new_contents: String,
         new_hash: String,
+        create: bool,
     },
     Remove {
         path: String,
@@ -184,6 +185,10 @@ enum PreparedHashlinePatchFile {
 impl PreparedHashlinePatchFile {
     fn is_update(&self) -> bool {
         matches!(self, PreparedHashlinePatchFile::Update { .. })
+    }
+
+    fn is_create(&self) -> bool {
+        matches!(self, PreparedHashlinePatchFile::Update { create: true, .. })
     }
 }
 
@@ -312,7 +317,7 @@ fn write_tool_spec(multi_environment: bool) -> ResponsesApiTool {
 fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
     ResponsesApiTool {
         name: PATCH_TOOL.to_string(),
-        description: "Apply a Hashline line operation patch. Supports one target file by default, or multiple existing files when the patch is split into [path#HASH] sections. Supported operations: SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, INS.TAIL, SWAP.BLK, DEL.BLK, INS.BLK.POST, INS.BLK.PRE, INS.BLK, and sectioned REM/MV file ops, using either README-style + payload bodies or compact |text forms where supported."
+        description: "Apply a Hashline line operation patch. Supports one target file by default, multiple existing files when split into [path#HASH] sections, or multiple missing files with create=true and [path] sections. Supported operations: SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, INS.TAIL, SWAP.BLK, DEL.BLK, INS.BLK.POST, INS.BLK.PRE, INS.BLK, and sectioned REM/MV file ops, using either README-style + payload bodies or compact |text forms where supported."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -321,7 +326,7 @@ fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "patch".to_string(),
                     JsonSchema::string(Some(
-                        "Hashline operations. Use README-style bodies such as SWAP 12:\n+replacement, SWAP 12:ab..14:cd:\n+replacement, DEL 12..=14, DEL 12-14, INS.POST 12:\n+text, INS.HEAD:\n+text, SWAP.BLK 12:\n+replacement block, DEL.BLK 12, INS.BLK.POST 12:\n+block, INS.BLK.PRE 12:\n+block, INS.BLK 12:\n+block, compact forms such as SWAP 12:ab|replacement and INS.TAIL|text, or multiple [path#HASH] sections for existing-file multi-file edits. In payload bodies, use ++ for literal + and +- for literal -. Sectioned patches also accept REM, MV <path>, and *** Abort to suppress an embedded patch."
+                        "Hashline operations. Use README-style bodies such as SWAP 12:\n+replacement, SWAP 12:ab..14:cd:\n+replacement, DEL 12..=14, DEL 12-14, INS.POST 12:\n+text, INS.HEAD:\n+text, SWAP.BLK 12:\n+replacement block, DEL.BLK 12, INS.BLK.POST 12:\n+block, INS.BLK.PRE 12:\n+block, INS.BLK 12:\n+block, compact forms such as SWAP 12:ab|replacement and INS.TAIL|text, [path#HASH] sections for existing-file multi-file edits, or [path] sections with create=true for missing files. In payload bodies, use ++ for literal + and +- for literal -. Sectioned patches also accept REM, MV <path>, and *** Abort to suppress an embedded patch."
                             .to_string(),
                     )),
                 ),
@@ -335,7 +340,7 @@ fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "create".to_string(),
                     JsonSchema::boolean(Some(
-                        "Create a missing target file. When true, the target must not already exist."
+                        "Create missing target files. When true, every target must not already exist; use [path] sections for multi-file creation."
                             .to_string(),
                     )),
                 ),
@@ -832,11 +837,6 @@ async fn handle_patch(
     let create = args.create.unwrap_or(false);
     let sections = split_hashline_patch_sections(&args.path, &args.patch)?;
     if sections.len() > 1 {
-        if create {
-            return Err(FunctionCallError::RespondToModel(
-                "hashline.patch create=true is only supported for a single target file".to_string(),
-            ));
-        }
         return handle_multi_file_patch(&invocation, &args, &sections, multi_environment).await;
     }
 
@@ -1122,14 +1122,32 @@ async fn handle_multi_file_patch(
     multi_environment: bool,
 ) -> Result<Box<dyn codex_tools::ToolOutput>, FunctionCallError> {
     let mut prepared_files = Vec::new();
+    let create = args.create.unwrap_or(false);
     for section in sections {
-        let old_contents = read_selected_file(
-            invocation.turn.as_ref(),
-            invocation.step_context.as_ref(),
-            &section.path,
-            args.environment_id.as_deref(),
-        )
-        .await?;
+        if create && section.expected_hash.is_some() {
+            return Err(FunctionCallError::RespondToModel(
+                "hashline.patch create=true cannot use [path#HASH] section headers because every target file must be missing"
+                    .to_string(),
+            ));
+        }
+        let old_contents = if create {
+            ensure_selected_file_missing(
+                invocation.turn.as_ref(),
+                invocation.step_context.as_ref(),
+                &section.path,
+                args.environment_id.as_deref(),
+            )
+            .await?;
+            String::new()
+        } else {
+            read_selected_file(
+                invocation.turn.as_ref(),
+                invocation.step_context.as_ref(),
+                &section.path,
+                args.environment_id.as_deref(),
+            )
+            .await?
+        };
         validate_file_hash(
             &section.path,
             &old_contents,
@@ -1137,6 +1155,11 @@ async fn handle_multi_file_patch(
         )?;
 
         if let Some(file_operation) = parse_hashline_patch_file_operation(&section.patch)? {
+            if create {
+                return Err(FunctionCallError::RespondToModel(
+                    "hashline.patch create=true cannot be combined with REM or MV".to_string(),
+                ));
+            }
             match file_operation {
                 HashlinePatchFileOperation::Remove => {
                     let old_hash = hash_hex(&old_contents, 4);
@@ -1166,17 +1189,26 @@ async fn handle_multi_file_patch(
             continue;
         }
 
-        let new_contents = apply_hashline_patch(&section.path, &old_contents, &section.patch)?;
+        let mut new_contents = apply_hashline_patch(&section.path, &old_contents, &section.patch)?;
+        if create && !new_contents.is_empty() && !new_contents.ends_with('\n') {
+            new_contents.push('\n');
+        }
         let new_hash = hash_hex(&new_contents, 4);
         prepared_files.push(PreparedHashlinePatchFile::Update {
             path: section.path.clone(),
             old_contents,
             new_contents,
             new_hash,
+            create,
         });
     }
 
     let operation = if prepared_files
+        .iter()
+        .all(PreparedHashlinePatchFile::is_create)
+    {
+        "multi_file_create"
+    } else if prepared_files
         .iter()
         .all(PreparedHashlinePatchFile::is_update)
     {
@@ -1194,11 +1226,12 @@ async fn handle_multi_file_patch(
                     old_contents,
                     new_contents,
                     new_hash,
+                    create,
                 } => {
                     let preview = build_hashline_patch_preview(old_contents, new_contents)?;
                     Ok(json!({
                         "path": path,
-                        "operation": "update",
+                        "operation": if *create { "create" } else { "update" },
                         "old_hash": hash_hex(old_contents, 4),
                         "new_hash": new_hash,
                         "preview": preview,
@@ -1242,12 +1275,13 @@ async fn handle_multi_file_patch(
                 path,
                 old_contents,
                 new_contents,
+                create,
                 ..
             } => HashlinePatchFileMutation::Update(HashlinePatchFileUpdate {
                 path,
                 old_contents,
                 new_contents,
-                create: false,
+                create: *create,
             }),
             PreparedHashlinePatchFile::Remove { path, .. } => {
                 HashlinePatchFileMutation::Remove { path }
@@ -1284,6 +1318,7 @@ async fn handle_multi_file_patch(
                 path,
                 old_contents,
                 new_hash,
+                create,
                 ..
             } => {
                 let written_contents = read_selected_file(
@@ -1303,7 +1338,7 @@ async fn handle_multi_file_patch(
                     path,
                     old_contents,
                     &written_contents,
-                    /*create*/ false,
+                    *create,
                 )?);
             }
             PreparedHashlinePatchFile::Remove { path, old_hash, .. } => {

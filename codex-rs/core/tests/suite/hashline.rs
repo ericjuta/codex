@@ -583,6 +583,74 @@ async fn hashline_patch_can_create_missing_file() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_patch_can_create_multi_file_sections() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let first_name = "hashline-created-a.txt";
+    let second_name = "hashline-created-b.txt";
+    let first_path = test.cwd.path().join(first_name);
+    let second_path = test.cwd.path().join(second_name);
+
+    let call_id = "hashline-multi-create-call";
+    let patch_args = json!({
+        "path": first_name,
+        "patch": format!(
+            "[{first_name}]\nINS.TAIL |created alpha\n[{second_name}]\nINS.TAIL:\n+created beta"
+        ),
+        "create": true
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                "patch",
+                &serde_json::to_string(&patch_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline files created"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, "create both files with hashline").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(fs::read_to_string(first_path)?, "created alpha\n");
+    assert_eq!(fs::read_to_string(second_path)?, "created beta\n");
+    let request = final_mock.single_request();
+    let patch_output = request
+        .function_call_output_text(call_id)
+        .expect("patch output should be sent to model");
+    assert!(patch_output.contains("\"success\": true"));
+    assert!(patch_output.contains("\"operation\": \"multi_file_create\""));
+    assert!(patch_output.contains(&format!("\"header\": \"[{first_name}#")));
+    assert!(patch_output.contains(&format!("\"header\": \"[{second_name}#")));
+    assert!(patch_output.contains("|created alpha"));
+    assert!(patch_output.contains("|created beta"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hashline_patch_create_rejects_existing_file() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let test = test_codex()

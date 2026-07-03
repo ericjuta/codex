@@ -223,6 +223,31 @@ fn patch_rejects_wrong_file_header_path() {
 }
 
 #[test]
+fn patch_sections_accept_optional_file_hashes() {
+    let sections = split_hashline_patch_sections(
+        "fallback.txt",
+        "[created.txt]\nINS.TAIL:\n+new\n[existing.txt#abcd]\nDEL 1",
+    )
+    .expect("optional file-hash sections should parse");
+
+    assert_eq!(
+        sections,
+        vec![
+            HashlinePatchSection {
+                path: "created.txt".to_string(),
+                expected_hash: None,
+                patch: "INS.TAIL:\n+new".to_string(),
+            },
+            HashlinePatchSection {
+                path: "existing.txt".to_string(),
+                expected_hash: Some("abcd".to_string()),
+                patch: "DEL 1".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
 fn single_file_applier_rejects_multi_file_sections_with_clear_message() {
     let original = "alpha\nbeta\n";
     let patch = format!(
