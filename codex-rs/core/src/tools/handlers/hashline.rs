@@ -647,10 +647,7 @@ async fn handle_write(
         )
         .await?
     };
-    let mut write_contents = normalize_file_text(&args.content);
-    if create && !write_contents.is_empty() && !write_contents.ends_with('\n') {
-        write_contents.push('\n');
-    }
+    let write_contents = normalize_file_text(&args.content);
     let operation = if create { "create" } else { "update" };
     let new_hash = hash_hex(&write_contents, 4);
     if args.dry_run.unwrap_or(false) {
@@ -1082,11 +1079,8 @@ async fn handle_patch(
         }
     }
 
-    let mut patched =
+    let patched =
         apply_hashline_patch_or_create_empty(target_path, &contents, &section.patch, create)?;
-    if create && !patched.is_empty() && !patched.ends_with('\n') {
-        patched.push('\n');
-    }
     let warnings = hashline_patch_warnings(&section.patch)?;
     let new_hash = hash_hex(&patched, 4);
     let apply_patch_text = apply_patch_for_hashline_update(
@@ -1403,15 +1397,12 @@ async fn handle_multi_file_patch(
             continue;
         }
 
-        let mut new_contents = apply_hashline_patch_or_create_empty(
+        let new_contents = apply_hashline_patch_or_create_empty(
             &section.path,
             &old_contents,
             &section.patch,
             create,
         )?;
-        if create && !new_contents.is_empty() && !new_contents.ends_with('\n') {
-            new_contents.push('\n');
-        }
         let new_hash = hash_hex(&new_contents, 4);
         let warnings = hashline_patch_warnings(&section.patch)?;
         prepared_files.push(PreparedHashlinePatchFile::Update {
@@ -2071,7 +2062,10 @@ async fn read_selected_file_after_update(
 ) -> Result<String, FunctionCallError> {
     let written_contents = read_selected_file(turn, step_context, path, environment_id).await?;
     let written_hash = hash_hex(&written_contents, 4);
-    if written_hash != expected_hash {
+    // apply_patch materializes a final LF; Hashline preserves exact EOF shape.
+    let apply_patch_added_trailing_newline = !expected_contents.ends_with('\n')
+        && written_contents.strip_suffix('\n') == Some(expected_contents);
+    if written_hash != expected_hash && !apply_patch_added_trailing_newline {
         return Err(FunctionCallError::RespondToModel(format!(
             "{operation} applied but post-write file hash for {path} was {written_hash}, expected {expected_hash}"
         )));

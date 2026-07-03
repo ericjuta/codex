@@ -854,7 +854,7 @@ async fn hashline_patch_can_create_missing_file() -> anyhow::Result<()> {
     })
     .await;
 
-    assert_eq!(fs::read_to_string(file_path)?, "created by hashline\n");
+    assert_eq!(fs::read_to_string(file_path)?, "created by hashline");
     let request = final_mock.single_request();
     let patch_output = request
         .function_call_output_text(call_id)
@@ -922,7 +922,7 @@ async fn hashline_patch_can_create_multi_file_sections() -> anyhow::Result<()> {
 
     assert!(first_path.exists());
     assert_eq!(fs::metadata(&first_path)?.len(), 0);
-    assert_eq!(fs::read_to_string(second_path)?, "created beta\n");
+    assert_eq!(fs::read_to_string(second_path)?, "created beta");
     let request = final_mock.single_request();
     let patch_output = request
         .function_call_output_text(call_id)
@@ -1107,7 +1107,7 @@ async fn hashline_write_creates_missing_file_through_apply_patch() -> anyhow::Re
     })
     .await;
 
-    assert_eq!(fs::read_to_string(file_path)?, "alpha\nbeta\n");
+    assert_eq!(fs::read_to_string(file_path)?, "alpha\nbeta");
     let request = final_mock.single_request();
     let write_output = request
         .function_call_output_text(call_id)
@@ -1197,7 +1197,7 @@ async fn hashline_write_overwrites_existing_file_with_force() -> anyhow::Result<
     let call_id = "hashline-write-force-call";
     let write_args = json!({
         "path": file_name,
-        "content": "omega\r\ntheta\n",
+        "content": "omega\r\ntheta",
         "force": true
     });
     mount_sse_once(
@@ -1230,7 +1230,7 @@ async fn hashline_write_overwrites_existing_file_with_force() -> anyhow::Result<
     })
     .await;
 
-    assert_eq!(fs::read_to_string(file_path)?, "omega\ntheta\n");
+    assert_eq!(fs::read_to_string(file_path)?, "omega\ntheta");
     let request = final_mock.single_request();
     let write_output = request
         .function_call_output_text(call_id)
