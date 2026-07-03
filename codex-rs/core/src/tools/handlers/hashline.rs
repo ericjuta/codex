@@ -44,6 +44,8 @@ use self::hashline_patch::parse_anchor_hash;
 use self::hashline_patch::parse_anchor_line;
 use self::hashline_patch::validate_file_hash;
 
+const PATCH_OUTPUT_MAX_LINES: usize = 40;
+
 const NAMESPACE: &str = "hashline";
 const READ_TOOL: &str = "read";
 const PATCH_TOOL: &str = "patch";
@@ -529,7 +531,10 @@ async fn handle_patch(
         )
         .await?
     };
-    let patched = apply_hashline_patch(&args.path, &contents, &args.patch)?;
+    let mut patched = apply_hashline_patch(&args.path, &contents, &args.patch)?;
+    if create && !patched.is_empty() && !patched.ends_with('\n') {
+        patched.push('\n');
+    }
     let new_hash = hash_hex(&patched, 4);
     let apply_patch_text = apply_patch_for_hashline_update(
         &args.path,
@@ -557,6 +562,8 @@ async fn handle_patch(
         )));
     }
 
+    let post_write_turn = std::sync::Arc::clone(turn);
+    let post_write_step_context = std::sync::Arc::clone(step_context);
     let apply_patch_invocation = ToolInvocation {
         tool_name: ToolName::plain("apply_patch"),
         payload: ToolPayload::Custom {
@@ -566,7 +573,85 @@ async fn handle_patch(
     };
     ApplyPatchHandler::new(multi_environment)
         .handle(apply_patch_invocation)
-        .await
+        .await?;
+
+    let written_contents = read_selected_file(
+        post_write_turn.as_ref(),
+        post_write_step_context.as_ref(),
+        &args.path,
+        args.environment_id.as_deref(),
+    )
+    .await?;
+    let written_hash = hash_hex(&written_contents, 4);
+    if written_hash != new_hash {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "hashline.patch applied but post-write file hash for {} was {}, expected {new_hash}",
+            args.path, written_hash
+        )));
+    }
+
+    let body = build_hashline_patch_success_body(&args.path, &contents, &written_contents, create)?;
+    Ok(boxed_tool_output(FunctionToolOutput::from_text(
+        serde_json::to_string_pretty(&body)
+            .unwrap_or_else(|err| format!("failed to serialize hashline.patch output: {err}")),
+        Some(true),
+    )))
+}
+
+fn build_hashline_patch_success_body(
+    path: &str,
+    old_contents: &str,
+    written_contents: &str,
+    create: bool,
+) -> Result<serde_json::Value, FunctionCallError> {
+    let preview = build_hashline_patch_preview(old_contents, written_contents)?;
+    let total_lines = count_lines(written_contents);
+    let (start_line, end_line, excerpt_truncated) = if total_lines == 0 {
+        (None, None, false)
+    } else {
+        let start_line = preview
+            .new_start_line
+            .or(preview.old_start_line)
+            .unwrap_or(1)
+            .min(total_lines)
+            .max(1);
+        let requested_end_line = preview
+            .new_end_line
+            .unwrap_or(start_line)
+            .clamp(start_line, total_lines);
+        let capped_end_line = requested_end_line.min(
+            start_line
+                .saturating_add(PATCH_OUTPUT_MAX_LINES)
+                .saturating_sub(1),
+        );
+        (
+            Some(start_line),
+            Some(capped_end_line),
+            capped_end_line < requested_end_line,
+        )
+    };
+    let content = start_line
+        .zip(end_line)
+        .map(|(start_line, end_line)| {
+            format_hashline_excerpt(written_contents, start_line, end_line)
+        })
+        .unwrap_or_default();
+    let new_hash = hash_hex(written_contents, 4);
+
+    Ok(json!({
+        "success": true,
+        "path": path,
+        "header": format!("[{path}#{new_hash}]"),
+        "operation": if create { "create" } else { "update" },
+        "old_hash": hash_hex(old_contents, 4),
+        "new_hash": new_hash,
+        "start_line": start_line,
+        "end_line": end_line,
+        "total_lines": total_lines,
+        "truncated": preview.truncated || excerpt_truncated,
+        "content": content,
+        "preview": preview,
+    }))
 }
 
 async fn handle_remove_file(

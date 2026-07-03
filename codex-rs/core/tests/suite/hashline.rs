@@ -165,8 +165,11 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
     let patch_output = request
         .function_call_output_text("hashline-patch-call")
         .expect("patch output should be sent to model");
-    assert!(patch_output.contains("Success. Updated the following files:"));
-    assert!(patch_output.contains(file_name));
+    assert!(patch_output.contains("\"success\": true"));
+    assert!(patch_output.contains(&format!("\"header\": \"[{file_name}#")));
+    assert!(patch_output.contains("\"operation\": \"update\""));
+    assert!(patch_output.contains("|bravo"));
+    assert!(patch_output.contains("\"preview\""));
 
     Ok(())
 }
@@ -284,8 +287,11 @@ async fn hashline_patch_can_create_missing_file() -> anyhow::Result<()> {
     let patch_output = request
         .function_call_output_text(call_id)
         .expect("patch output should be sent to model");
-    assert!(patch_output.contains("Success. Updated the following files:"));
-    assert!(patch_output.contains(file_name));
+    assert!(patch_output.contains("\"success\": true"));
+    assert!(patch_output.contains(&format!("\"header\": \"[{file_name}#")));
+    assert!(patch_output.contains("\"operation\": \"create\""));
+    assert!(patch_output.contains("1:"));
+    assert!(patch_output.contains("|created by hashline"));
     Ok(())
 }
 

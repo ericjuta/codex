@@ -1,3 +1,4 @@
+use super::build_hashline_patch_success_body;
 use super::hashline_block::find_block_span;
 use super::hashline_hash::hash_hex;
 use super::hashline_hash::line_hash;
@@ -256,6 +257,46 @@ fn dry_run_preview_reports_changed_lines() {
             line_hash("four"),
             line_hash("FIVE")
         )
+    );
+}
+
+#[test]
+fn success_output_reports_fresh_hashline_excerpt() {
+    let original = "alpha\nbeta\ngamma\n";
+    let updated = "alpha\nbravo\ngamma\n";
+
+    let output =
+        build_hashline_patch_success_body("notes.txt", original, updated, /*create*/ false)
+            .expect("success body should be generated");
+
+    let new_hash = hash_hex(updated, 4);
+    assert_eq!(
+        output,
+        serde_json::json!({
+            "success": true,
+            "path": "notes.txt",
+            "header": format!("[notes.txt#{new_hash}]"),
+            "operation": "update",
+            "old_hash": hash_hex(original, 4),
+            "new_hash": new_hash,
+            "start_line": 2,
+            "end_line": 2,
+            "total_lines": 3,
+            "truncated": false,
+            "content": format!("2:{}|bravo", line_hash("bravo")),
+            "preview": {
+                "old_start_line": 2,
+                "old_end_line": 2,
+                "new_start_line": 2,
+                "new_end_line": 2,
+                "truncated": false,
+                "content": format!(
+                    "-2:{}|beta\n+2:{}|bravo",
+                    line_hash("beta"),
+                    line_hash("bravo")
+                ),
+            },
+        })
     );
 }
 
