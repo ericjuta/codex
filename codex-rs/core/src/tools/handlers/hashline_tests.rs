@@ -368,6 +368,40 @@ fn applies_insert_block_post_operation() {
 }
 
 #[test]
+fn applies_insert_block_alias_operation() {
+    let original = "fn hello() {\n    let x = 1;\n}\n";
+
+    let updated = apply_hashline_patch(
+        "src/main.rs",
+        original,
+        "INS.BLK 1:\n+fn world() {\n+    let y = 2;\n+}",
+    )
+    .expect("INS.BLK should alias INS.BLK.POST");
+
+    assert_eq!(
+        updated,
+        "fn hello() {\n    let x = 1;\n}\nfn world() {\n    let y = 2;\n}\n"
+    );
+}
+
+#[test]
+fn applies_insert_block_pre_operation() {
+    let original = "fn hello() {\n    let x = 1;\n}\n";
+
+    let updated = apply_hashline_patch(
+        "src/main.rs",
+        original,
+        "INS.BLK.PRE 1:\n+fn preamble() {\n+}",
+    )
+    .expect("INS.BLK.PRE should insert before the resolved block");
+
+    assert_eq!(
+        updated,
+        "fn preamble() {\n}\nfn hello() {\n    let x = 1;\n}\n"
+    );
+}
+
+#[test]
 fn generated_update_patch_is_localized() {
     let original = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\n";
     let updated = "one\ntwo\nthree\nfour\nFIVE\nsix\nseven\neight\nnine\n";

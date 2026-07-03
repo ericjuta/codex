@@ -311,7 +311,7 @@ fn write_tool_spec(multi_environment: bool) -> ResponsesApiTool {
 fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
     ResponsesApiTool {
         name: PATCH_TOOL.to_string(),
-        description: "Apply a Hashline line operation patch. Supports one target file by default, or multiple existing files when the patch is split into [path#HASH] sections. Supported operations: SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, INS.TAIL, SWAP.BLK, DEL.BLK, INS.BLK.POST, and sectioned REM/MV file ops, using either README-style + payload bodies or compact |text forms where supported."
+        description: "Apply a Hashline line operation patch. Supports one target file by default, or multiple existing files when the patch is split into [path#HASH] sections. Supported operations: SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, INS.TAIL, SWAP.BLK, DEL.BLK, INS.BLK.POST, INS.BLK.PRE, INS.BLK, and sectioned REM/MV file ops, using either README-style + payload bodies or compact |text forms where supported."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -320,7 +320,7 @@ fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "patch".to_string(),
                     JsonSchema::string(Some(
-                        "Hashline operations. Use README-style bodies such as SWAP 12:\n+replacement, SWAP 12..14:\n+replacement, DEL 12..14, INS.POST 12:\n+text, INS.HEAD:\n+text, SWAP.BLK 12:\n+replacement block, DEL.BLK 12, INS.BLK.POST 12:\n+block, compact forms such as SWAP 12:ab|replacement and INS.TAIL|text, or multiple [path#HASH] sections for existing-file multi-file edits. Sectioned patches also accept REM and MV <path> file ops."
+                        "Hashline operations. Use README-style bodies such as SWAP 12:\n+replacement, SWAP 12..14:\n+replacement, DEL 12..14, INS.POST 12:\n+text, INS.HEAD:\n+text, SWAP.BLK 12:\n+replacement block, DEL.BLK 12, INS.BLK.POST 12:\n+block, INS.BLK.PRE 12:\n+block, INS.BLK 12:\n+block, compact forms such as SWAP 12:ab|replacement and INS.TAIL|text, or multiple [path#HASH] sections for existing-file multi-file edits. Sectioned patches also accept REM and MV <path> file ops."
                             .to_string(),
                     )),
                 ),
