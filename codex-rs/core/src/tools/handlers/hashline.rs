@@ -344,7 +344,7 @@ fn write_tool_spec(multi_environment: bool) -> ResponsesApiTool {
 fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
     ResponsesApiTool {
         name: PATCH_TOOL.to_string(),
-        description: "Apply a Hashline line operation patch. Supports one target file by default, multiple existing files when split into [path#HASH] sections, or multiple missing files with create=true and [path] sections. Supported operations: SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, INS.TAIL, SWAP.BLK, DEL.BLK, INS.BLK.POST, INS.BLK.PRE, INS.BLK, and sectioned REM/MV file ops, using either README-style + payload bodies or compact |text forms where supported."
+        description: "Apply a Hashline line operation patch. Supports one target file by default, multiple existing files when split into [path#HASH] sections, or multiple missing files with create=true and [path] sections. Supported operations: SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, INS.TAIL, SWAP.BLK, DEL.BLK, INS.BLK.POST, INS.BLK.PRE, INS.BLK, sectioned REM file ops, and MV file ops that may also include line edits, using either README-style + payload bodies or compact |text forms where supported."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -353,7 +353,7 @@ fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "patch".to_string(),
                     JsonSchema::string(Some(
-                        "Hashline operations. Use README-style bodies such as SWAP 12:\n+replacement, SWAP 12:ab..14:cd:\n+replacement, DEL 12..=14, DEL 12-14, INS.POST 12:\n+text, INS.HEAD:\n+text, SWAP.BLK 12:\n+replacement block, DEL.BLK 12, INS.BLK.POST 12:\n+block, INS.BLK.PRE 12:\n+block, INS.BLK 12:\n+block, compact forms such as SWAP 12:ab|replacement and INS.TAIL|text, [path#HASH] sections for existing-file multi-file edits, or [path] sections with create=true for missing files. Bracketed headers also recover common apply-patch-style path noise such as [*** Update File: path#HASH]. Bare payload lines are accepted after an operation header, and uniformly pasted read-output rows such as 1:ab|content or >>> 1:ab|content have their read prefixes stripped. Empty create sections create zero-byte files. In payload bodies, use ++ for literal + and +- for literal -. Sectioned patches also accept REM, MV <path>, and *** Abort to suppress an embedded patch."
+                        "Hashline operations. Use README-style bodies such as SWAP 12:\n+replacement, SWAP 12:ab..14:cd:\n+replacement, DEL 12..=14, DEL 12-14, INS.POST 12:\n+text, INS.HEAD:\n+text, SWAP.BLK 12:\n+replacement block, DEL.BLK 12, INS.BLK.POST 12:\n+block, INS.BLK.PRE 12:\n+block, INS.BLK 12:\n+block, compact forms such as SWAP 12:ab|replacement and INS.TAIL|text, [path#HASH] sections for existing-file multi-file edits, or [path] sections with create=true for missing files. Bracketed headers also recover common apply-patch-style path noise such as [*** Update File: path#HASH]. Bare payload lines are accepted after an operation header, and uniformly pasted read-output rows such as 1:ab|content or >>> 1:ab|content have their read prefixes stripped. Empty create sections create zero-byte files. In payload bodies, use ++ for literal + and +- for literal -. Sectioned patches also accept REM and MV <path>; MV may be combined with line operations to rename and edit one section, while REM must stand alone. *** Abort suppresses an embedded patch."
                             .to_string(),
                     )),
                 ),

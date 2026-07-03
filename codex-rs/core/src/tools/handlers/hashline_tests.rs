@@ -295,6 +295,25 @@ fn tool_args_accept_reference_path_aliases() {
 }
 
 #[test]
+fn patch_tool_spec_advertises_mv_with_line_ops() {
+    let spec = super::patch_tool_spec(/*multi_environment*/ false);
+    assert!(
+        spec.description
+            .contains("MV file ops that may also include line edits")
+    );
+
+    let patch_description = spec
+        .parameters
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.get("patch"))
+        .and_then(|schema| schema.description.as_deref())
+        .expect("patch parameter should have a description");
+    assert!(patch_description.contains("MV may be combined with line operations"));
+    assert!(patch_description.contains("REM must stand alone"));
+}
+
+#[test]
 fn patch_accepts_matching_file_header() {
     let original = "alpha\nbeta\ngamma\n";
     let patch = format!(
