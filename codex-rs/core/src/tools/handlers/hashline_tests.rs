@@ -1,4 +1,5 @@
 use super::hashline_block::find_block_span;
+use super::hashline_hash::hash_hex;
 use super::hashline_hash::line_hash;
 use super::hashline_patch::apply_hashline_patch;
 use super::hashline_patch::apply_patch_for_hashline_remove;
@@ -17,14 +18,14 @@ fn applies_basic_line_operations() {
         line_hash("alpha")
     );
 
-    let updated = apply_hashline_patch(original, &patch).expect("patch should apply");
+    let updated = apply_hashline_patch("notes.txt", original, &patch).expect("patch should apply");
 
     assert_eq!(updated, "bravo\ngamma\ndelta\n");
 }
 
 #[test]
 fn rejects_stale_line_hash() {
-    let error = apply_hashline_patch("alpha\n", "SWAP 1:00|omega")
+    let error = apply_hashline_patch("notes.txt", "alpha\n", "SWAP 1:00|omega")
         .expect_err("stale hash should be rejected");
 
     assert!(
@@ -35,10 +36,76 @@ fn rejects_stale_line_hash() {
 
 #[test]
 fn accepts_compact_head_and_tail_insert_syntax() {
-    let updated = apply_hashline_patch("middle\n", "INS.HEAD|top\nINS.TAIL|bottom")
+    let updated = apply_hashline_patch("notes.txt", "middle\n", "INS.HEAD|top\nINS.TAIL|bottom")
         .expect("compact insert syntax should apply");
 
     assert_eq!(updated, "top\nmiddle\nbottom\n");
+}
+
+#[test]
+fn line_hash_matches_reference_trailing_whitespace_behavior() {
+    assert_eq!(
+        line_hash("return decoded"),
+        line_hash("return decoded   \r")
+    );
+    assert_ne!(line_hash("  return decoded"), line_hash("return decoded"));
+}
+
+#[test]
+fn file_hash_matches_reference_normalization_behavior() {
+    assert_eq!(
+        hash_hex("alpha\r\nbeta\r\n", 4),
+        hash_hex("alpha\nbeta\n", 4)
+    );
+    assert_eq!(hash_hex("\u{feff}alpha\n", 4), hash_hex("alpha\n", 4));
+}
+
+#[test]
+fn patch_accepts_matching_file_header() {
+    let original = "alpha\nbeta\ngamma\n";
+    let patch = format!(
+        "[notes.txt#{}]\nSWAP 2:{}|bravo",
+        hash_hex(original, 4),
+        line_hash("beta")
+    );
+
+    let updated = apply_hashline_patch("notes.txt", original, &patch).expect("patch should apply");
+
+    assert_eq!(updated, "alpha\nbravo\ngamma\n");
+}
+
+#[test]
+fn patch_rejects_stale_file_header() {
+    let original = "alpha\nbeta\n";
+    let actual_hash = hash_hex(original, 4);
+    let stale_hash = if actual_hash == "0000" {
+        "0001"
+    } else {
+        "0000"
+    };
+    let patch = format!("[notes.txt#{stale_hash}]\nDEL 2:{}", line_hash("beta"));
+
+    let error = apply_hashline_patch("notes.txt", original, &patch)
+        .expect_err("stale file hash should be rejected");
+
+    assert!(
+        error.to_string().contains("file hash mismatch"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn patch_rejects_wrong_file_header_path() {
+    let original = "alpha\nbeta\n";
+    let patch = format!("[other.txt#{}]\nDEL 2", hash_hex(original, 4));
+
+    let error = apply_hashline_patch("notes.txt", original, &patch)
+        .expect_err("wrong file header path should be rejected");
+
+    assert!(
+        error.to_string().contains("does not match target path"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]

@@ -27,9 +27,12 @@ struct ChangeBounds {
 }
 
 pub(super) fn apply_hashline_patch(
+    path: &str,
     contents: &str,
     patch: &str,
 ) -> Result<String, FunctionCallError> {
+    validate_patch_headers(path, contents, patch)?;
+
     let mut lines = split_lines_preserve(contents)
         .into_iter()
         .map(ToString::to_string)
@@ -128,6 +131,49 @@ pub(super) fn validate_file_hash(
         }
     }
     Ok(())
+}
+
+fn validate_patch_headers(
+    path: &str,
+    contents: &str,
+    patch: &str,
+) -> Result<(), FunctionCallError> {
+    for raw_line in patch.lines() {
+        let line = raw_line.trim();
+        if !line.starts_with('[') {
+            continue;
+        }
+        let Some(header) = line
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+        else {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "invalid Hashline file header {line}; expected [{path}#HASH]"
+            )));
+        };
+        let Some((header_path, expected_hash)) = header.rsplit_once('#') else {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "invalid Hashline file header {line}; expected [{path}#HASH]"
+            )));
+        };
+        if header_path != path {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "Hashline file header path {header_path} does not match target path {path}"
+            )));
+        }
+        validate_hash_token(path, expected_hash)?;
+        validate_file_hash(path, contents, Some(&expected_hash.to_ascii_lowercase()))?;
+    }
+    Ok(())
+}
+
+fn validate_hash_token(path: &str, expected_hash: &str) -> Result<(), FunctionCallError> {
+    if expected_hash.len() == 4 && expected_hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Ok(());
+    }
+    Err(FunctionCallError::RespondToModel(format!(
+        "invalid file hash for {path}: expected a 4-hex Hashline file hash, got {expected_hash}"
+    )))
 }
 
 pub(super) fn ensure_rename_representable(

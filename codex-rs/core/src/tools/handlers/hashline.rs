@@ -529,7 +529,7 @@ async fn handle_patch(
         )
         .await?
     };
-    let patched = apply_hashline_patch(&contents, &args.patch)?;
+    let patched = apply_hashline_patch(&args.path, &contents, &args.patch)?;
     let new_hash = hash_hex(&patched, 4);
     let apply_patch_text = apply_patch_for_hashline_update(
         &args.path,
