@@ -294,11 +294,19 @@ async fn hashline_find_block_reports_language_and_excerpt() -> anyhow::Result<()
     let find_output = request
         .function_call_output_text(call_id)
         .expect("find_block output should be sent to model");
+    let find_output_json: Value = serde_json::from_str(&find_output)?;
     assert!(find_output.contains("\"language\": \"Rust\""));
     assert!(find_output.contains("\"start_line\": 2"));
     assert!(find_output.contains("\"end_line\": 4"));
     assert!(find_output.contains("3:"));
     assert!(find_output.contains("println!"));
+    assert_eq!(find_output_json["file"], json!(file_name));
+    assert_eq!(find_output_json["line_count"], json!(5));
+    assert_eq!(find_output_json["block_lines"][1]["n"], json!(3));
+    assert_eq!(
+        find_output_json["block_lines"][1]["content"],
+        json!("        println!(\"hi\");")
+    );
 
     Ok(())
 }

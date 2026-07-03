@@ -724,14 +724,30 @@ async fn handle_find_block(
         .clamp(1, HARD_FIND_BLOCK_MAX_LINES);
     let (block_start, block_end) = find_block_span(&args.path, &lines, anchor_line);
     let capped_end = block_end.min(block_start.saturating_add(max_lines).saturating_sub(1));
+    let block_lines = lines
+        .iter()
+        .enumerate()
+        .skip(block_start.saturating_sub(1))
+        .take(capped_end.saturating_sub(block_start).saturating_add(1))
+        .map(|(index, line)| {
+            json!({
+                "n": index + 1,
+                "hash": line_hash(line),
+                "content": line,
+            })
+        })
+        .collect::<Vec<_>>();
     let body = json!({
-        "path": args.path,
+        "file": &args.path,
+        "path": &args.path,
         "anchor": args.anchor,
+        "line_count": lines.len(),
         "language": language_for_path(&args.path),
         "start_line": block_start,
         "end_line": block_end,
         "truncated": capped_end < block_end,
         "content": format_hashline_excerpt(&contents, block_start, capped_end),
+        "block_lines": block_lines,
     });
     Ok(boxed_tool_output(FunctionToolOutput::from_text(
         serde_json::to_string_pretty(&body)
