@@ -525,6 +525,16 @@ async fn hashline_patch_applies_mixed_multi_file_sections_through_apply_patch() 
     assert!(patch_output.contains(&format!("\"new_path\": \"{moved_name}\"")));
     assert!(patch_output.contains("\"operation\": \"remove_file\""));
     assert!(patch_output.contains("\"operation\": \"rename_file\""));
+    let patch_output_json: Value = serde_json::from_str(&patch_output)?;
+    let files = patch_output_json["files"]
+        .as_array()
+        .expect("multi-file output should include files");
+    let rename_file = files
+        .iter()
+        .find(|file| file["operation"] == json!("rename_file"))
+        .expect("multi-file output should include a rename entry");
+    assert_eq!(rename_file["src"], json!(move_name));
+    assert_eq!(rename_file["dst"], json!(moved_name));
     Ok(())
 }
 

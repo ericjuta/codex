@@ -1096,6 +1096,8 @@ async fn handle_patch_file_operation(
                 let body = json!({
                     "path": path,
                     "new_path": new_path,
+                    "src": path,
+                    "dst": &new_path,
                     "dry_run": true,
                     "old_hash": old_hash,
                     "operation": "rename_file",
@@ -1146,6 +1148,8 @@ async fn handle_patch_file_operation(
                 "success": true,
                 "path": path,
                 "new_path": new_path,
+                "src": path,
+                "dst": new_path,
                 "operation": "rename_file",
                 "old_hash": old_hash,
                 "new_hash": new_hash,
@@ -1301,6 +1305,8 @@ async fn handle_multi_file_patch(
                 } => Ok(json!({
                     "path": path,
                     "new_path": new_path,
+                    "src": path,
+                    "dst": new_path,
                     "operation": "rename_file",
                     "old_hash": old_hash,
                 })),
@@ -1437,6 +1443,8 @@ async fn handle_multi_file_patch(
                     "success": true,
                     "path": path,
                     "new_path": new_path,
+                    "src": path,
+                    "dst": new_path,
                     "operation": "rename_file",
                     "old_hash": old_hash,
                     "new_hash": new_hash,
@@ -1660,8 +1668,10 @@ async fn handle_rename_file(
 
     if args.dry_run.unwrap_or(false) {
         let body = json!({
-            "path": args.path,
-            "new_path": args.new_path,
+            "path": &args.path,
+            "new_path": &args.new_path,
+            "src": &args.path,
+            "dst": &args.new_path,
             "dry_run": true,
             "old_hash": old_hash,
             "operation": "rename_file",
@@ -1719,6 +1729,8 @@ async fn handle_rename_file(
         "success": true,
         "path": &args.path,
         "new_path": &args.new_path,
+        "src": &args.path,
+        "dst": &args.new_path,
         "operation": "rename_file",
         "old_hash": old_hash,
         "new_hash": new_hash,
