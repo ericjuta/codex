@@ -50,6 +50,28 @@ fn rejects_stale_line_hash() {
 }
 
 #[test]
+fn accepts_single_hex_line_hash_anchor() {
+    let original_line = (0..10_000)
+        .map(|index| format!("candidate {index}"))
+        .find(|line| {
+            let hash = line_hash(line);
+            hash.starts_with('0') && hash != "00"
+        })
+        .expect("test fixture should find a line with a one-digit hash value");
+    let full_hash = line_hash(&original_line);
+    let short_hash = full_hash
+        .strip_prefix('0')
+        .expect("fixture hash should start with zero");
+    let original = format!("{original_line}\n");
+    let patch = format!("SWAP 1:{short_hash}|omega");
+
+    let updated = apply_hashline_patch("notes.txt", &original, &patch)
+        .expect("one-hex line hash should validate as the same numeric hash");
+
+    assert_eq!(updated, "omega\n");
+}
+
+#[test]
 fn accepts_compact_head_and_tail_insert_syntax() {
     let updated = apply_hashline_patch("notes.txt", "middle\n", "INS.HEAD|top\nINS.TAIL|bottom")
         .expect("compact insert syntax should apply");

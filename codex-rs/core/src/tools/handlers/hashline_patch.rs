@@ -846,10 +846,9 @@ fn split_optional_anchor_hash(input: &str) -> Option<(&str, Option<String>)> {
         .map_or((input, None), |(target, hash)| {
             (target.trim(), Some(hash.trim().to_ascii_lowercase()))
         });
-    if expected_hash
-        .as_deref()
-        .is_some_and(|hash| hash.len() != 2 || !hash.chars().all(|ch| ch.is_ascii_hexdigit()))
-    {
+    if expected_hash.as_deref().is_some_and(|hash| {
+        hash.is_empty() || hash.len() > 2 || !hash.chars().all(|ch| ch.is_ascii_hexdigit())
+    }) {
         return None;
     }
     Some((target, expected_hash))
@@ -1321,13 +1320,23 @@ fn validate_line_hash(
     }
     if let Some(expected_hash) = expected_hash {
         let actual_hash = line_hash(&lines[line_number - 1]);
-        if expected_hash != actual_hash {
+        if !line_hash_matches(expected_hash, &actual_hash) {
             return Err(FunctionCallError::RespondToModel(format!(
                 "line {line_number} hash mismatch: expected {expected_hash}, found {actual_hash}"
             )));
         }
     }
     Ok(())
+}
+
+fn line_hash_matches(expected_hash: &str, actual_hash: &str) -> bool {
+    let Ok(expected) = u8::from_str_radix(expected_hash, 16) else {
+        return false;
+    };
+    let Ok(actual) = u8::from_str_radix(actual_hash, 16) else {
+        return false;
+    };
+    expected == actual
 }
 
 fn apply_patch_header(environment_id: Option<&str>) -> String {
