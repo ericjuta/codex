@@ -101,6 +101,10 @@ Use structured function tools for stage 1. A freeform `hashline_patch` tool can
 be added later if model behavior proves better with grammar-constrained patch
 bodies.
 
+Successful dry runs for write, patch, remove, and rename tools include
+`"success": true` with `"dry_run": true`. Multi-file patch dry runs also mark
+each per-file entry with `"success": true`.
+
 ### Arguments
 
 The advertised Codex argument names remain `path` and `new_path`, but handlers

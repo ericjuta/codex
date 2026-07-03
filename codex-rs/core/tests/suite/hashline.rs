@@ -545,6 +545,256 @@ async fn hashline_patch_applies_mixed_multi_file_sections_through_apply_patch() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_dry_run_outputs_report_success_without_writing() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let write_name = "hashline-dry-write.txt";
+    let patch_name = "hashline-dry-patch.txt";
+    let remove_name = "hashline-dry-remove.txt";
+    let rename_name = "hashline-dry-rename.txt";
+    let renamed_name = "hashline-dry-renamed.txt";
+    let write_path = test.cwd.path().join(write_name);
+    let patch_path = test.cwd.path().join(patch_name);
+    let remove_path = test.cwd.path().join(remove_name);
+    let rename_path = test.cwd.path().join(rename_name);
+    let renamed_path = test.cwd.path().join(renamed_name);
+    fs::write(&patch_path, "alpha\nbeta\n")?;
+    fs::write(&remove_path, "remove me\n")?;
+    fs::write(&rename_path, "move me\n")?;
+
+    let write_call_id = "hashline-dry-write-call";
+    let patch_call_id = "hashline-dry-patch-call";
+    let remove_call_id = "hashline-dry-remove-call";
+    let rename_call_id = "hashline-dry-rename-call";
+    let write_args = json!({
+        "path": write_name,
+        "content": "created\n",
+        "dry_run": true
+    });
+    let patch_args = json!({
+        "path": patch_name,
+        "patch": "SWAP 2:\n+bravo",
+        "dry_run": true
+    });
+    let remove_args = json!({
+        "path": remove_name,
+        "dry_run": true
+    });
+    let rename_args = json!({
+        "path": rename_name,
+        "new_path": renamed_name,
+        "dry_run": true
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                write_call_id,
+                "hashline",
+                "write",
+                &serde_json::to_string(&write_args)?,
+            ),
+            ev_function_call_with_namespace(
+                patch_call_id,
+                "hashline",
+                "patch",
+                &serde_json::to_string(&patch_args)?,
+            ),
+            ev_function_call_with_namespace(
+                remove_call_id,
+                "hashline",
+                "remove_file",
+                &serde_json::to_string(&remove_args)?,
+            ),
+            ev_function_call_with_namespace(
+                rename_call_id,
+                "hashline",
+                "rename_file",
+                &serde_json::to_string(&rename_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline dry runs checked"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, "validate hashline dry runs").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert!(!write_path.exists());
+    assert_eq!(fs::read_to_string(patch_path)?, "alpha\nbeta\n");
+    assert_eq!(fs::read_to_string(&remove_path)?, "remove me\n");
+    assert_eq!(fs::read_to_string(rename_path)?, "move me\n");
+    assert!(!renamed_path.exists());
+
+    let request = final_mock.single_request();
+    let write_output = request
+        .function_call_output_text(write_call_id)
+        .expect("write output should be sent to model");
+    let write_output_json: Value = serde_json::from_str(&write_output)?;
+    assert_eq!(write_output_json["success"], json!(true));
+    assert_eq!(write_output_json["dry_run"], json!(true));
+    assert_eq!(write_output_json["operation"], json!("create"));
+
+    let patch_output = request
+        .function_call_output_text(patch_call_id)
+        .expect("patch output should be sent to model");
+    let patch_output_json: Value = serde_json::from_str(&patch_output)?;
+    assert_eq!(patch_output_json["success"], json!(true));
+    assert_eq!(patch_output_json["dry_run"], json!(true));
+    assert_eq!(patch_output_json["operation"], json!("update"));
+    assert!(patch_output_json["preview"].is_object());
+
+    let remove_output = request
+        .function_call_output_text(remove_call_id)
+        .expect("remove output should be sent to model");
+    let remove_output_json: Value = serde_json::from_str(&remove_output)?;
+    assert_eq!(remove_output_json["success"], json!(true));
+    assert_eq!(remove_output_json["dry_run"], json!(true));
+    assert_eq!(remove_output_json["operation"], json!("remove_file"));
+
+    let rename_output = request
+        .function_call_output_text(rename_call_id)
+        .expect("rename output should be sent to model");
+    let rename_output_json: Value = serde_json::from_str(&rename_output)?;
+    assert_eq!(rename_output_json["success"], json!(true));
+    assert_eq!(rename_output_json["dry_run"], json!(true));
+    assert_eq!(rename_output_json["operation"], json!("rename_file"));
+    assert_eq!(rename_output_json["src"], json!(rename_name));
+    assert_eq!(rename_output_json["dst"], json!(renamed_name));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_multi_file_dry_run_reports_success_per_file_without_writing() -> anyhow::Result<()>
+{
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let update_name = "hashline-dry-multi-update.txt";
+    let remove_name = "hashline-dry-multi-remove.txt";
+    let move_name = "hashline-dry-multi-move.txt";
+    let moved_name = "hashline-dry-multi-moved.txt";
+    let update_path = test.cwd.path().join(update_name);
+    let remove_path = test.cwd.path().join(remove_name);
+    let move_path = test.cwd.path().join(move_name);
+    let moved_path = test.cwd.path().join(moved_name);
+    let update_contents = "alpha\nbeta\n";
+    let remove_contents = "remove me\n";
+    let move_contents = "move me\n";
+    fs::write(&update_path, update_contents)?;
+    fs::write(&remove_path, remove_contents)?;
+    fs::write(&move_path, move_contents)?;
+    let update_hash = format!("{:04x}", xxh3_64(update_contents.as_bytes()) >> 48);
+    let remove_hash = format!("{:04x}", xxh3_64(remove_contents.as_bytes()) >> 48);
+    let move_hash = format!("{:04x}", xxh3_64(move_contents.as_bytes()) >> 48);
+
+    let call_id = "hashline-dry-multi-call";
+    let patch_args = json!({
+        "path": update_name,
+        "patch": format!(
+            "[{update_name}#{update_hash}]\nSWAP 2:\n+bravo\n[{remove_name}#{remove_hash}]\nREM\n[{move_name}#{move_hash}]\nMV {moved_name}"
+        ),
+        "dry_run": true
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                "patch",
+                &serde_json::to_string(&patch_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline multi-file dry run checked"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, "validate multi-file hashline dry run").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(fs::read_to_string(update_path)?, update_contents);
+    assert_eq!(fs::read_to_string(remove_path)?, remove_contents);
+    assert_eq!(fs::read_to_string(move_path)?, move_contents);
+    assert!(!moved_path.exists());
+
+    let request = final_mock.single_request();
+    let patch_output = request
+        .function_call_output_text(call_id)
+        .expect("patch output should be sent to model");
+    let patch_output_json: Value = serde_json::from_str(&patch_output)?;
+    assert_eq!(patch_output_json["success"], json!(true));
+    assert_eq!(patch_output_json["dry_run"], json!(true));
+    assert_eq!(
+        patch_output_json["operation"],
+        json!("multi_file_operation")
+    );
+
+    let files = patch_output_json["files"]
+        .as_array()
+        .expect("multi-file output should include files");
+    assert_eq!(files.len(), 3);
+    for file in files {
+        assert_eq!(file["success"], json!(true));
+    }
+    let update_file = files
+        .iter()
+        .find(|file| file["path"] == json!(update_name))
+        .expect("multi-file output should include an update entry");
+    assert_eq!(update_file["operation"], json!("update"));
+    assert!(update_file["preview"].is_object());
+    let remove_file = files
+        .iter()
+        .find(|file| file["operation"] == json!("remove_file"))
+        .expect("multi-file output should include a remove entry");
+    assert_eq!(remove_file["path"], json!(remove_name));
+    let rename_file = files
+        .iter()
+        .find(|file| file["operation"] == json!("rename_file"))
+        .expect("multi-file output should include a rename entry");
+    assert_eq!(rename_file["src"], json!(move_name));
+    assert_eq!(rename_file["dst"], json!(moved_name));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hashline_patch_can_create_missing_file() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let test = test_codex()

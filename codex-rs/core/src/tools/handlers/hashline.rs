@@ -642,6 +642,7 @@ async fn handle_write(
             .then(|| build_hashline_patch_preview(&old_contents, &write_contents))
             .transpose()?;
         let body = json!({
+            "success": true,
             "path": args.path,
             "dry_run": true,
             "operation": operation,
@@ -962,6 +963,7 @@ async fn handle_patch(
     if args.dry_run.unwrap_or(false) {
         let preview = build_hashline_patch_preview_or_none(&contents, &patched, create)?;
         let mut body = json!({
+            "success": true,
             "path": target_path,
             "dry_run": true,
             "operation": if create { "create" } else { "update" },
@@ -1045,6 +1047,7 @@ async fn handle_patch_file_operation(
         HashlinePatchFileOperation::Remove => {
             if dry_run {
                 let body = json!({
+                    "success": true,
                     "path": path,
                     "dry_run": true,
                     "old_hash": old_hash,
@@ -1101,6 +1104,7 @@ async fn handle_patch_file_operation(
             .await?;
             if dry_run {
                 let body = json!({
+                    "success": true,
                     "path": path,
                     "new_path": new_path,
                     "src": path,
@@ -1295,6 +1299,7 @@ async fn handle_multi_file_patch(
                     let preview =
                         build_hashline_patch_preview_or_none(old_contents, new_contents, *create)?;
                     let mut body = json!({
+                        "success": true,
                         "path": path,
                         "operation": if *create { "create" } else { "update" },
                         "old_hash": hash_hex(old_contents, 4),
@@ -1305,6 +1310,7 @@ async fn handle_multi_file_patch(
                     Ok(body)
                 }
                 PreparedHashlinePatchFile::Remove { path, old_hash, .. } => Ok(json!({
+                    "success": true,
                     "path": path,
                     "operation": "remove_file",
                     "old_hash": old_hash,
@@ -1315,6 +1321,7 @@ async fn handle_multi_file_patch(
                     old_hash,
                     ..
                 } => Ok(json!({
+                    "success": true,
                     "path": path,
                     "new_path": new_path,
                     "src": path,
@@ -1325,6 +1332,7 @@ async fn handle_multi_file_patch(
             })
             .collect::<Result<Vec<_>, FunctionCallError>>()?;
         let body = json!({
+            "success": true,
             "dry_run": true,
             "operation": operation,
             "files": files,
@@ -1605,6 +1613,7 @@ async fn handle_remove_file(
 
     if args.dry_run.unwrap_or(false) {
         let body = json!({
+            "success": true,
             "path": args.path,
             "dry_run": true,
             "old_hash": old_hash,
@@ -1689,6 +1698,7 @@ async fn handle_rename_file(
 
     if args.dry_run.unwrap_or(false) {
         let body = json!({
+            "success": true,
             "path": &args.path,
             "new_path": &args.new_path,
             "src": &args.path,
