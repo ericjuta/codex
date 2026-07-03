@@ -312,6 +312,42 @@ fn applies_bare_payload_lines() {
 }
 
 #[test]
+fn strips_uniform_read_output_payload_prefixes() {
+    let updated = apply_hashline_patch(
+        "notes.txt",
+        "alpha\nbeta\ngamma\n",
+        "SWAP 2:\n1:aa|bravo\n2:bb|charlie",
+    )
+    .expect("pasted read output rows should apply");
+
+    assert_eq!(updated, "alpha\nbravo\ncharlie\ngamma\n");
+}
+
+#[test]
+fn keeps_mixed_read_output_payload_prefixes_literal() {
+    let updated = apply_hashline_patch(
+        "notes.txt",
+        "alpha\nbeta\ngamma\n",
+        "SWAP 2:\n1:aa|bravo\ncharlie",
+    )
+    .expect("mixed bare payload rows should stay literal");
+
+    assert_eq!(updated, "alpha\n1:aa|bravo\ncharlie\ngamma\n");
+}
+
+#[test]
+fn explicit_payload_rows_keep_read_output_prefixes_literal() {
+    let updated = apply_hashline_patch(
+        "notes.txt",
+        "alpha\nbeta\ngamma\n",
+        "SWAP 2:\n+1:aa|literal",
+    )
+    .expect("explicit payload row should stay literal");
+
+    assert_eq!(updated, "alpha\n1:aa|literal\ngamma\n");
+}
+
+#[test]
 fn bare_payload_stops_before_next_operation() {
     let updated = apply_hashline_patch(
         "notes.txt",

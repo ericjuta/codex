@@ -53,6 +53,17 @@ struct ChangeBounds {
     new_end: usize,
 }
 
+struct PayloadLine {
+    text: String,
+    kind: PayloadLineKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PayloadLineKind {
+    Bare,
+    Literal,
+}
+
 #[derive(Debug, Clone)]
 struct LineAnchor {
     line: usize,
@@ -583,11 +594,51 @@ fn collect_payload_lines(
                 "Hashline payload line {line:?} must start with + or be a bare replacement line; - rows are not accepted"
             )));
         }
-        let text = line.strip_prefix('+').unwrap_or(line);
-        payload.push(text.to_string());
+        let (text, kind) = match line.strip_prefix('+') {
+            Some(text) => (text, PayloadLineKind::Literal),
+            None => (line, PayloadLineKind::Bare),
+        };
+        payload.push(PayloadLine {
+            text: text.to_string(),
+            kind,
+        });
         *index += 1;
     }
-    Ok(payload)
+    strip_uniform_read_output_payload_prefixes(&mut payload);
+    Ok(payload.into_iter().map(|line| line.text).collect())
+}
+
+fn strip_uniform_read_output_payload_prefixes(payload: &mut [PayloadLine]) {
+    let mut saw_bare_payload = false;
+    for line in payload.iter() {
+        if line.kind != PayloadLineKind::Bare || line.text.trim().is_empty() {
+            continue;
+        }
+        saw_bare_payload = true;
+        if strip_read_output_payload_prefix(&line.text).is_none() {
+            return;
+        }
+    }
+    if !saw_bare_payload {
+        return;
+    }
+    for line in payload.iter_mut() {
+        if line.kind == PayloadLineKind::Bare
+            && !line.text.trim().is_empty()
+            && let Some(stripped) = strip_read_output_payload_prefix(&line.text)
+        {
+            line.text = stripped.to_string();
+        }
+    }
+}
+
+fn strip_read_output_payload_prefix(line: &str) -> Option<&str> {
+    let (line_number, rest) = line.split_once(':')?;
+    if line_number.is_empty() || !line_number.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let (line_hash, content) = rest.split_once('|')?;
+    (line_hash.len() == 2 && line_hash.chars().all(|ch| ch.is_ascii_hexdigit())).then_some(content)
 }
 
 fn apply_patch_contamination_message(line: &str) -> Option<String> {
