@@ -1199,6 +1199,35 @@ fn find_block_prefers_smallest_brace_block() {
 }
 
 #[test]
+fn find_block_ignores_braces_inside_comments() {
+    let line_comment_lines = ["fn outer() {", "    // fake block {", "    call();", "}"];
+    assert_eq!(
+        find_block_span("src/main.rs", &line_comment_lines, 3),
+        (1, 4)
+    );
+
+    let block_comment_lines = [
+        "fn outer() {",
+        "    /* fake block {",
+        "       still commented } */",
+        "    call();",
+        "}",
+    ];
+    assert_eq!(
+        find_block_span("src/main.rs", &block_comment_lines, 4),
+        (1, 5)
+    );
+}
+
+#[test]
+fn find_block_uses_reference_brace_extensions() {
+    let lines = ["pub fn main() {", "    work();", "}"];
+
+    assert_eq!(find_block_span("src/main.zig", &lines, 2), (1, 3));
+    assert_eq!(find_block_span("src/main.scala", &lines, 2), (1, 3));
+}
+
+#[test]
 fn find_block_anchor_accepts_block_prefix_and_unique_hash() {
     let lines = vec!["alpha", "beta", "gamma"];
 
@@ -1277,6 +1306,8 @@ fn find_block_language_guess_matches_reference_extensions() {
     assert_eq!(language_for_path("src/main.py"), "Python");
     assert_eq!(language_for_path("src/main.go"), "Go");
     assert_eq!(language_for_path("include/value.hpp"), "C++");
+    assert_eq!(language_for_path("src/main.zig"), "Zig");
+    assert_eq!(language_for_path("src/main.scala"), "Scala");
     assert_eq!(language_for_path("notes.md"), "Markdown");
     assert_eq!(language_for_path("Makefile"), "Unknown");
 }

@@ -62,31 +62,59 @@ fn find_brace_block_span(path: &str, lines: &[&str], anchor_line: usize) -> Opti
     let anchor_index = anchor_line.checked_sub(1)?;
     let mut stack = Vec::new();
     let mut best = None;
+    let mut in_block_comment = false;
 
     for (line_index, line) in lines.iter().enumerate() {
+        let bytes = line.as_bytes();
+        let mut index = 0;
         let mut string_delimiter = None;
         let mut escaped = false;
-        for ch in line.chars() {
-            if let Some(delimiter) = string_delimiter {
-                if escaped {
-                    escaped = false;
-                    continue;
-                }
-                if ch == '\\' {
-                    escaped = true;
-                    continue;
-                }
-                if ch == delimiter {
-                    string_delimiter = None;
+
+        while index < bytes.len() {
+            let byte = bytes[index];
+            if in_block_comment {
+                if index + 1 < bytes.len() && byte == b'*' && bytes[index + 1] == b'/' {
+                    in_block_comment = false;
+                    index += 2;
+                } else {
+                    index += 1;
                 }
                 continue;
             }
 
-            match ch {
-                '"' | '\'' | '`' => string_delimiter = Some(ch),
-                '{' => stack.push(line_index),
-                '}' => {
+            if let Some(delimiter) = string_delimiter {
+                if escaped {
+                    escaped = false;
+                    index += 1;
+                    continue;
+                }
+                if byte == b'\\' {
+                    escaped = true;
+                    index += 1;
+                    continue;
+                }
+                if byte == delimiter {
+                    string_delimiter = None;
+                }
+                index += 1;
+                continue;
+            }
+
+            if index + 1 < bytes.len() && byte == b'/' && bytes[index + 1] == b'/' {
+                break;
+            }
+            if index + 1 < bytes.len() && byte == b'/' && bytes[index + 1] == b'*' {
+                in_block_comment = true;
+                index += 2;
+                continue;
+            }
+
+            match byte {
+                b'"' | b'\'' | b'`' => string_delimiter = Some(byte),
+                b'{' => stack.push(line_index),
+                b'}' => {
                     let Some(open_line) = stack.pop() else {
+                        index += 1;
                         continue;
                     };
                     if open_line <= anchor_index && anchor_index <= line_index {
@@ -101,6 +129,7 @@ fn find_brace_block_span(path: &str, lines: &[&str], anchor_line: usize) -> Opti
                 }
                 _ => {}
             }
+            index += 1;
         }
     }
 
@@ -228,6 +257,7 @@ fn is_brace_language(path: &str) -> bool {
                 | "cpp"
                 | "cs"
                 | "css"
+                | "dart"
                 | "go"
                 | "h"
                 | "hpp"
@@ -235,11 +265,16 @@ fn is_brace_language(path: &str) -> bool {
                 | "js"
                 | "jsx"
                 | "kt"
+                | "kts"
+                | "m"
+                | "mm"
                 | "rs"
                 | "scss"
+                | "scala"
                 | "swift"
                 | "ts"
                 | "tsx"
+                | "zig"
         )
     })
 }
