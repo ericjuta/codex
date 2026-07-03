@@ -5,6 +5,7 @@ use super::hashline_block::find_block_span;
 use super::hashline_format::split_lines_preserve;
 use super::hashline_hash::hash_hex;
 use super::hashline_hash::line_hash;
+use super::hashline_hash::normalize_file_text;
 
 const APPLY_PATCH_CONTEXT_LINES: usize = 3;
 const PATCH_PREVIEW_MAX_LINES: usize = 40;
@@ -142,7 +143,13 @@ pub(super) fn apply_hashline_patch(
                 .to_string(),
         ));
     }
-    let mut lines = split_lines_preserve(contents)
+    let contents_bytes = contents.as_bytes();
+    let restore_crlf = contents_bytes
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .is_some_and(|index| index > 0 && contents_bytes[index - 1] == b'\r');
+    let normalized_contents = normalize_file_text(contents);
+    let mut lines = split_lines_preserve(&normalized_contents)
         .into_iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>();
@@ -153,11 +160,14 @@ pub(super) fn apply_hashline_patch(
         ));
     }
 
-    apply_operations(path, &mut lines, &operations, contents)?;
+    apply_operations(path, &mut lines, &operations, &normalized_contents)?;
 
     let mut output = lines.join("\n");
-    if contents.ends_with('\n') {
+    if normalized_contents.ends_with('\n') {
         output.push('\n');
+    }
+    if restore_crlf {
+        output = output.replace('\n', "\r\n");
     }
     Ok(output)
 }
@@ -1250,8 +1260,10 @@ pub(super) fn build_hashline_patch_preview(
     old_contents: &str,
     new_contents: &str,
 ) -> Result<HashlinePatchPreview, FunctionCallError> {
-    let old_lines = split_lines_preserve(old_contents);
-    let new_lines = split_lines_preserve(new_contents);
+    let normalized_old_contents = normalize_file_text(old_contents);
+    let normalized_new_contents = normalize_file_text(new_contents);
+    let old_lines = split_lines_preserve(&normalized_old_contents);
+    let new_lines = split_lines_preserve(&normalized_new_contents);
     let bounds = change_bounds(&old_lines, &new_lines);
     if bounds.old_start == bounds.old_end && bounds.new_start == bounds.new_end {
         return Err(FunctionCallError::RespondToModel(

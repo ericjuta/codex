@@ -676,20 +676,16 @@ async fn handle_write(
             .handle(apply_patch_invocation)
             .await?;
 
-        let written_contents = read_selected_file(
+        let written_contents = read_selected_file_after_update(
             post_write_turn.as_ref(),
             post_write_step_context.as_ref(),
             &args.path,
             args.environment_id.as_deref(),
+            &write_contents,
+            &new_hash,
+            "hashline.write",
         )
         .await?;
-        let written_hash = hash_hex(&written_contents, 4);
-        if written_hash != new_hash {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "hashline.write applied but post-write file hash for {} was {}, expected {new_hash}",
-                args.path, written_hash
-            )));
-        }
         return build_hashline_write_output(
             &args.path,
             &old_contents,
@@ -991,19 +987,16 @@ async fn handle_patch(
         .handle(apply_patch_invocation)
         .await?;
 
-    let written_contents = read_selected_file(
+    let written_contents = read_selected_file_after_update(
         post_write_turn.as_ref(),
         post_write_step_context.as_ref(),
         target_path,
         args.environment_id.as_deref(),
+        &patched,
+        &new_hash,
+        "hashline.patch",
     )
     .await?;
-    let written_hash = hash_hex(&written_contents, 4);
-    if written_hash != new_hash {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "hashline.patch applied but post-write file hash for {target_path} was {written_hash}, expected {new_hash}"
-        )));
-    }
 
     let body =
         build_hashline_patch_success_body(target_path, &contents, &written_contents, create)?;
@@ -1383,23 +1376,20 @@ async fn handle_multi_file_patch(
             PreparedHashlinePatchFile::Update {
                 path,
                 old_contents,
+                new_contents,
                 new_hash,
                 create,
-                ..
             } => {
-                let written_contents = read_selected_file(
+                let written_contents = read_selected_file_after_update(
                     invocation.turn.as_ref(),
                     invocation.step_context.as_ref(),
                     path,
                     args.environment_id.as_deref(),
+                    new_contents,
+                    new_hash,
+                    "hashline.patch",
                 )
                 .await?;
-                let written_hash = hash_hex(&written_contents, 4);
-                if written_hash != *new_hash {
-                    return Err(FunctionCallError::RespondToModel(format!(
-                        "hashline.patch applied but post-write file hash for {path} was {written_hash}, expected {new_hash}"
-                    )));
-                }
                 files.push(build_hashline_patch_success_body(
                     path,
                     old_contents,
@@ -1825,6 +1815,63 @@ async fn read_selected_file(
         .map_err(|error| {
             FunctionCallError::RespondToModel(format!("unable to read {path}: {error}"))
         })
+}
+
+async fn read_selected_file_after_update(
+    turn: &crate::session::turn_context::TurnContext,
+    step_context: &crate::session::step_context::StepContext,
+    path: &str,
+    environment_id: Option<&str>,
+    expected_contents: &str,
+    expected_hash: &str,
+    operation: &str,
+) -> Result<String, FunctionCallError> {
+    let written_contents = read_selected_file(turn, step_context, path, environment_id).await?;
+    let written_hash = hash_hex(&written_contents, 4);
+    if written_hash != expected_hash {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "{operation} applied but post-write file hash for {path} was {written_hash}, expected {expected_hash}"
+        )));
+    }
+    if written_contents == expected_contents {
+        return Ok(written_contents);
+    }
+
+    let Some(turn_environment) =
+        resolve_tool_environment(&step_context.environments, environment_id)?
+    else {
+        return Err(FunctionCallError::RespondToModel(
+            "hashline file tools are unavailable in this session".to_string(),
+        ));
+    };
+    let path_uri = turn_environment.cwd().join(path).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "unable to resolve path {path} against environment cwd {}: {err}",
+            turn_environment.cwd(),
+        ))
+    })?;
+    let sandbox = turn
+        .file_system_sandbox_context(/*additional_permissions*/ None, turn_environment.cwd());
+    let fs = turn_environment.environment.get_filesystem();
+    fs.write_file(
+        &path_uri,
+        expected_contents.as_bytes().to_vec(),
+        Some(&sandbox),
+    )
+    .await
+    .map_err(|error| {
+        FunctionCallError::RespondToModel(format!(
+            "{operation} could not restore exact contents for {path}: {error}"
+        ))
+    })?;
+
+    let rewritten_contents = read_selected_file(turn, step_context, path, environment_id).await?;
+    if rewritten_contents != expected_contents {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "{operation} restored {path} but exact contents still differ from the Hashline result"
+        )));
+    }
+    Ok(rewritten_contents)
 }
 
 #[cfg(test)]

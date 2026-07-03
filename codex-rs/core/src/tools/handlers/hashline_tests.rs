@@ -40,6 +40,16 @@ fn applies_basic_line_operations() {
 }
 
 #[test]
+fn applies_patch_against_normalized_crlf_and_restores_crlf() {
+    let original = "alpha\r\nbeta\r\ngamma\r\n";
+    let patch = format!("SWAP 2:{}|bravo", line_hash("beta"));
+
+    let updated = apply_hashline_patch("notes.txt", original, &patch).expect("patch should apply");
+
+    assert_eq!(updated, "alpha\r\nbravo\r\ngamma\r\n");
+}
+
+#[test]
 fn rejects_stale_line_hash() {
     let error = apply_hashline_patch("notes.txt", "alpha\n", "SWAP 1:00|omega")
         .expect_err("stale hash should be rejected");
@@ -833,6 +843,21 @@ fn dry_run_preview_reports_changed_lines() {
             line_hash("THREE"),
             line_hash("four"),
             line_hash("FIVE")
+        )
+    );
+}
+
+#[test]
+fn dry_run_preview_normalizes_crlf_rows() {
+    let preview = build_hashline_patch_preview("alpha\r\nbeta\r\n", "alpha\r\nbravo\r\n")
+        .expect("preview should be generated");
+
+    assert_eq!(
+        preview.content,
+        format!(
+            "-2:{}|beta\n+2:{}|bravo",
+            line_hash("beta"),
+            line_hash("bravo")
         )
     );
 }

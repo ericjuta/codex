@@ -246,13 +246,15 @@ Required behavior:
    - If only bare line numbers are supplied, allow them in stage 1 but return a
      warning that hash-qualified anchors are preferred.
 5. Produce a before/after preview and file-change summary before writing.
-6. Reuse Codex approval and sandbox policy:
+6. Preserve the original CRLF line-ending shape when patching existing CRLF
+   files, while keeping model-visible previews LF-normalized.
+7. Reuse Codex approval and sandbox policy:
    - build approval keys by environment and path;
    - use `FileSystemSandboxContext` derived from the selected attempt;
    - expose hook payloads under a stable hook name such as `hashline.patch`;
    - preserve Guardian review compatibility for file mutations.
-7. On approval, write via `ExecutorFileSystem::write_file`.
-8. Return refreshed file hash and bounded changed-region anchors.
+8. On approval, write via `ExecutorFileSystem::write_file`.
+9. Return refreshed file hash and bounded changed-region anchors.
 
 ### Block Runtime
 

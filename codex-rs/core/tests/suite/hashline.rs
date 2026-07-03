@@ -106,7 +106,7 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
 
     let file_name = "hashline-notes.txt";
     let file_path = test.cwd.path().join(file_name);
-    fs::write(&file_path, "alpha\nbeta\ngamma\n")?;
+    fs::write(&file_path, "alpha\r\nbeta\r\ngamma\r\n")?;
 
     let read_args = json!({
         "path": file_name,
@@ -153,7 +153,10 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
     })
     .await;
 
-    assert_eq!(fs::read_to_string(file_path)?, "alpha\nbravo\ngamma\n");
+    assert_eq!(
+        fs::read_to_string(file_path)?,
+        "alpha\r\nbravo\r\ngamma\r\n"
+    );
 
     let request = final_mock.single_request();
     let read_output = request
@@ -170,6 +173,7 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
     assert!(patch_output.contains(&format!("\"header\": \"[{file_name}#")));
     assert!(patch_output.contains("\"operation\": \"update\""));
     assert!(patch_output.contains("|bravo"));
+    assert!(!patch_output.contains("\\r"));
     assert!(patch_output.contains("\"preview\""));
 
     Ok(())
