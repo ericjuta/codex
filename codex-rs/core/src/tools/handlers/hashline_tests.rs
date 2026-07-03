@@ -242,6 +242,22 @@ fn read_body_reports_empty_file_without_line_range() {
 }
 
 #[test]
+fn read_tool_output_schema_allows_empty_line_range() {
+    let output_schema = super::read_tool_spec(/*multi_environment*/ false)
+        .output_schema
+        .expect("read tool should advertise structured output");
+
+    assert_eq!(
+        output_schema["properties"]["start_line"]["type"],
+        json!(["integer", "null"])
+    );
+    assert_eq!(
+        output_schema["properties"]["end_line"]["type"],
+        json!(["integer", "null"])
+    );
+}
+
+#[test]
 fn tool_args_accept_reference_path_aliases() {
     let read: super::ReadArgs = serde_json::from_value(json!({
         "file": "notes.txt",
