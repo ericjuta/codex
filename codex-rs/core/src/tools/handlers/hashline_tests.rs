@@ -112,6 +112,7 @@ fn read_body_without_end_line_only_truncates_when_capped() {
         body,
         json!({
             "path": "notes.txt",
+            "hash": hash_hex(contents, 4),
             "header": format!("[notes.txt#{}]", hash_hex(contents, 4)),
             "start_line": 1,
             "end_line": 2,
@@ -119,6 +120,18 @@ fn read_body_without_end_line_only_truncates_when_capped() {
             "truncated": false,
             "next_start_line": null,
             "content": format!("1:{}|alpha\n2:{}|beta", line_hash("alpha"), line_hash("beta")),
+            "lines": [
+                {
+                    "n": 1,
+                    "hash": line_hash("alpha"),
+                    "content": "alpha",
+                },
+                {
+                    "n": 2,
+                    "hash": line_hash("beta"),
+                    "content": "beta",
+                },
+            ],
         })
     );
 }

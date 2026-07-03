@@ -90,7 +90,7 @@ Expose a namespace named `hashline` with these first-stage tools:
 
 | Tool | Purpose | Model-visible output |
 | --- | --- | --- |
-| `hashline.read` | Read a bounded file range with Hashline anchors | `[path#HASH]` plus `line:hash|content`, with explicit truncation metadata when capped. |
+| `hashline.read` | Read a bounded file range with Hashline anchors | `[path#HASH]` plus `line:hash|content`, reference-style `hash`/`lines` metadata, and explicit truncation metadata when capped. |
 | `hashline.write` | Write normalized content, including empty content, to a new file or overwrite with `force=true` | Success/failure status plus a refreshed bounded `[path#HASH]` read view after writing. |
 | `hashline.patch` | Apply a Hashline patch string to one file, to multiple existing files with `[path#HASH]` sections, or to multiple missing files with `create=true` and `[path]` sections | Success/failure status; dry runs include old/new hashes, file operations, and compact changed-line previews. |
 | `hashline.find_block` | Resolve a block around an anchored line | Block span, language guess, reference-style `file`/`line_count`/`block_lines` metadata, and a small anchored excerpt. |

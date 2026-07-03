@@ -263,15 +263,29 @@ fn read_tool_spec(multi_environment: bool) -> ResponsesApiTool {
             "type": "object",
             "properties": {
                 "path": { "type": "string" },
+                "hash": { "type": "string" },
                 "header": { "type": "string" },
                 "start_line": { "type": "integer" },
                 "end_line": { "type": "integer" },
                 "total_lines": { "type": "integer" },
                 "truncated": { "type": "boolean" },
                 "next_start_line": { "type": ["integer", "null"] },
-                "content": { "type": "string" }
+                "content": { "type": "string" },
+                "lines": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "n": { "type": "integer" },
+                            "hash": { "type": "string" },
+                            "content": { "type": "string" }
+                        },
+                        "required": ["n", "hash", "content"],
+                        "additionalProperties": false
+                    }
+                }
             },
-            "required": ["path", "header", "start_line", "end_line", "total_lines", "truncated", "next_start_line", "content"],
+            "required": ["path", "hash", "header", "start_line", "end_line", "total_lines", "truncated", "next_start_line", "content", "lines"],
             "additionalProperties": false
         })),
     }
@@ -532,8 +546,22 @@ fn build_hashline_read_body(
     let next_start_line = truncated.then_some(end_line.saturating_add(1));
     let path_hash = hash_hex(contents, 4);
     let content = format_hashline_excerpt(contents, start_line, end_line);
+    let lines = split_lines_preserve(contents)
+        .into_iter()
+        .enumerate()
+        .skip(start_line.saturating_sub(1))
+        .take(end_line.saturating_sub(start_line).saturating_add(1))
+        .map(|(index, line)| {
+            json!({
+                "n": index + 1,
+                "hash": line_hash(line),
+                "content": line,
+            })
+        })
+        .collect::<Vec<_>>();
     json!({
         "path": path,
+        "hash": path_hash,
         "header": format!("[{path}#{path_hash}]"),
         "start_line": start_line,
         "end_line": end_line,
@@ -541,6 +569,7 @@ fn build_hashline_read_body(
         "truncated": truncated,
         "next_start_line": next_start_line,
         "content": content,
+        "lines": lines,
     })
 }
 
