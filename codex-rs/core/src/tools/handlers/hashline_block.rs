@@ -1,5 +1,10 @@
 use std::path::Path;
 
+const RUBY_OPENERS: &[&str] = &[
+    "def ", "class ", "module ", "do ", "do|", "if ", "unless ", "while ", "until ", "for ",
+    "begin ", "case ",
+];
+
 pub(super) fn find_block_span(path: &str, lines: &[&str], anchor_line: usize) -> (usize, usize) {
     if lines.is_empty() {
         return (1, 1);
@@ -9,6 +14,9 @@ pub(super) fn find_block_span(path: &str, lines: &[&str], anchor_line: usize) ->
         return span;
     }
     if let Some(span) = find_python_header_block_span(path, lines, anchor_line) {
+        return span;
+    }
+    if let Some(span) = find_ruby_block_span(path, lines, anchor_line) {
         return span;
     }
     if let Some(span) = find_brace_block_span(path, lines, anchor_line) {
@@ -144,6 +152,46 @@ fn find_python_header_block_span(
     Some((anchor_index + 1, end))
 }
 
+fn find_ruby_block_span(path: &str, lines: &[&str], anchor_line: usize) -> Option<(usize, usize)> {
+    if !is_ruby(path) {
+        return None;
+    }
+    let anchor_index = anchor_line.checked_sub(1)?;
+    let start = find_ruby_block_start(lines, anchor_index)?;
+    let end = find_ruby_block_end(lines, start)?;
+    Some((start + 1, end + 1))
+}
+
+fn find_ruby_block_start(lines: &[&str], anchor_index: usize) -> Option<usize> {
+    let mut depth = 0isize;
+    for index in (0..=anchor_index).rev() {
+        let trimmed = lines[index].trim();
+        depth += ruby_closer_count(trimmed) as isize;
+        let open_count = ruby_opener_count(trimmed);
+        depth -= open_count as isize;
+        if open_count > 0 && depth <= 0 {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn find_ruby_block_end(lines: &[&str], start: usize) -> Option<usize> {
+    let mut depth = 0isize;
+    for (index, line) in lines.iter().enumerate().skip(start) {
+        let trimmed = line.trim();
+        depth += ruby_opener_count(trimmed) as isize;
+        depth -= ruby_closer_count(trimmed) as isize;
+        if index > start && depth <= 0 && ruby_closer_count(trimmed) > 0 {
+            return Some(index);
+        }
+        if index == start && depth <= 0 {
+            return Some(index);
+        }
+    }
+    None
+}
+
 fn find_indent_block_span(lines: &[&str], anchor_line: usize) -> (usize, usize) {
     let anchor_index = anchor_line - 1;
     let anchor_indent = indent_width(lines[anchor_index]);
@@ -204,6 +252,10 @@ fn is_python_indent_language(path: &str) -> bool {
     extension(path).is_some_and(|extension| matches!(extension, "py" | "verse"))
 }
 
+fn is_ruby(path: &str) -> bool {
+    extension(path).is_some_and(|extension| extension == "rb")
+}
+
 fn extension(path: &str) -> Option<&str> {
     Path::new(path)
         .extension()
@@ -218,6 +270,18 @@ fn markdown_heading_level(line: &str) -> Option<usize> {
     } else {
         None
     }
+}
+
+fn ruby_opener_count(trimmed: &str) -> usize {
+    usize::from(
+        RUBY_OPENERS
+            .iter()
+            .any(|opener| trimmed.starts_with(*opener)),
+    )
+}
+
+fn ruby_closer_count(trimmed: &str) -> usize {
+    usize::from(trimmed == "end")
 }
 
 fn indent_width(line: &str) -> usize {

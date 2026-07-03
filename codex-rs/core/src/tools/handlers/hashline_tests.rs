@@ -663,6 +663,20 @@ fn applies_python_swap_block_header_operation() {
 }
 
 #[test]
+fn applies_ruby_swap_block_header_operation() {
+    let original = "def hello\n  x = 1\nend\n\ndef keep\n  2\nend\n";
+
+    let updated = apply_hashline_patch(
+        "src/main.rb",
+        original,
+        "SWAP.BLK 1:\n+def hello\n+  42\n+end",
+    )
+    .expect("Ruby block should replace only the anchored method");
+
+    assert_eq!(updated, "def hello\n  42\nend\n\ndef keep\n  2\nend\n");
+}
+
+#[test]
 fn generated_update_patch_is_localized() {
     let original = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\n";
     let updated = "one\ntwo\nthree\nfour\nFIVE\nsix\nseven\neight\nnine\n";
@@ -996,6 +1010,21 @@ fn find_block_python_header_stops_at_next_top_level() {
     ];
 
     assert_eq!(find_block_span("src/main.py", &lines, 1), (1, 3));
+}
+
+#[test]
+fn find_block_ruby_uses_end_pairs() {
+    let lines = [
+        "def hello",
+        "  x = 1",
+        "  if true",
+        "    puts 'ok'",
+        "  end",
+        "end",
+    ];
+
+    assert_eq!(find_block_span("src/main.rb", &lines, 2), (1, 6));
+    assert_eq!(find_block_span("src/main.rb", &lines, 4), (3, 5));
 }
 
 #[test]
