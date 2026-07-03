@@ -19,7 +19,7 @@ Live proof used for this spec:
 | Surface | Live state | Implication |
 | --- | --- | --- |
 | Existing integration spec | `codex-rs/docs/hashline_tool_integration_spec.md` exists in this branch | This spec back-links to it and specializes its gate/config language. |
-| Config source type | `codex-rs/features/src/lib.rs` owns the feature registry consumed by `ConfigToml.features` | Add proposed feature keys there if this spec is implemented. |
+| Config source type | `codex-rs/features/src/lib.rs` owns the feature registry consumed by `ConfigToml.features` | Keep the `hashline` and `hashline_only` feature keys there. |
 | Effective config assembly | `codex-rs/core/src/config/mod.rs` builds `Config` from `ConfigToml` and features | Resolve and validate the two booleans there. |
 | Tool visibility planning | `codex-rs/core/src/tools/spec_plan.rs` chooses model-visible tools | Enforce additive vs Hashline-only tool visibility there. |
 | Existing edit tool | `codex-rs/apply-patch` plus `core/src/tools/handlers/apply_patch.rs` | Keep runtime compatibility unless `hashline_only` explicitly hides model visibility. |
@@ -81,14 +81,16 @@ passing raw booleans positionally. Use named fields or an enum such as
 
 When `[features].hashline = true`:
 
-1. Register `hashline.read`, `hashline.patch`, and `hashline.find_block`.
+1. Register `hashline.read`, `hashline.patch`, `hashline.find_block`,
+   `hashline.remove_file`, and `hashline.rename_file`.
 2. Keep existing `apply_patch` behavior unchanged.
 3. Add concise model guidance that Hashline is preferred for line-anchored
    edits, while `apply_patch` remains available for broader compatibility.
 
 When `[features].hashline = true` and `[features].hashline_only = true`:
 
-1. Register `hashline.read`, `hashline.patch`, and `hashline.find_block`.
+1. Register `hashline.read`, `hashline.patch`, `hashline.find_block`,
+   `hashline.remove_file`, and `hashline.rename_file`.
 2. Hide `apply_patch` from model-visible specs once Hashline patch parity exists
    for the selected model/tool mode.
 3. Keep `ApplyPatchHandler` dispatch-only if needed for:
@@ -203,11 +205,13 @@ Tool-planning tests:
 
 Integration tests:
 
-1. `[features] hashline = true` lets the model call Hashline read and patch.
+1. `[features] hashline = true` lets the model call Hashline read, patch,
+   create, remove, and rename flows.
 2. `[features] hashline_only = true` prevents a new model turn from seeing direct
    `apply_patch`.
 3. Resume/replay can still handle an old `apply_patch` call when
    `[features] hashline_only = true`.
+4. Stale line hashes are rejected without writing.
 4. Hooks and approvals still fire for file mutations.
 
 ## Documentation Updates

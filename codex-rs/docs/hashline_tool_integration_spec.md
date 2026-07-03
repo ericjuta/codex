@@ -12,7 +12,7 @@ Live proof used for this spec:
 | Surface | Live state | Implication |
 | --- | --- | --- |
 | Reference checkout | `/tmp/hashline`, `main...origin/main`, clean at inspection time | Treat it as reference code, not vendored runtime truth. |
-| Codex checkout | `/home/ericjuta/.openclaw/workspace/repos/codex`, branch `feature/hashline` | Spec is written against the active branch. |
+| Codex checkout | `/home/ericjuta/.openclaw/workspace/repos/codex`, branch `main` | Spec is written against the active branch. |
 | Existing Codex tool path | `codex-rs/tools` plus `codex-rs/core/src/tools` | Add model-visible definitions in the normal tool planning path. |
 | Existing patch path | `codex-rs/apply-patch` plus `core/src/tools/handlers/apply_patch.rs` and `core/src/tools/runtimes/apply_patch.rs` | Any replacement must preserve approval, sandbox, remote FS, telemetry, and event behavior. |
 | MCP path | `codex-rs/codex-mcp/src/connection_manager.rs` and `core/src/tools/handlers/mcp.rs` | Hashline can be tried as MCP, but MCP is not the best default integration boundary. |
@@ -28,10 +28,11 @@ replace `apply_patch` in the first stage.
 
 The preferred first landing stage is:
 
-1. Add a new crate, `codex-hashline`, containing the pure parser, hashing,
-   formatting, and text-application logic adapted from `/tmp/hashline`.
-2. Add native Codex handlers for `hashline.read`, `hashline.patch`, and
-   `hashline.find_block`.
+1. Keep parser, hashing, formatting, and text-application logic outside the
+   root handler. Handler-private modules are acceptable for the initial hardening
+   pass; extract `codex-hashline` when the logic needs a reusable crate boundary.
+2. Add native Codex handlers for `hashline.read`, `hashline.patch`,
+   `hashline.find_block`, `hashline.remove_file`, and `hashline.rename_file`.
 3. Keep `apply_patch` registered and unchanged.
 4. Gate the new tools behind a feature flag, model capability check, or config
    knob until integration tests prove behavior across local, remote, sandboxed,
@@ -89,7 +90,7 @@ Expose a namespace named `hashline` with these first-stage tools:
 | Tool | Purpose | Model-visible output |
 | --- | --- | --- |
 | `hashline.read` | Read a bounded file range with Hashline anchors | `[path#HASH]` plus `line:hash|content`, with explicit truncation metadata when capped. |
-| `hashline.patch` | Apply a single-file Hashline patch string | Success/failure status, changed line range, refreshed `[path#HASH]`, compact diff, and warnings. |
+| `hashline.patch` | Apply a single-file Hashline patch string | Success/failure status; dry runs include old/new hashes and a compact changed-line preview. |
 | `hashline.find_block` | Resolve a block around an anchored line | Block span, language guess, and a small anchored excerpt. |
 | `hashline.remove_file` | Delete one text file after optional file-hash validation | Existing `apply_patch` delete-file success/failure output. |
 | `hashline.rename_file` | Move one non-empty newline-terminated text file after optional file-hash validation | Existing `apply_patch` move success/failure output. |
@@ -116,7 +117,7 @@ bodies.
 | --- | --- | --- | --- |
 | `path` | string | yes | Stage 1 is intentionally single-file. |
 | `patch` | string | yes | Hashline ops such as `SWAP 12:ab:` or a `[path#HASH]` section plus ops. |
-| `dry_run` | boolean | no | Defaults to false. |
+| `dry_run` | boolean | no | Defaults to false. Validates without writing and returns old/new hashes plus a compact changed-line preview. |
 | `create` | boolean | no | Defaults to false. When true, the target must be missing and the patch is applied to an empty file before routing through `apply_patch` add-file handling. |
 | `environment_id` | string | only when multiple environments exist | Match `apply_patch` environment selection behavior. |
 
@@ -165,7 +166,10 @@ default.
 
 ## Crate Boundary
 
-Add a new crate instead of adding the reusable logic to `codex-core`.
+Prefer a new crate over adding reusable Hashline logic to `codex-core`.
+Initial handler-private modules under `core/src/tools/handlers/hashline_*.rs`
+are acceptable while the native tool surface is still being hardened, as long as
+they stay private to the handler and do not become a general core API.
 
 Proposed crate:
 
@@ -320,9 +324,9 @@ Prefer integration tests under `core/suite`:
 | --- | --- |
 | `hashline.read` on text file | Model receives bounded `[path#HASH]` output. |
 | `hashline.patch` after read | File changes and response includes refreshed hash. |
-| Stale file hash | Patch is rejected without writing. |
+| Stale file hash | File operations are rejected without writing. |
 | Stale line hash | Patch is rejected without writing and points to re-read. |
-| Dry run | Diff is returned and file is unchanged. |
+| Dry run | Changed-line preview is returned and file is unchanged. |
 | Multi-environment | `environment_id` selects the correct filesystem. |
 | Sandbox denied | Runtime requests/uses approval consistently with `apply_patch`. |
 | Remote filesystem | Reads and writes go through exec-server FS, not host `std::fs`. |
@@ -333,7 +337,7 @@ If TUI-rendered text changes, add or update `insta` snapshots in `codex-tui`.
 
 | Step | Scope | Files |
 | --- | --- | --- |
-| 1 | Extract pure library | `codex-rs/hashline`, `codex-rs/Cargo.toml`, `codex-rs/hashline/BUILD.bazel` |
+| 1 | Isolate pure logic | `core/src/tools/handlers/hashline_*.rs` first; extract `codex-rs/hashline` if the logic becomes reusable across surfaces |
 | 2 | Add read formatter and tests | `codex-rs/hashline/src/read.rs`, `read_tests.rs` |
 | 3 | Add parser/apply subset and tests | `codex-rs/hashline/src/parser.rs`, `apply.rs`, sibling tests |
 | 4 | Add Codex tool specs/handlers | `core/src/tools/handlers/hashline*.rs`, `handlers/mod.rs`, `spec_plan.rs` |
@@ -364,7 +368,8 @@ If TUI-rendered text changes, add or update `insta` snapshots in `codex-tui`.
 
 1. Do not change `CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR` or
    `CODEX_SANDBOX_ENV_VAR` behavior.
-2. Do not add reusable Hashline logic to `codex-core`.
+2. Do not add reusable public Hashline APIs to `codex-core`; keep interim
+   handler-private modules private until a dedicated crate is justified.
 3. Do not make Hashline MCP the default edit path.
 4. Do not remove or hide `apply_patch` until replacement criteria are met.
 5. Do not emit full-file contents without hard caps.

@@ -17,8 +17,32 @@ use codex_tools::ToolSpec;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeMap;
-use std::hash::Hasher;
 use std::io;
+
+#[path = "hashline_block.rs"]
+mod hashline_block;
+#[path = "hashline_format.rs"]
+mod hashline_format;
+#[path = "hashline_hash.rs"]
+mod hashline_hash;
+#[path = "hashline_patch.rs"]
+mod hashline_patch;
+
+use self::hashline_block::find_block_span;
+use self::hashline_format::count_lines;
+use self::hashline_format::format_hashline_excerpt;
+use self::hashline_format::split_lines_preserve;
+use self::hashline_hash::hash_hex;
+use self::hashline_hash::line_hash;
+use self::hashline_patch::apply_hashline_patch;
+use self::hashline_patch::apply_patch_for_hashline_remove;
+use self::hashline_patch::apply_patch_for_hashline_rename;
+use self::hashline_patch::apply_patch_for_hashline_update;
+use self::hashline_patch::build_hashline_patch_preview;
+use self::hashline_patch::ensure_rename_representable;
+use self::hashline_patch::parse_anchor_hash;
+use self::hashline_patch::parse_anchor_line;
+use self::hashline_patch::validate_file_hash;
 
 const NAMESPACE: &str = "hashline";
 const READ_TOOL: &str = "read";
@@ -30,7 +54,6 @@ const DEFAULT_READ_MAX_LINES: usize = 200;
 const HARD_READ_MAX_LINES: usize = 1000;
 const DEFAULT_FIND_BLOCK_MAX_LINES: usize = 80;
 const HARD_FIND_BLOCK_MAX_LINES: usize = 300;
-const APPLY_PATCH_CONTEXT_LINES: usize = 3;
 
 #[derive(Clone, Copy)]
 pub(crate) enum HashlineToolKind {
@@ -454,7 +477,7 @@ async fn handle_find_block(
         .max_lines
         .unwrap_or(DEFAULT_FIND_BLOCK_MAX_LINES)
         .clamp(1, HARD_FIND_BLOCK_MAX_LINES);
-    let (block_start, block_end) = find_block_span(&lines, anchor_line);
+    let (block_start, block_end) = find_block_span(&args.path, &lines, anchor_line);
     let capped_end = block_end.min(block_start.saturating_add(max_lines).saturating_sub(1));
     let body = json!({
         "path": args.path,
@@ -517,11 +540,14 @@ async fn handle_patch(
     )?;
 
     if args.dry_run.unwrap_or(false) {
+        let preview = build_hashline_patch_preview(&contents, &patched)?;
         let body = json!({
             "path": args.path,
             "dry_run": true,
+            "operation": if create { "create" } else { "update" },
             "old_hash": hash_hex(&contents, 4),
             "new_hash": new_hash,
+            "preview": preview,
         });
         return Ok(boxed_tool_output(FunctionToolOutput::from_text(
             serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
@@ -726,434 +752,6 @@ async fn read_selected_file(
         .map_err(|error| {
             FunctionCallError::RespondToModel(format!("unable to read {path}: {error}"))
         })
-}
-
-fn apply_hashline_patch(contents: &str, patch: &str) -> Result<String, FunctionCallError> {
-    let mut lines = split_lines_preserve(contents)
-        .into_iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    let mut saw_operation = false;
-
-    for raw_line in patch.lines() {
-        let line = raw_line.trim_end();
-        if line.trim().is_empty() || line.starts_with('[') || line.starts_with('#') {
-            continue;
-        }
-        saw_operation = true;
-        let (op, rest) = split_hashline_operation(line)?;
-        match op {
-            "SWAP" => {
-                let (line_number, expected_hash, replacement) =
-                    parse_line_op(rest, /*needs_text*/ true)?;
-                validate_line_hash(&lines, line_number, expected_hash)?;
-                lines[line_number - 1] = replacement.to_string();
-            }
-            "DEL" => {
-                let (line_number, expected_hash, _) =
-                    parse_line_op(rest, /*needs_text*/ false)?;
-                validate_line_hash(&lines, line_number, expected_hash)?;
-                lines.remove(line_number - 1);
-            }
-            "INS.PRE" => {
-                let (line_number, expected_hash, inserted) =
-                    parse_line_op(rest, /*needs_text*/ true)?;
-                validate_line_hash(&lines, line_number, expected_hash)?;
-                lines.insert(line_number - 1, inserted.to_string());
-            }
-            "INS.POST" => {
-                let (line_number, expected_hash, inserted) =
-                    parse_line_op(rest, /*needs_text*/ true)?;
-                validate_line_hash(&lines, line_number, expected_hash)?;
-                lines.insert(line_number, inserted.to_string());
-            }
-            "INS.HEAD" => {
-                let inserted = parse_insert_text(rest)?;
-                lines.insert(0, inserted.to_string());
-            }
-            "INS.TAIL" => {
-                let inserted = parse_insert_text(rest)?;
-                lines.push(inserted.to_string());
-            }
-            _ => {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "unsupported Hashline operation {op}"
-                )));
-            }
-        }
-    }
-
-    if !saw_operation {
-        return Err(FunctionCallError::RespondToModel(
-            "hashline.patch did not contain any operations".to_string(),
-        ));
-    }
-
-    let mut output = lines.join("\n");
-    if contents.ends_with('\n') {
-        output.push('\n');
-    }
-    Ok(output)
-}
-
-fn parse_line_op(
-    input: &str,
-    needs_text: bool,
-) -> Result<(usize, Option<&str>, &str), FunctionCallError> {
-    let (anchor, text) = if let Some((anchor, text)) = input.split_once('|') {
-        (anchor.trim(), text)
-    } else if needs_text {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "Hashline operation {input} must include |text"
-        )));
-    } else {
-        (input.trim(), "")
-    };
-    let line_number = parse_anchor_line(anchor)?;
-    let expected_hash = parse_anchor_hash(anchor);
-    Ok((line_number, expected_hash, text))
-}
-
-fn split_hashline_operation(input: &str) -> Result<(&str, &str), FunctionCallError> {
-    let line = input.trim_start();
-    let Some(op_end) = line.find(|ch: char| ch.is_whitespace() || ch == '|') else {
-        return Err(invalid_operation_error(line));
-    };
-    let (op, rest) = line.split_at(op_end);
-    if op.is_empty() {
-        return Err(invalid_operation_error(line));
-    }
-    let rest = if rest.starts_with('|') {
-        rest
-    } else {
-        rest.trim_start()
-    };
-    if rest.is_empty() {
-        return Err(invalid_operation_error(line));
-    }
-    Ok((op, rest))
-}
-
-fn invalid_operation_error(line: &str) -> FunctionCallError {
-    FunctionCallError::RespondToModel(format!(
-        "invalid Hashline operation {line}; expected forms like SWAP 12:ab|text, DEL 12:ab, INS.POST 12:ab|text, or INS.TAIL |text"
-    ))
-}
-
-fn parse_insert_text(input: &str) -> Result<&str, FunctionCallError> {
-    input.trim_start().strip_prefix('|').ok_or_else(|| {
-        FunctionCallError::RespondToModel(format!("insert operation {input} must include |text"))
-    })
-}
-
-fn parse_anchor_line(anchor: &str) -> Result<usize, FunctionCallError> {
-    let line = anchor
-        .split_once(':')
-        .map_or(anchor, |(line, _)| line)
-        .trim();
-    line.parse::<usize>().map_err(|err| {
-        FunctionCallError::RespondToModel(format!("invalid Hashline anchor {anchor}: {err}"))
-    })
-}
-
-fn parse_anchor_hash(anchor: &str) -> Option<&str> {
-    anchor
-        .split_once(':')
-        .map(|(_, hash)| hash)
-        .filter(|hash| !hash.is_empty())
-}
-
-fn validate_line_hash(
-    lines: &[String],
-    line_number: usize,
-    expected_hash: Option<&str>,
-) -> Result<(), FunctionCallError> {
-    if line_number == 0 || line_number > lines.len() {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "line {line_number} is outside file range 1..={}",
-            lines.len()
-        )));
-    }
-    if let Some(expected_hash) = expected_hash {
-        let actual_hash = line_hash(&lines[line_number - 1]);
-        if expected_hash != actual_hash {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "line {line_number} hash mismatch: expected {expected_hash}, found {actual_hash}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_file_hash(
-    path: &str,
-    contents: &str,
-    expected_hash: Option<&str>,
-) -> Result<(), FunctionCallError> {
-    if let Some(expected_hash) = expected_hash {
-        let actual_hash = hash_hex(contents, 4);
-        if expected_hash != actual_hash {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "file hash mismatch for {path}: expected {expected_hash}, found {actual_hash}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn ensure_rename_representable(path: &str, contents: &str) -> Result<(), FunctionCallError> {
-    if split_lines_preserve(contents).is_empty() {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "hashline.rename_file cannot move empty file {path} through apply_patch"
-        )));
-    }
-    if !contents.ends_with('\n') {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "hashline.rename_file cannot preserve non-newline-terminated file {path} through apply_patch"
-        )));
-    }
-    Ok(())
-}
-
-fn apply_patch_for_hashline_update(
-    path: &str,
-    old_contents: &str,
-    new_contents: &str,
-    create: bool,
-    environment_id: Option<&str>,
-) -> Result<String, FunctionCallError> {
-    let mut patch = String::from("*** Begin Patch\n");
-    if let Some(environment_id) = environment_id {
-        patch.push_str("*** Environment ID: ");
-        patch.push_str(environment_id);
-        patch.push('\n');
-    }
-
-    if create {
-        let new_lines = split_lines_preserve(new_contents);
-        if new_lines.is_empty() {
-            return Err(FunctionCallError::RespondToModel(
-                "hashline.patch create=true produced an empty file, which apply_patch Add File cannot represent".to_string(),
-            ));
-        }
-        patch.push_str("*** Add File: ");
-        patch.push_str(path);
-        patch.push('\n');
-        for line in new_lines {
-            patch.push('+');
-            patch.push_str(line);
-            patch.push('\n');
-        }
-    } else {
-        append_localized_update_hunk(&mut patch, path, old_contents, new_contents)?;
-    }
-    patch.push_str("*** End Patch");
-    Ok(patch)
-}
-
-fn apply_patch_for_hashline_remove(path: &str, environment_id: Option<&str>) -> String {
-    let mut patch = apply_patch_header(environment_id);
-    patch.push_str("*** Delete File: ");
-    patch.push_str(path);
-    patch.push('\n');
-    patch.push_str("*** End Patch");
-    patch
-}
-
-fn apply_patch_for_hashline_rename(
-    path: &str,
-    new_path: &str,
-    contents: &str,
-    environment_id: Option<&str>,
-) -> Result<String, FunctionCallError> {
-    let Some(first_line) = split_lines_preserve(contents).first().copied() else {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "hashline.rename_file cannot move empty file {path} through apply_patch"
-        )));
-    };
-    let mut patch = apply_patch_header(environment_id);
-    patch.push_str("*** Update File: ");
-    patch.push_str(path);
-    patch.push_str("\n*** Move to: ");
-    patch.push_str(new_path);
-    patch.push_str("\n@@\n");
-    append_apply_patch_line(&mut patch, ' ', first_line);
-    patch.push_str("*** End Patch");
-    Ok(patch)
-}
-
-fn apply_patch_header(environment_id: Option<&str>) -> String {
-    let mut patch = String::from("*** Begin Patch\n");
-    if let Some(environment_id) = environment_id {
-        patch.push_str("*** Environment ID: ");
-        patch.push_str(environment_id);
-        patch.push('\n');
-    }
-    patch
-}
-
-fn append_localized_update_hunk(
-    patch: &mut String,
-    path: &str,
-    old_contents: &str,
-    new_contents: &str,
-) -> Result<(), FunctionCallError> {
-    let old_lines = split_lines_preserve(old_contents);
-    let new_lines = split_lines_preserve(new_contents);
-    let common_prefix = old_lines
-        .iter()
-        .zip(&new_lines)
-        .take_while(|(old, new)| old == new)
-        .count();
-    let remaining_old = old_lines.len().saturating_sub(common_prefix);
-    let remaining_new = new_lines.len().saturating_sub(common_prefix);
-    let common_suffix = old_lines[common_prefix..]
-        .iter()
-        .rev()
-        .zip(new_lines[common_prefix..].iter().rev())
-        .take_while(|(old, new)| old == new)
-        .count()
-        .min(remaining_old)
-        .min(remaining_new);
-
-    let old_change_start = common_prefix;
-    let old_change_end = old_lines.len() - common_suffix;
-    let new_change_start = common_prefix;
-    let new_change_end = new_lines.len() - common_suffix;
-    if old_change_start == old_change_end && new_change_start == new_change_end {
-        return Err(FunctionCallError::RespondToModel(
-            "hashline.patch did not change file contents".to_string(),
-        ));
-    }
-
-    let context_start = old_change_start.saturating_sub(APPLY_PATCH_CONTEXT_LINES);
-    let old_context_end = old_lines
-        .len()
-        .min(old_change_end.saturating_add(APPLY_PATCH_CONTEXT_LINES));
-
-    patch.push_str("*** Update File: ");
-    patch.push_str(path);
-    patch.push_str("\n@@\n");
-    for line in &old_lines[context_start..old_change_start] {
-        append_apply_patch_line(patch, ' ', line);
-    }
-    for line in &old_lines[old_change_start..old_change_end] {
-        append_apply_patch_line(patch, '-', line);
-    }
-    for line in &new_lines[new_change_start..new_change_end] {
-        append_apply_patch_line(patch, '+', line);
-    }
-    for line in &old_lines[old_change_end..old_context_end] {
-        append_apply_patch_line(patch, ' ', line);
-    }
-    if !old_contents.ends_with('\n') && old_context_end == old_lines.len() {
-        patch.push_str("*** End of File\n");
-    }
-    Ok(())
-}
-
-fn append_apply_patch_line(patch: &mut String, prefix: char, line: &str) {
-    patch.push(prefix);
-    patch.push_str(line);
-    patch.push('\n');
-}
-
-fn format_hashline_excerpt(contents: &str, start_line: usize, end_line: usize) -> String {
-    if start_line > end_line {
-        return String::new();
-    }
-    split_lines_preserve(contents)
-        .into_iter()
-        .enumerate()
-        .filter_map(|(index, line)| {
-            let line_number = index + 1;
-            (line_number >= start_line && line_number <= end_line)
-                .then(|| format!("{line_number}:{}|{line}", line_hash(line)))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn split_lines_preserve(contents: &str) -> Vec<&str> {
-    let trimmed = contents.strip_suffix('\n').unwrap_or(contents);
-    if trimmed.is_empty() {
-        Vec::new()
-    } else {
-        trimmed.split('\n').collect()
-    }
-}
-
-fn count_lines(contents: &str) -> usize {
-    split_lines_preserve(contents).len()
-}
-
-fn hash_hex(input: &str, width: usize) -> String {
-    let mut hasher = Fnv1a64::default();
-    hasher.write(input.as_bytes());
-    let mask = if width >= 16 {
-        u64::MAX
-    } else {
-        (1_u64 << (width * 4)) - 1
-    };
-    format!("{:0width$x}", hasher.finish() & mask)
-}
-
-fn line_hash(input: &str) -> String {
-    hash_hex(input, 2)
-}
-
-#[derive(Default)]
-struct Fnv1a64(u64);
-
-impl Hasher for Fnv1a64 {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        if self.0 == 0 {
-            self.0 = 0xcbf29ce484222325;
-        }
-        for byte in bytes {
-            self.0 ^= u64::from(*byte);
-            self.0 = self.0.wrapping_mul(0x100000001b3);
-        }
-    }
-}
-
-fn find_block_span(lines: &[&str], anchor_line: usize) -> (usize, usize) {
-    if lines.is_empty() {
-        return (1, 1);
-    }
-
-    let anchor_index = anchor_line - 1;
-    let anchor_indent = indent_width(lines[anchor_index]);
-    let mut start = anchor_index;
-    while start > 0 {
-        let previous = lines[start - 1];
-        if !previous.trim().is_empty() && indent_width(previous) < anchor_indent {
-            break;
-        }
-        start -= 1;
-    }
-
-    let mut end = anchor_index;
-    while end + 1 < lines.len() {
-        let next = lines[end + 1];
-        if !next.trim().is_empty() && indent_width(next) < anchor_indent {
-            break;
-        }
-        end += 1;
-    }
-
-    (start + 1, end + 1)
-}
-
-fn indent_width(line: &str) -> usize {
-    line.chars()
-        .take_while(|ch| ch.is_whitespace())
-        .map(|ch| if ch == '\t' { 4 } else { 1 })
-        .sum()
 }
 
 #[cfg(test)]

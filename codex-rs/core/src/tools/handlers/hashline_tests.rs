@@ -1,8 +1,10 @@
-use super::apply_hashline_patch;
-use super::apply_patch_for_hashline_remove;
-use super::apply_patch_for_hashline_rename;
-use super::apply_patch_for_hashline_update;
-use super::line_hash;
+use super::hashline_block::find_block_span;
+use super::hashline_hash::line_hash;
+use super::hashline_patch::apply_hashline_patch;
+use super::hashline_patch::apply_patch_for_hashline_remove;
+use super::hashline_patch::apply_patch_for_hashline_rename;
+use super::hashline_patch::apply_patch_for_hashline_update;
+use super::hashline_patch::build_hashline_patch_preview;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -60,6 +62,33 @@ fn generated_update_patch_is_localized() {
 }
 
 #[test]
+fn dry_run_preview_reports_changed_lines() {
+    let original = "one\ntwo\nthree\nfour\nfive\nsix\n";
+    let updated = "one\ntwo\nTHREE\nfour\nFIVE\nsix\n";
+
+    let preview =
+        build_hashline_patch_preview(original, updated).expect("preview should be generated");
+
+    assert_eq!(preview.old_start_line, Some(3));
+    assert_eq!(preview.old_end_line, Some(5));
+    assert_eq!(preview.new_start_line, Some(3));
+    assert_eq!(preview.new_end_line, Some(5));
+    assert!(!preview.truncated);
+    assert_eq!(
+        preview.content,
+        format!(
+            "-3:{}|three\n-4:{}|four\n-5:{}|five\n+3:{}|THREE\n+4:{}|four\n+5:{}|FIVE",
+            line_hash("three"),
+            line_hash("four"),
+            line_hash("five"),
+            line_hash("THREE"),
+            line_hash("four"),
+            line_hash("FIVE")
+        )
+    );
+}
+
+#[test]
 fn generated_create_patch_uses_add_file() {
     let patch = apply_patch_for_hashline_update(
         "created.txt",
@@ -100,4 +129,36 @@ fn generated_rename_patch_uses_move_hunk() {
         patch,
         "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n@@\n first\n*** End Patch"
     );
+}
+
+#[test]
+fn find_block_prefers_smallest_brace_block() {
+    let lines = [
+        "fn outer() {",
+        "    let value = 1;",
+        "    if value > 0 {",
+        "        println!(\"{value}\");",
+        "    }",
+        "    println!(\"done\");",
+        "}",
+    ];
+
+    assert_eq!(find_block_span("src/main.rs", &lines, 4), (3, 5));
+    assert_eq!(find_block_span("src/main.rs", &lines, 6), (1, 7));
+}
+
+#[test]
+fn find_block_uses_markdown_sections() {
+    let lines = [
+        "# Title",
+        "",
+        "intro",
+        "## Child",
+        "body",
+        "## Next",
+        "next body",
+    ];
+
+    assert_eq!(find_block_span("notes.md", &lines, 3), (1, 7));
+    assert_eq!(find_block_span("notes.md", &lines, 5), (4, 5));
 }

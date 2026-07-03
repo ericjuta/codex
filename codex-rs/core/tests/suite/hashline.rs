@@ -172,6 +172,65 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_patch_rejects_stale_line_hash() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let file_name = "hashline-stale.txt";
+    let file_path = test.cwd.path().join(file_name);
+    fs::write(&file_path, "alpha\nbeta\ngamma\n")?;
+
+    let call_id = "hashline-stale-call";
+    let patch_args = json!({
+        "path": file_name,
+        "patch": "SWAP 2:00|bravo"
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                "patch",
+                &serde_json::to_string(&patch_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline stale patch rejected"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, "patch with a stale hashline anchor").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(fs::read_to_string(file_path)?, "alpha\nbeta\ngamma\n");
+    let request = final_mock.single_request();
+    let patch_output = request
+        .function_call_output_text(call_id)
+        .expect("patch output should be sent to model");
+    assert!(patch_output.contains("line 2 hash mismatch"));
+    assert!(patch_output.contains("expected 00"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hashline_patch_can_create_missing_file() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let test = test_codex()
