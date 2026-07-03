@@ -1075,7 +1075,11 @@ fn block_span(
         )));
     }
     let refs = lines.iter().map(String::as_str).collect::<Vec<_>>();
-    Ok(find_block_span(path, &refs, anchor_line))
+    let (start, mut end) = find_block_span(path, &refs, anchor_line);
+    while end > start && refs[end - 1].trim().is_empty() {
+        end -= 1;
+    }
+    Ok((start, end))
 }
 
 fn validate_range(

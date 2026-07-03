@@ -1298,7 +1298,21 @@ fn find_block_python_header_stops_at_next_top_level() {
         "    return 2",
     ];
 
-    assert_eq!(find_block_span("src/main.py", &lines, 1), (1, 3));
+    assert_eq!(find_block_span("src/main.py", &lines, 1), (1, 4));
+}
+
+#[test]
+fn find_block_python_body_uses_enclosing_indent_block() {
+    let lines = [
+        "def hello():",
+        "    x = 1",
+        "    if True:",
+        "        print('ok')",
+        "    # keep this with the if block",
+        "    return x",
+    ];
+
+    assert_eq!(find_block_span("src/main.py", &lines, 4), (3, 5));
 }
 
 #[test]

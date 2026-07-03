@@ -169,16 +169,19 @@ fn find_python_header_block_span(
     }
     let anchor_index = anchor_line.checked_sub(1)?;
     let anchor_indent = indent_width(lines[anchor_index]);
-    if anchor_indent != 0 {
-        return None;
-    }
+    let start = if anchor_indent == 0 {
+        anchor_index
+    } else {
+        find_indent_parent(lines, anchor_index, anchor_indent).or_else(|| {
+            extension(path)
+                .is_some_and(|extension| extension == "verse")
+                .then_some(0)
+        })?
+    };
+    let start_indent = indent_width(lines[start]);
+    let end = find_indent_block_end(lines, start, start_indent, &["#"]);
 
-    let end = lines[anchor_index + 1..]
-        .iter()
-        .position(|line| indent_width(line) <= anchor_indent)
-        .map_or(lines.len(), |offset| anchor_index + 1 + offset);
-
-    Some((anchor_index + 1, end))
+    Some((start + 1, end + 1))
 }
 
 fn find_ruby_block_span(path: &str, lines: &[&str], anchor_line: usize) -> Option<(usize, usize)> {
@@ -224,25 +227,45 @@ fn find_ruby_block_end(lines: &[&str], start: usize) -> Option<usize> {
 fn find_indent_block_span(lines: &[&str], anchor_line: usize) -> (usize, usize) {
     let anchor_index = anchor_line - 1;
     let anchor_indent = indent_width(lines[anchor_index]);
-    let mut start = anchor_index;
-    while start > 0 {
-        let previous = lines[start - 1];
-        if !previous.trim().is_empty() && indent_width(previous) < anchor_indent {
-            break;
-        }
-        start -= 1;
-    }
-
-    let mut end = anchor_index;
-    while end + 1 < lines.len() {
-        let next = lines[end + 1];
-        if !next.trim().is_empty() && indent_width(next) < anchor_indent {
-            break;
-        }
-        end += 1;
-    }
+    let start = if anchor_indent == 0 {
+        anchor_index
+    } else {
+        find_indent_parent(lines, anchor_index, anchor_indent).unwrap_or(anchor_index)
+    };
+    let end = find_indent_block_end(lines, start, indent_width(lines[start]), &["#", "//"]);
 
     (start + 1, end + 1)
+}
+
+fn find_indent_parent(lines: &[&str], anchor_index: usize, anchor_indent: usize) -> Option<usize> {
+    (0..anchor_index).rev().find(|index| {
+        let line = lines[*index];
+        !line.trim().is_empty() && indent_width(line) < anchor_indent
+    })
+}
+
+fn find_indent_block_end(
+    lines: &[&str],
+    start_index: usize,
+    start_indent: usize,
+    comment_prefixes: &[&str],
+) -> usize {
+    let mut end = lines.len().saturating_sub(1);
+    for (index, line) in lines.iter().enumerate().skip(start_index + 1) {
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || comment_prefixes
+                .iter()
+                .any(|prefix| trimmed.starts_with(prefix))
+        {
+            continue;
+        }
+        if indent_width(line) <= start_indent {
+            end = index.saturating_sub(1);
+            break;
+        }
+    }
+    end
 }
 
 fn span_len(span: (usize, usize)) -> usize {
