@@ -4,6 +4,7 @@ For a sample configuration file, see [this documentation](https://developers.ope
 
 ```toml
 # Enable native Hashline file tools.
+[features]
 # hashline = true
 #
 # Hide direct apply_patch from model-visible tools while preserving compatibility.

@@ -16,11 +16,12 @@ does not enable managed-hooks-only mode.
 
 ## Hashline edit tools
 
-Set top-level `hashline = true` in `config.toml` to expose the native
-`hashline.read`, `hashline.patch`, and `hashline.find_block` tools alongside
-the existing edit tools.
+Set `hashline = true` under `[features]` in `config.toml` to expose the
+native `hashline.read`, `hashline.patch`, `hashline.find_block`,
+`hashline.remove_file`, and `hashline.rename_file` tools alongside the
+existing edit tools.
 
-Set `hashline_only = true` together with `hashline = true` to make Hashline
-the model-visible edit surface while keeping `apply_patch` available for
-compatibility dispatch. `hashline_only = true` without `hashline = true` is
-rejected.
+Set `hashline_only = true` in the same `[features]` table together with
+`hashline = true` to make Hashline the model-visible edit surface while
+keeping `apply_patch` available for compatibility dispatch.
+`hashline_only = true` without `hashline = true` is rejected.
