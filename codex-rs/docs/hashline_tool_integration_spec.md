@@ -103,6 +103,10 @@ bodies.
 
 ### Arguments
 
+The advertised Codex argument names remain `path` and `new_path`, but handlers
+also accept the reference MCP aliases: `file` for single-path tools and
+`src`/`dst` for rename.
+
 `hashline.read`:
 
 | Field | Type | Required | Notes |

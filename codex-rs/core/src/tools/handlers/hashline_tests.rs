@@ -185,6 +185,59 @@ fn read_body_normalizes_model_visible_rows() {
 }
 
 #[test]
+fn tool_args_accept_reference_path_aliases() {
+    let read: super::ReadArgs = serde_json::from_value(json!({
+        "file": "notes.txt",
+    }))
+    .expect("read args should accept file alias");
+    let write: super::WriteArgs = serde_json::from_value(json!({
+        "file": "notes.txt",
+        "content": "hello",
+    }))
+    .expect("write args should accept file alias");
+    let patch: super::PatchArgs = serde_json::from_value(json!({
+        "file": "notes.txt",
+        "patch": "DEL 1",
+    }))
+    .expect("patch args should accept file alias");
+    let find_block: super::FindBlockArgs = serde_json::from_value(json!({
+        "file": "notes.txt",
+        "anchor": "1",
+    }))
+    .expect("find_block args should accept file alias");
+    let remove: super::RemoveFileArgs = serde_json::from_value(json!({
+        "file": "notes.txt",
+    }))
+    .expect("remove_file args should accept file alias");
+    let rename: super::RenameFileArgs = serde_json::from_value(json!({
+        "src": "old.txt",
+        "dst": "new.txt",
+    }))
+    .expect("rename_file args should accept src/dst aliases");
+
+    assert_eq!(
+        (
+            read.path.as_str(),
+            write.path.as_str(),
+            patch.path.as_str(),
+            find_block.path.as_str(),
+            remove.path.as_str(),
+            rename.path.as_str(),
+            rename.new_path.as_str(),
+        ),
+        (
+            "notes.txt",
+            "notes.txt",
+            "notes.txt",
+            "notes.txt",
+            "notes.txt",
+            "old.txt",
+            "new.txt",
+        )
+    );
+}
+
+#[test]
 fn patch_accepts_matching_file_header() {
     let original = "alpha\nbeta\ngamma\n";
     let patch = format!(

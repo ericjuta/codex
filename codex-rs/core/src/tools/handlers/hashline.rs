@@ -107,6 +107,7 @@ impl HashlineHandler {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReadArgs {
+    #[serde(alias = "file")]
     path: String,
     start_line: Option<usize>,
     end_line: Option<usize>,
@@ -117,6 +118,7 @@ struct ReadArgs {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WriteArgs {
+    #[serde(alias = "file")]
     path: String,
     content: String,
     force: Option<bool>,
@@ -127,6 +129,7 @@ struct WriteArgs {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PatchArgs {
+    #[serde(alias = "file")]
     path: String,
     patch: String,
     dry_run: Option<bool>,
@@ -137,6 +140,7 @@ struct PatchArgs {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FindBlockArgs {
+    #[serde(alias = "file")]
     path: String,
     anchor: String,
     max_lines: Option<usize>,
@@ -146,6 +150,7 @@ struct FindBlockArgs {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RemoveFileArgs {
+    #[serde(alias = "file")]
     path: String,
     expected_hash: Option<String>,
     dry_run: Option<bool>,
@@ -155,7 +160,9 @@ struct RemoveFileArgs {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RenameFileArgs {
+    #[serde(alias = "src")]
     path: String,
+    #[serde(alias = "dst")]
     new_path: String,
     expected_hash: Option<String>,
     dry_run: Option<bool>,
