@@ -1071,13 +1071,24 @@ fn file_operation_parser_accepts_remove_and_rename() {
 }
 
 #[test]
-fn file_operation_parser_rejects_line_ops_in_same_section() {
+fn file_operation_parser_allows_rename_with_line_ops() {
+    assert_eq!(
+        parse_hashline_patch_file_operation("MV renamed.txt\nSWAP 1:\n+omega")
+            .expect("MV and line ops should parse"),
+        Some(HashlinePatchFileOperation::Rename {
+            new_path: "renamed.txt".to_string(),
+        })
+    );
+}
+
+#[test]
+fn file_operation_parser_rejects_remove_with_line_ops() {
     let error = parse_hashline_patch_file_operation("REM\nSWAP 1:\n+omega")
-        .expect_err("file op and line op should not combine");
+        .expect_err("REM and line op should not combine");
 
     assert_eq!(
         error.to_string(),
-        "Hashline file operations REM and MV cannot be combined with line operations in the same file section"
+        "Hashline file operation REM cannot be combined with line operations in the same file section"
     );
 }
 
@@ -1094,7 +1105,8 @@ fn generated_mixed_file_patch_uses_one_apply_patch_envelope() {
         HashlinePatchFileMutation::Rename {
             path: "c.txt",
             new_path: "d.txt",
-            contents: "move me\n",
+            old_contents: "move me\n",
+            new_contents: "move me\n",
         },
     ];
     let patch =
@@ -1129,6 +1141,25 @@ fn generated_rename_patch_uses_move_hunk() {
     assert_eq!(
         patch,
         "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n*** End Patch"
+    );
+}
+
+#[test]
+fn generated_rename_update_patch_uses_move_hunk_with_localized_edit() {
+    let patch = apply_patch_for_hashline_mutations(
+        &[HashlinePatchFileMutation::Rename {
+            path: "old.txt",
+            new_path: "new.txt",
+            old_contents: "first\nsecond\n",
+            new_contents: "first\nchanged\n",
+        }],
+        /*environment_id*/ None,
+    )
+    .expect("rename update patch should be generated");
+
+    assert_eq!(
+        patch,
+        "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n@@\n first\n-second\n+changed\n*** End Patch"
     );
 }
 

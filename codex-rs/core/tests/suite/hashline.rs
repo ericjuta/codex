@@ -470,7 +470,7 @@ async fn hashline_patch_applies_mixed_multi_file_sections_through_apply_patch() 
     let moved_path = test.cwd.path().join(moved_name);
     let update_contents = "alpha\nbeta\n";
     let remove_contents = "remove me\n";
-    let move_contents = "move me\n";
+    let move_contents = "move me\nbefore\n";
     fs::write(&update_path, update_contents)?;
     fs::write(&remove_path, remove_contents)?;
     fs::write(&move_path, move_contents)?;
@@ -482,7 +482,7 @@ async fn hashline_patch_applies_mixed_multi_file_sections_through_apply_patch() 
     let patch_args = json!({
         "path": update_name,
         "patch": format!(
-            "[{update_name}#{update_hash}]\nSWAP 2:\n+bravo\n[{remove_name}#{remove_hash}]\nREM\n[{move_name}#{move_hash}]\nMV {moved_name}"
+            "[{update_name}#{update_hash}]\nSWAP 2:\n+bravo\n[{remove_name}#{remove_hash}]\nREM\n[{move_name}#{move_hash}]\nMV {moved_name}\nSWAP 2:\n+after"
         )
     });
     mount_sse_once(
@@ -518,7 +518,7 @@ async fn hashline_patch_applies_mixed_multi_file_sections_through_apply_patch() 
     assert_eq!(fs::read_to_string(update_path)?, "alpha\nbravo\n");
     assert!(!remove_path.exists());
     assert!(!move_path.exists());
-    assert_eq!(fs::read_to_string(moved_path)?, move_contents);
+    assert_eq!(fs::read_to_string(moved_path)?, "move me\nafter\n");
     let request = final_mock.single_request();
     let patch_output = request
         .function_call_output_text(call_id)
@@ -541,6 +541,17 @@ async fn hashline_patch_applies_mixed_multi_file_sections_through_apply_patch() 
         .expect("multi-file output should include a rename entry");
     assert_eq!(rename_file["src"], json!(move_name));
     assert_eq!(rename_file["dst"], json!(moved_name));
+    assert_eq!(rename_file["operation"], json!("rename_file"));
+    assert!(
+        rename_file["header"]
+            .as_str()
+            .is_some_and(|header| header.starts_with(&format!("[{moved_name}#")))
+    );
+    assert!(
+        rename_file["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("|after"))
+    );
     Ok(())
 }
 

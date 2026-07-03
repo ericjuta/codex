@@ -43,7 +43,8 @@ pub(super) enum HashlinePatchFileMutation<'a> {
     Rename {
         path: &'a str,
         new_path: &'a str,
-        contents: &'a str,
+        old_contents: &'a str,
+        new_contents: &'a str,
     },
 }
 
@@ -138,12 +139,19 @@ pub(super) fn apply_hashline_patch(
     }
     validate_patch_headers(path, contents, patch)?;
     let operations = parse_hashline_patch(patch)?;
-    if operations.iter().any(HashlineOperation::is_file_operation) {
+    if operations
+        .iter()
+        .any(|operation| matches!(operation, HashlineOperation::RemoveFile))
+    {
         return Err(FunctionCallError::RespondToModel(
-            "REM and MV are file operations; use a sectioned hashline.patch or the dedicated hashline file tools"
+            "REM is a file operation; use a sectioned hashline.patch or the dedicated hashline file tools"
                 .to_string(),
         ));
     }
+    let operations = operations
+        .into_iter()
+        .filter(|operation| !operation.is_file_operation())
+        .collect::<Vec<_>>();
     let contents_bytes = contents.as_bytes();
     let restore_crlf = contents_bytes
         .iter()
@@ -204,13 +212,20 @@ pub(super) fn parse_hashline_patch_file_operation(
             }
         }
     }
-    if file_operation.is_some() && has_line_operation {
+    if matches!(file_operation, Some(HashlinePatchFileOperation::Remove)) && has_line_operation {
         return Err(FunctionCallError::RespondToModel(
-            "Hashline file operations REM and MV cannot be combined with line operations in the same file section"
+            "Hashline file operation REM cannot be combined with line operations in the same file section"
                 .to_string(),
         ));
     }
     Ok(file_operation)
+}
+
+pub(super) fn hashline_patch_has_line_operations(patch: &str) -> Result<bool, FunctionCallError> {
+    let operations = parse_hashline_patch(patch)?;
+    Ok(operations
+        .iter()
+        .any(|operation| !operation.is_file_operation()))
 }
 
 fn set_file_operation(
@@ -1224,9 +1239,16 @@ pub(super) fn apply_patch_for_hashline_mutations(
             HashlinePatchFileMutation::Rename {
                 path,
                 new_path,
-                contents,
+                old_contents,
+                new_contents,
             } => {
-                append_hashline_rename_hunk(&mut patch, path, new_path, contents);
+                append_hashline_rename_hunk(
+                    &mut patch,
+                    path,
+                    new_path,
+                    old_contents,
+                    new_contents,
+                )?;
             }
         }
     }
@@ -1264,11 +1286,11 @@ pub(super) fn apply_patch_for_hashline_remove(path: &str, environment_id: Option
 pub(super) fn apply_patch_for_hashline_rename(
     path: &str,
     new_path: &str,
-    contents: &str,
+    _contents: &str,
     environment_id: Option<&str>,
 ) -> String {
     let mut patch = apply_patch_header(environment_id);
-    append_hashline_rename_hunk(&mut patch, path, new_path, contents);
+    append_hashline_rename_only_hunk(&mut patch, path, new_path);
     patch.push_str("*** End Patch");
     patch
 }
@@ -1279,7 +1301,21 @@ fn append_hashline_remove_hunk(patch: &mut String, path: &str) {
     patch.push('\n');
 }
 
-fn append_hashline_rename_hunk(patch: &mut String, path: &str, new_path: &str, _contents: &str) {
+fn append_hashline_rename_hunk(
+    patch: &mut String,
+    path: &str,
+    new_path: &str,
+    old_contents: &str,
+    new_contents: &str,
+) -> Result<(), FunctionCallError> {
+    if old_contents == new_contents {
+        append_hashline_rename_only_hunk(patch, path, new_path);
+        return Ok(());
+    }
+    append_localized_update_hunk_with_move(patch, path, old_contents, new_contents, Some(new_path))
+}
+
+fn append_hashline_rename_only_hunk(patch: &mut String, path: &str, new_path: &str) {
     patch.push_str("*** Update File: ");
     patch.push_str(path);
     patch.push_str("\n*** Move to: ");
@@ -1406,6 +1442,16 @@ fn append_localized_update_hunk(
     old_contents: &str,
     new_contents: &str,
 ) -> Result<(), FunctionCallError> {
+    append_localized_update_hunk_with_move(patch, path, old_contents, new_contents, None)
+}
+
+fn append_localized_update_hunk_with_move(
+    patch: &mut String,
+    path: &str,
+    old_contents: &str,
+    new_contents: &str,
+    new_path: Option<&str>,
+) -> Result<(), FunctionCallError> {
     let old_lines = split_lines_preserve(old_contents);
     let new_lines = split_lines_preserve(new_contents);
     let bounds = change_bounds(&old_lines, &new_lines);
@@ -1422,6 +1468,10 @@ fn append_localized_update_hunk(
 
     patch.push_str("*** Update File: ");
     patch.push_str(path);
+    if let Some(new_path) = new_path {
+        patch.push_str("\n*** Move to: ");
+        patch.push_str(new_path);
+    }
     patch.push_str("\n@@\n");
     for line in &old_lines[context_start..bounds.old_start] {
         append_apply_patch_line(patch, ' ', line);

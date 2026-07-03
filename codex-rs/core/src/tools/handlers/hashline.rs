@@ -47,6 +47,7 @@ use self::hashline_patch::apply_patch_for_hashline_remove;
 use self::hashline_patch::apply_patch_for_hashline_rename;
 use self::hashline_patch::apply_patch_for_hashline_update;
 use self::hashline_patch::build_hashline_patch_preview;
+use self::hashline_patch::hashline_patch_has_line_operations;
 use self::hashline_patch::hashline_patch_is_aborted;
 use self::hashline_patch::hashline_patch_warnings;
 use self::hashline_patch::parse_anchor_hash;
@@ -188,6 +189,9 @@ enum PreparedHashlinePatchFile {
         new_path: String,
         old_contents: String,
         old_hash: String,
+        new_contents: String,
+        new_hash: String,
+        warnings: Vec<String>,
     },
 }
 
@@ -945,16 +949,137 @@ async fn handle_patch(
                 "hashline.patch create=true cannot be combined with REM or MV".to_string(),
             ));
         }
-        return handle_patch_file_operation(
-            &invocation,
-            multi_environment,
-            target_path,
-            &contents,
-            file_operation,
-            args.dry_run.unwrap_or(false),
-            args.environment_id.as_deref(),
-        )
-        .await;
+        match file_operation {
+            HashlinePatchFileOperation::Remove => {
+                return handle_patch_file_operation(
+                    &invocation,
+                    multi_environment,
+                    target_path,
+                    &contents,
+                    HashlinePatchFileOperation::Remove,
+                    args.dry_run.unwrap_or(false),
+                    args.environment_id.as_deref(),
+                )
+                .await;
+            }
+            HashlinePatchFileOperation::Rename { new_path } => {
+                if !hashline_patch_has_line_operations(&section.patch)? {
+                    return handle_patch_file_operation(
+                        &invocation,
+                        multi_environment,
+                        target_path,
+                        &contents,
+                        HashlinePatchFileOperation::Rename { new_path },
+                        args.dry_run.unwrap_or(false),
+                        args.environment_id.as_deref(),
+                    )
+                    .await;
+                }
+
+                ensure_selected_file_missing(
+                    turn.as_ref(),
+                    step_context.as_ref(),
+                    &new_path,
+                    args.environment_id.as_deref(),
+                )
+                .await?;
+                let patched = apply_hashline_patch_or_create_empty(
+                    target_path,
+                    &contents,
+                    &section.patch,
+                    /*create*/ false,
+                )?;
+                let warnings = hashline_patch_warnings(&section.patch)?;
+                let new_hash = hash_hex(&patched, 4);
+                let apply_patch_text = apply_patch_for_hashline_mutations(
+                    &[HashlinePatchFileMutation::Rename {
+                        path: target_path,
+                        new_path: &new_path,
+                        old_contents: &contents,
+                        new_contents: &patched,
+                    }],
+                    args.environment_id.as_deref(),
+                )?;
+
+                if args.dry_run.unwrap_or(false) {
+                    let preview = if contents == patched {
+                        None
+                    } else {
+                        build_hashline_patch_preview_or_none(
+                            &contents, &patched, /*create*/ false,
+                        )?
+                    };
+                    let mut body = json!({
+                        "success": true,
+                        "path": target_path,
+                        "new_path": &new_path,
+                        "src": target_path,
+                        "dst": &new_path,
+                        "dry_run": true,
+                        "old_hash": hash_hex(&contents, 4),
+                        "new_hash": new_hash,
+                        "operation": "rename_file",
+                        "preview": preview,
+                    });
+                    add_hashline_warnings(&mut body, &warnings);
+                    return Ok(boxed_tool_output(FunctionToolOutput::from_text(
+                        serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+                            format!(
+                                "failed to serialize hashline.patch rename dry-run output: {err}"
+                            )
+                        }),
+                        Some(true),
+                    )));
+                }
+
+                let post_write_turn = std::sync::Arc::clone(turn);
+                let post_write_step_context = std::sync::Arc::clone(step_context);
+                let apply_patch_invocation = ToolInvocation {
+                    tool_name: ToolName::plain("apply_patch"),
+                    payload: ToolPayload::Custom {
+                        input: apply_patch_text,
+                    },
+                    ..invocation
+                };
+                ApplyPatchHandler::new(multi_environment)
+                    .handle(apply_patch_invocation)
+                    .await?;
+
+                ensure_selected_file_missing(
+                    post_write_turn.as_ref(),
+                    post_write_step_context.as_ref(),
+                    target_path,
+                    args.environment_id.as_deref(),
+                )
+                .await?;
+                let written_contents = read_selected_file(
+                    post_write_turn.as_ref(),
+                    post_write_step_context.as_ref(),
+                    &new_path,
+                    args.environment_id.as_deref(),
+                )
+                .await?;
+                let written_hash = hash_hex(&written_contents, 4);
+                if written_hash != new_hash {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "hashline.patch rename completed but destination hash for {new_path} was {written_hash}, expected {new_hash}"
+                    )));
+                }
+                let mut body = build_hashline_rename_update_success_body(
+                    target_path,
+                    &new_path,
+                    &contents,
+                    &written_contents,
+                )?;
+                add_hashline_warnings(&mut body, &warnings);
+                return Ok(boxed_tool_output(FunctionToolOutput::from_text(
+                    serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+                        format!("failed to serialize hashline.patch rename output: {err}")
+                    }),
+                    Some(true),
+                )));
+            }
+        }
     }
 
     let mut patched =
@@ -1250,11 +1375,28 @@ async fn handle_multi_file_patch(
                     )
                     .await?;
                     let old_hash = hash_hex(&old_contents, 4);
+                    let has_line_operations = hashline_patch_has_line_operations(&section.patch)?;
+                    let (new_contents, new_hash, warnings) = if has_line_operations {
+                        let new_contents = apply_hashline_patch_or_create_empty(
+                            &section.path,
+                            &old_contents,
+                            &section.patch,
+                            /*create*/ false,
+                        )?;
+                        let new_hash = hash_hex(&new_contents, 4);
+                        let warnings = hashline_patch_warnings(&section.patch)?;
+                        (new_contents, new_hash, warnings)
+                    } else {
+                        (old_contents.clone(), old_hash.clone(), Vec::new())
+                    };
                     prepared_files.push(PreparedHashlinePatchFile::Rename {
                         path: section.path.clone(),
                         new_path,
                         old_contents,
                         old_hash,
+                        new_contents,
+                        new_hash,
+                        warnings,
                     });
                 }
             }
@@ -1330,17 +1472,36 @@ async fn handle_multi_file_patch(
                 PreparedHashlinePatchFile::Rename {
                     path,
                     new_path,
+                    old_contents,
                     old_hash,
+                    new_contents,
+                    new_hash,
+                    warnings,
                     ..
-                } => Ok(json!({
-                    "success": true,
-                    "path": path,
-                    "new_path": new_path,
-                    "src": path,
-                    "dst": new_path,
-                    "operation": "rename_file",
-                    "old_hash": old_hash,
-                })),
+                } => {
+                    let preview = if old_contents == new_contents {
+                        None
+                    } else {
+                        build_hashline_patch_preview_or_none(
+                            old_contents,
+                            new_contents,
+                            /*create*/ false,
+                        )?
+                    };
+                    let mut body = json!({
+                        "success": true,
+                        "path": path,
+                        "new_path": new_path,
+                        "src": path,
+                        "dst": new_path,
+                        "operation": "rename_file",
+                        "old_hash": old_hash,
+                        "new_hash": new_hash,
+                        "preview": preview,
+                    });
+                    add_hashline_warnings(&mut body, warnings);
+                    Ok(body)
+                }
             })
             .collect::<Result<Vec<_>, FunctionCallError>>()?;
         let body = json!({
@@ -1379,11 +1540,13 @@ async fn handle_multi_file_patch(
                 path,
                 new_path,
                 old_contents,
+                new_contents,
                 ..
             } => HashlinePatchFileMutation::Rename {
                 path,
                 new_path,
-                contents: old_contents,
+                old_contents,
+                new_contents,
             },
         })
         .collect::<Vec<_>>();
@@ -1448,7 +1611,10 @@ async fn handle_multi_file_patch(
             PreparedHashlinePatchFile::Rename {
                 path,
                 new_path,
+                old_contents,
                 old_hash,
+                new_hash,
+                warnings,
                 ..
             } => {
                 ensure_selected_file_missing(
@@ -1465,23 +1631,34 @@ async fn handle_multi_file_patch(
                     args.environment_id.as_deref(),
                 )
                 .await?;
-                let new_hash = hash_hex(&renamed_contents, 4);
-                if new_hash != *old_hash {
+                let written_hash = hash_hex(&renamed_contents, 4);
+                if written_hash != *new_hash {
                     return Err(FunctionCallError::RespondToModel(format!(
-                        "hashline.patch rename completed but destination hash for {new_path} was {new_hash}, expected {old_hash}"
+                        "hashline.patch rename completed but destination hash for {new_path} was {written_hash}, expected {new_hash}"
                     )));
                 }
-                files.push(json!({
-                    "success": true,
-                    "path": path,
-                    "new_path": new_path,
-                    "src": path,
-                    "dst": new_path,
-                    "operation": "rename_file",
-                    "old_hash": old_hash,
-                    "new_hash": new_hash,
-                    "header": format!("[{new_path}#{new_hash}]"),
-                }));
+                let mut body = if old_hash == new_hash {
+                    json!({
+                        "success": true,
+                        "path": path,
+                        "new_path": new_path,
+                        "src": path,
+                        "dst": new_path,
+                        "operation": "rename_file",
+                        "old_hash": old_hash,
+                        "new_hash": new_hash,
+                        "header": format!("[{new_path}#{new_hash}]"),
+                    })
+                } else {
+                    build_hashline_rename_update_success_body(
+                        path,
+                        new_path,
+                        old_contents,
+                        &renamed_contents,
+                    )?
+                };
+                add_hashline_warnings(&mut body, warnings);
+                files.push(body);
             }
         }
     }
@@ -1561,6 +1738,28 @@ fn build_hashline_patch_success_body(
         "lines": lines,
         "preview": preview,
     }))
+}
+
+fn build_hashline_rename_update_success_body(
+    path: &str,
+    new_path: &str,
+    old_contents: &str,
+    written_contents: &str,
+) -> Result<serde_json::Value, FunctionCallError> {
+    let mut body = build_hashline_patch_success_body(
+        new_path,
+        old_contents,
+        written_contents,
+        /*create*/ false,
+    )?;
+    if let Some(body_object) = body.as_object_mut() {
+        body_object.insert("path".to_string(), json!(path));
+        body_object.insert("new_path".to_string(), json!(new_path));
+        body_object.insert("src".to_string(), json!(path));
+        body_object.insert("dst".to_string(), json!(new_path));
+        body_object.insert("operation".to_string(), json!("rename_file"));
+    }
+    Ok(body)
 }
 
 fn add_hashline_warnings(body: &mut Value, warnings: &[String]) {
