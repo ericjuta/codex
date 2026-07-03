@@ -1,4 +1,5 @@
 use super::hashline_hash::line_hash;
+use super::hashline_hash::normalize_file_text;
 
 pub(super) fn format_hashline_excerpt(
     contents: &str,
@@ -8,7 +9,8 @@ pub(super) fn format_hashline_excerpt(
     if start_line > end_line {
         return String::new();
     }
-    split_lines_preserve(contents)
+    let normalized = normalize_file_text(contents);
+    split_lines_preserve(&normalized)
         .into_iter()
         .enumerate()
         .filter_map(|(index, line)| {

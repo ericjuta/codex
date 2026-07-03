@@ -565,7 +565,8 @@ fn build_hashline_line_rows(contents: &str, start_line: usize, end_line: usize) 
     if start_line > end_line {
         return Vec::new();
     }
-    split_lines_preserve(contents)
+    let normalized = normalize_file_text(contents);
+    split_lines_preserve(&normalized)
         .into_iter()
         .enumerate()
         .skip(start_line.saturating_sub(1))
@@ -751,7 +752,8 @@ async fn handle_find_block(
         args.environment_id.as_deref(),
     )
     .await?;
-    let lines = split_lines_preserve(&contents);
+    let normalized_contents = normalize_file_text(&contents);
+    let lines = split_lines_preserve(&normalized_contents);
     let anchor_line = resolve_find_block_anchor(&args.anchor, &lines)?;
 
     let max_lines = args
@@ -782,7 +784,7 @@ async fn handle_find_block(
         "start_line": block_start,
         "end_line": block_end,
         "truncated": capped_end < block_end,
-        "content": format_hashline_excerpt(&contents, block_start, capped_end),
+        "content": format_hashline_excerpt(&normalized_contents, block_start, capped_end),
         "block_lines": block_lines,
     });
     Ok(boxed_tool_output(FunctionToolOutput::from_text(

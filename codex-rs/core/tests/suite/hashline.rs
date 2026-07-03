@@ -252,7 +252,7 @@ async fn hashline_find_block_reports_language_and_excerpt() -> anyhow::Result<()
     let file_path = test.cwd.path().join(file_name);
     fs::write(
         &file_path,
-        "fn main() {\n    if true {\n        println!(\"hi\");\n    }\n}\n",
+        "fn main() {\r\n    if true {\r\n        println!(\"hi\");\r\n    }\r\n}\r\n",
     )?;
 
     let call_id = "hashline-find-block-call";

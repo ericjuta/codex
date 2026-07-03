@@ -3,6 +3,7 @@ use super::build_hashline_patch_success_body;
 use super::build_hashline_read_body;
 use super::hashline_block::find_block_span;
 use super::hashline_block::language_for_path;
+use super::hashline_format::format_hashline_excerpt;
 use super::hashline_hash::hash_hex;
 use super::hashline_hash::line_hash;
 use super::hashline_patch::HashlinePatchFileMutation;
@@ -133,6 +134,53 @@ fn read_body_without_end_line_only_truncates_when_capped() {
                 },
             ],
         })
+    );
+}
+
+#[test]
+fn read_body_normalizes_model_visible_rows() {
+    let contents = "\u{feff}alpha\r\nbeta\r\n";
+    let body = build_hashline_read_body(
+        "notes.txt",
+        contents,
+        /*start_line*/ 1,
+        /*requested_end_line*/ None,
+        /*max_lines*/ 200,
+    );
+
+    assert_eq!(
+        body,
+        json!({
+            "path": "notes.txt",
+            "hash": hash_hex(contents, 4),
+            "header": format!("[notes.txt#{}]", hash_hex(contents, 4)),
+            "start_line": 1,
+            "end_line": 2,
+            "total_lines": 2,
+            "truncated": false,
+            "next_start_line": null,
+            "content": format!("1:{}|alpha\n2:{}|beta", line_hash("alpha"), line_hash("beta")),
+            "lines": [
+                {
+                    "n": 1,
+                    "hash": line_hash("alpha"),
+                    "content": "alpha",
+                },
+                {
+                    "n": 2,
+                    "hash": line_hash("beta"),
+                    "content": "beta",
+                },
+            ],
+        })
+    );
+    assert_eq!(
+        format_hashline_excerpt(contents, 1, 2),
+        format!(
+            "1:{}|alpha\n2:{}|beta",
+            line_hash("alpha"),
+            line_hash("beta")
+        )
     );
 }
 
