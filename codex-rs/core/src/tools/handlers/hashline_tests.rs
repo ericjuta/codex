@@ -391,6 +391,18 @@ fn strips_uniform_read_output_payload_prefixes() {
 }
 
 #[test]
+fn strips_decorated_read_output_payload_prefixes() {
+    let updated = apply_hashline_patch(
+        "notes.txt",
+        "alpha\nbeta\ngamma\n",
+        "SWAP 2:\n>>> 1:aa|bravo\n>> * 2:bb|charlie\n  + 3:cc|delta",
+    )
+    .expect("decorated pasted read output rows should apply");
+
+    assert_eq!(updated, "alpha\nbravo\ncharlie\ndelta\ngamma\n");
+}
+
+#[test]
 fn keeps_mixed_read_output_payload_prefixes_literal() {
     let updated = apply_hashline_patch(
         "notes.txt",

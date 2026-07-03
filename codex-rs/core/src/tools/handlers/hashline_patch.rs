@@ -669,6 +669,14 @@ fn strip_uniform_read_output_payload_prefixes(payload: &mut [PayloadLine]) {
 }
 
 fn strip_read_output_payload_prefix(line: &str) -> Option<&str> {
+    let mut line = line.trim_start_matches([' ', '\t']);
+    if let Some(prompt_stripped) = line.strip_prefix(">>>").or_else(|| line.strip_prefix(">>")) {
+        line = prompt_stripped.trim_start_matches([' ', '\t']);
+    }
+    if let Some(marker_stripped) = line.strip_prefix('+').or_else(|| line.strip_prefix('*')) {
+        line = marker_stripped.trim_start_matches([' ', '\t']);
+    }
+
     let (line_number, rest) = line.split_once(':')?;
     if line_number.is_empty() || !line_number.chars().all(|ch| ch.is_ascii_digit()) {
         return None;
