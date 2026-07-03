@@ -897,7 +897,11 @@ fn parse_line_anchor(input: &str) -> Result<LineAnchor, FunctionCallError> {
 }
 
 fn normalize_anchor_target(input: &str) -> String {
-    input.trim().trim_end_matches(':').trim().to_string()
+    let input = input.trim();
+    if input.ends_with(':') {
+        return input[..input.len() - 1].to_string();
+    }
+    input.to_string()
 }
 
 fn split_range_anchor_text(input: &str) -> Option<(&str, &str)> {
@@ -913,30 +917,49 @@ fn split_range_anchor_text(input: &str) -> Option<(&str, &str)> {
 }
 
 fn parse_line_anchor_text(input: &str, source: &str) -> Result<LineAnchor, FunctionCallError> {
-    let Some((line_text, expected_hash)) = split_optional_anchor_hash(input.trim()) else {
-        return Err(invalid_operation_error(source));
-    };
+    let (line_text, expected_hash) = split_optional_anchor_hash(input.trim(), source)?;
     Ok(LineAnchor {
         line: parse_positive_line_number(line_text, source)?,
         expected_hash,
     })
 }
 
-fn split_optional_anchor_hash(input: &str) -> Option<(&str, Option<String>)> {
+fn split_optional_anchor_hash<'a>(
+    input: &'a str,
+    source: &str,
+) -> Result<(&'a str, Option<String>), FunctionCallError> {
+    if source.ends_with("::") {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "invalid Hashline anchor {source}: expected formats like 1, 1:ab, or 1-2 hex hash with one optional ':'"
+        )));
+    }
+
     if input.is_empty() {
-        return None;
+        return Err(invalid_operation_error(source));
     }
-    let (target, expected_hash) = input
-        .rsplit_once(':')
-        .map_or((input, None), |(target, hash)| {
-            (target.trim(), Some(hash.trim().to_ascii_lowercase()))
-        });
-    if expected_hash.as_deref().is_some_and(|hash| {
-        hash.is_empty() || hash.len() > 2 || !hash.chars().all(|ch| ch.is_ascii_hexdigit())
-    }) {
-        return None;
+
+    let (target, expected_hash) = match input.rsplit_once(':') {
+        Some((target, hash)) => {
+            let hash = hash.trim().to_ascii_lowercase();
+            if hash.is_empty() {
+                (target.trim(), None)
+            } else if hash.len() > 2 || !hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "invalid Hashline anchor {source}: expected a 1-2 hex hash token after ':'; got {hash}"
+                )));
+            } else {
+                (target.trim(), Some(hash))
+            }
+        }
+        None => (input, None),
+    };
+    if target.is_empty() || target.ends_with(':') || target.contains(':') {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "invalid Hashline anchor {source}: expected formats like 1, 1:ab, or 1-2 hex hash with one optional ':'"
+        )));
     }
-    Some((target, expected_hash))
+
+    Ok((target, expected_hash))
 }
 
 fn parse_positive_line_number(input: &str, source: &str) -> Result<usize, FunctionCallError> {

@@ -102,6 +102,65 @@ fn patch_warnings_report_bare_line_anchors() {
 }
 
 #[test]
+fn ins_post_rejects_invalid_hash_anchor() {
+    let error = apply_hashline_patch("notes.txt", "alpha\nbeta\n", "INS.POST 2:gg|omega")
+        .expect_err("invalid hex hash anchors should be rejected");
+
+    assert!(
+        error
+            .to_string()
+            .contains("invalid Hashline anchor 2:gg: expected a 1-2 hex hash token"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn ins_post_rejects_stale_hash_anchor() {
+    let stale_hash = if line_hash("beta") == "00" {
+        "01"
+    } else {
+        "00"
+    };
+    let error = apply_hashline_patch(
+        "notes.txt",
+        "alpha\nbeta\n",
+        &format!("INS.POST 2:{stale_hash}|omega"),
+    )
+    .expect_err("mismatched anchors should be rejected");
+
+    assert!(
+        error.to_string().contains("line 2 hash mismatch"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn ins_post_rejects_malformed_anchor_syntax() {
+    let error = apply_hashline_patch("notes.txt", "alpha\nbeta\n", "INS.POST 2::|omega")
+        .expect_err("malformed anchors should be rejected");
+
+    assert!(
+        error
+            .to_string()
+            .contains("1-2 hex hash with one optional ':'"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn ins_post_rejects_anchor_with_extra_colon() {
+    let error = apply_hashline_patch("notes.txt", "alpha\nbeta\n", "INS.POST 2:gg:|omega")
+        .expect_err("anchors with extra trailing colon should be rejected");
+
+    assert!(
+        error
+            .to_string()
+            .contains("invalid Hashline anchor 2:gg:: expected formats like 1, 1:ab, or 1-2 hex hash with one optional ':'"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn accepts_compact_head_and_tail_insert_syntax() {
     let updated = apply_hashline_patch("notes.txt", "middle\n", "INS.HEAD|top\nINS.TAIL|bottom")
         .expect("compact insert syntax should apply");

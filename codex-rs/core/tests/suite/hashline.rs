@@ -25,6 +25,7 @@ use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use xxhash_rust::xxh3::xxh3_64;
+use xxhash_rust::xxh32::xxh32;
 
 async fn submit_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
     let cwd = test.cwd.abs();
@@ -373,6 +374,71 @@ async fn hashline_patch_rejects_stale_line_hash() -> anyhow::Result<()> {
         .expect("patch output should be sent to model");
     assert!(patch_output.contains("line 2 hash mismatch"));
     assert!(patch_output.contains("expected 00"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_patch_rejects_stale_hash_anchor_for_ins_post() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let file_name = "hashline-stale-ins-post.txt";
+    let file_path = test.cwd.path().join(file_name);
+    fs::write(&file_path, "alpha\nbeta\ngamma\n")?;
+
+    let call_id = "hashline-stale-ins-post-call";
+    let stale_hash = {
+        let actual = format!("{:02x}", (xxh32("beta".as_bytes(), 0) & 0xff) as u8);
+        if actual == "00" { "01" } else { "00" }
+    };
+    let patch_args = json!({
+        "path": file_name,
+        "patch": format!("INS.POST 2:{stale_hash}|omega")
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                "patch",
+                &serde_json::to_string(&patch_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline stale anchor rejected"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, "patch with an invalid hash anchor").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(fs::read_to_string(file_path)?, "alpha\nbeta\ngamma\n");
+    let request = final_mock.single_request();
+    let patch_output = request
+        .function_call_output_text(call_id)
+        .expect("patch output should be sent to model");
+
+    assert!(patch_output.contains("line 2 hash mismatch"));
+    assert!(patch_output.contains(&format!("expected {stale_hash}")));
+
     Ok(())
 }
 
@@ -868,6 +934,68 @@ async fn hashline_patch_can_create_missing_file() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_patch_create_rejects_hashed_sections() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let file_name = "hashline-created-hashed.txt";
+    let file_path = test.cwd.path().join(file_name);
+
+    let call_id = "hashline-create-hashed-call";
+    let patch_args = json!({
+        "path": file_name,
+        "patch": format!("[{file_name}#dead]\nINS.TAIL:\n+created by hashline"),
+        "create": true
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                "patch",
+                &serde_json::to_string(&patch_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline create rejected for hashed sections"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "create with a hashed section header should be rejected",
+    )
+    .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert!(!file_path.exists());
+    let request = final_mock.single_request();
+    let patch_output = request
+        .function_call_output_text(call_id)
+        .expect("patch output should be sent to model");
+    assert!(patch_output.contains("create=true cannot use a [path#HASH] section header"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hashline_patch_can_create_multi_file_sections() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let test = test_codex()
@@ -932,6 +1060,69 @@ async fn hashline_patch_can_create_multi_file_sections() -> anyhow::Result<()> {
     assert!(patch_output.contains(&format!("\"header\": \"[{first_name}#")));
     assert!(patch_output.contains(&format!("\"header\": \"[{second_name}#")));
     assert!(patch_output.contains("|created beta"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_patch_can_create_missing_file_with_repeated_section_path() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let file_name = "hashline-created-repeated.txt";
+    let file_path = test.cwd.path().join(file_name);
+
+    let call_id = "hashline-repeat-create-call";
+    let patch_args = json!({
+        "path": file_name,
+        "patch": format!(
+            "[{file_name}]\nINS.TAIL:\n+first\n[{file_name}]\nINS.TAIL:\n+second"
+        ),
+        "create": true
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                "patch",
+                &serde_json::to_string(&patch_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline file created through repeated sections"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, "create a file with repeated section headers").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(fs::read_to_string(file_path)?, "first\nsecond");
+    let request = final_mock.single_request();
+    let patch_output = request
+        .function_call_output_text(call_id)
+        .expect("patch output should be sent to model");
+    assert!(patch_output.contains("\"operation\": \"create\""));
+    assert!(patch_output.contains(&format!("\"path\": \"{file_name}\"")));
+    assert!(!patch_output.contains("\"operation\": \"multi_file_create\""));
+
     Ok(())
 }
 
