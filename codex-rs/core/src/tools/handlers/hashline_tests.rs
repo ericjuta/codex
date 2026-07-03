@@ -646,6 +646,23 @@ fn applies_insert_block_pre_operation() {
 }
 
 #[test]
+fn applies_python_swap_block_header_operation() {
+    let original = "def hello():\n    x = 1\n    return x\n\ndef keep():\n    return 2\n";
+
+    let updated = apply_hashline_patch(
+        "src/main.py",
+        original,
+        "SWAP.BLK 1:\n+def hello():\n+    return 42",
+    )
+    .expect("Python header block should replace only the anchored suite");
+
+    assert_eq!(
+        updated,
+        "def hello():\n    return 42\n\ndef keep():\n    return 2\n"
+    );
+}
+
+#[test]
 fn generated_update_patch_is_localized() {
     let original = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\n";
     let updated = "one\ntwo\nthree\nfour\nFIVE\nsix\nseven\neight\nnine\n";
@@ -965,6 +982,20 @@ fn find_block_uses_markdown_sections() {
 
     assert_eq!(find_block_span("notes.md", &lines, 3), (1, 7));
     assert_eq!(find_block_span("notes.md", &lines, 5), (4, 5));
+}
+
+#[test]
+fn find_block_python_header_stops_at_next_top_level() {
+    let lines = [
+        "def hello():",
+        "    x = 1",
+        "    return x",
+        "",
+        "def keep():",
+        "    return 2",
+    ];
+
+    assert_eq!(find_block_span("src/main.py", &lines, 1), (1, 3));
 }
 
 #[test]

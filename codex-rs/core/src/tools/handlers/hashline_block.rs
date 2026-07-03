@@ -8,6 +8,9 @@ pub(super) fn find_block_span(path: &str, lines: &[&str], anchor_line: usize) ->
     if let Some(span) = find_markdown_section_span(path, lines, anchor_line) {
         return span;
     }
+    if let Some(span) = find_python_header_block_span(path, lines, anchor_line) {
+        return span;
+    }
     if let Some(span) = find_brace_block_span(path, lines, anchor_line) {
         return span;
     }
@@ -119,6 +122,28 @@ fn find_markdown_section_span(
     Some((start + 1, end))
 }
 
+fn find_python_header_block_span(
+    path: &str,
+    lines: &[&str],
+    anchor_line: usize,
+) -> Option<(usize, usize)> {
+    if !is_python_indent_language(path) {
+        return None;
+    }
+    let anchor_index = anchor_line.checked_sub(1)?;
+    let anchor_indent = indent_width(lines[anchor_index]);
+    if anchor_indent != 0 {
+        return None;
+    }
+
+    let end = lines[anchor_index + 1..]
+        .iter()
+        .position(|line| indent_width(line) <= anchor_indent)
+        .map_or(lines.len(), |offset| anchor_index + 1 + offset);
+
+    Some((anchor_index + 1, end))
+}
+
 fn find_indent_block_span(lines: &[&str], anchor_line: usize) -> (usize, usize) {
     let anchor_index = anchor_line - 1;
     let anchor_indent = indent_width(lines[anchor_index]);
@@ -173,6 +198,10 @@ fn is_brace_language(path: &str) -> bool {
 
 fn is_markdown(path: &str) -> bool {
     extension(path).is_some_and(|extension| matches!(extension, "md" | "mdx"))
+}
+
+fn is_python_indent_language(path: &str) -> bool {
+    extension(path).is_some_and(|extension| matches!(extension, "py" | "verse"))
 }
 
 fn extension(path: &str) -> Option<&str> {
