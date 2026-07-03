@@ -1031,7 +1031,7 @@ async fn hashline_rename_file_moves_through_apply_patch() -> anyhow::Result<()> 
     let new_name = "hashline-new-name.txt";
     let old_path = test.cwd.path().join(old_name);
     let new_path = test.cwd.path().join(new_name);
-    fs::write(&old_path, "first\nsecond\n")?;
+    fs::write(&old_path, "first\nsecond")?;
 
     let call_id = "hashline-rename-call";
     let rename_args = json!({
@@ -1069,7 +1069,7 @@ async fn hashline_rename_file_moves_through_apply_patch() -> anyhow::Result<()> 
     .await;
 
     assert!(!old_path.exists());
-    assert_eq!(fs::read_to_string(new_path)?, "first\nsecond\n");
+    assert_eq!(fs::read_to_string(new_path)?, "first\nsecond");
     let request = final_mock.single_request();
     let rename_output = request
         .function_call_output_text(call_id)
@@ -1078,6 +1078,69 @@ async fn hashline_rename_file_moves_through_apply_patch() -> anyhow::Result<()> 
     assert!(rename_output.contains("\"operation\": \"rename_file\""));
     assert!(rename_output.contains(&format!("\"path\": \"{old_name}\"")));
     assert!(rename_output.contains(&format!("\"new_path\": \"{new_name}\"")));
+    assert!(rename_output.contains(&format!("\"header\": \"[{new_name}#")));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_rename_file_moves_empty_file_through_apply_patch() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let old_name = "hashline-empty-old-name.txt";
+    let new_name = "hashline-empty-new-name.txt";
+    let old_path = test.cwd.path().join(old_name);
+    let new_path = test.cwd.path().join(new_name);
+    fs::write(&old_path, "")?;
+
+    let call_id = "hashline-empty-rename-call";
+    let rename_args = json!({
+        "path": old_name,
+        "new_path": new_name
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                "rename_file",
+                &serde_json::to_string(&rename_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline empty file renamed"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, "rename the empty file with hashline").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert!(!old_path.exists());
+    assert_eq!(fs::metadata(new_path)?.len(), 0);
+    let request = final_mock.single_request();
+    let rename_output = request
+        .function_call_output_text(call_id)
+        .expect("rename output should be sent to model");
+    assert!(rename_output.contains("\"success\": true"));
+    assert!(rename_output.contains("\"operation\": \"rename_file\""));
     assert!(rename_output.contains(&format!("\"header\": \"[{new_name}#")));
     Ok(())
 }

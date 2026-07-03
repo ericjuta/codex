@@ -1036,23 +1036,6 @@ fn apply_delta_after(shifts: &mut [isize], line_number: usize, delta: isize) {
     }
 }
 
-pub(super) fn ensure_rename_representable(
-    path: &str,
-    contents: &str,
-) -> Result<(), FunctionCallError> {
-    if split_lines_preserve(contents).is_empty() {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "hashline.rename_file cannot move empty file {path} through apply_patch"
-        )));
-    }
-    if !contents.ends_with('\n') {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "hashline.rename_file cannot preserve non-newline-terminated file {path} through apply_patch"
-        )));
-    }
-    Ok(())
-}
-
 pub(super) fn apply_patch_for_hashline_update(
     path: &str,
     old_contents: &str,
@@ -1107,7 +1090,7 @@ pub(super) fn apply_patch_for_hashline_mutations(
                 new_path,
                 contents,
             } => {
-                append_hashline_rename_hunk(&mut patch, path, new_path, contents)?;
+                append_hashline_rename_hunk(&mut patch, path, new_path, contents);
             }
         }
     }
@@ -1147,11 +1130,11 @@ pub(super) fn apply_patch_for_hashline_rename(
     new_path: &str,
     contents: &str,
     environment_id: Option<&str>,
-) -> Result<String, FunctionCallError> {
+) -> String {
     let mut patch = apply_patch_header(environment_id);
-    append_hashline_rename_hunk(&mut patch, path, new_path, contents)?;
+    append_hashline_rename_hunk(&mut patch, path, new_path, contents);
     patch.push_str("*** End Patch");
-    Ok(patch)
+    patch
 }
 
 fn append_hashline_remove_hunk(patch: &mut String, path: &str) {
@@ -1160,24 +1143,12 @@ fn append_hashline_remove_hunk(patch: &mut String, path: &str) {
     patch.push('\n');
 }
 
-fn append_hashline_rename_hunk(
-    patch: &mut String,
-    path: &str,
-    new_path: &str,
-    contents: &str,
-) -> Result<(), FunctionCallError> {
-    let Some(first_line) = split_lines_preserve(contents).first().copied() else {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "hashline.rename_file cannot move empty file {path} through apply_patch"
-        )));
-    };
+fn append_hashline_rename_hunk(patch: &mut String, path: &str, new_path: &str, _contents: &str) {
     patch.push_str("*** Update File: ");
     patch.push_str(path);
     patch.push_str("\n*** Move to: ");
     patch.push_str(new_path);
-    patch.push_str("\n@@\n");
-    append_apply_patch_line(patch, ' ', first_line);
-    Ok(())
+    patch.push('\n');
 }
 
 pub(super) fn build_hashline_patch_preview(

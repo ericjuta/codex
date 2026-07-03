@@ -728,7 +728,7 @@ fn generated_mixed_file_patch_uses_one_apply_patch_envelope() {
 
     assert_eq!(
         patch,
-        "*** Begin Patch\n*** Environment ID: env-1\n*** Update File: a.txt\n@@\n alpha\n-beta\n+bravo\n*** Delete File: b.txt\n*** Update File: c.txt\n*** Move to: d.txt\n@@\n move me\n*** End Patch"
+        "*** Begin Patch\n*** Environment ID: env-1\n*** Update File: a.txt\n@@\n alpha\n-beta\n+bravo\n*** Delete File: b.txt\n*** Update File: c.txt\n*** Move to: d.txt\n*** End Patch"
     );
 }
 
@@ -749,12 +749,11 @@ fn generated_rename_patch_uses_move_hunk() {
         "new.txt",
         "first\nsecond\n",
         /*environment_id*/ None,
-    )
-    .expect("rename patch should be generated");
+    );
 
     assert_eq!(
         patch,
-        "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n@@\n first\n*** End Patch"
+        "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n*** End Patch"
     );
 }
 

@@ -316,6 +316,22 @@ fn test_parse_patch() {
     assert_eq!(
         parse_patch_text(
             "*** Begin Patch\n\
+             *** Update File: old.txt\n\
+             *** Move to: new.txt\n\
+             *** End Patch",
+            ParseMode::Strict
+        )
+        .unwrap()
+        .hunks,
+        vec![UpdateFile {
+            path: PathBuf::from("old.txt"),
+            move_path: Some(PathBuf::from("new.txt")),
+            chunks: Vec::new(),
+        }]
+    );
+    assert_eq!(
+        parse_patch_text(
+            "*** Begin Patch\n\
              *** Add File: path/add.py\n\
              +abc\n\
              +def\n\

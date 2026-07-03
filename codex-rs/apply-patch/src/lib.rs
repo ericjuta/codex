@@ -688,6 +688,13 @@ async fn derive_new_contents_from_chunks(
         })
     })?;
 
+    if chunks.is_empty() {
+        return Ok(AppliedPatch {
+            original_contents: original_contents.clone(),
+            new_contents: original_contents,
+        });
+    }
+
     let mut original_lines: Vec<String> = original_contents.split('\n').map(String::from).collect();
 
     // Drop the trailing empty element that results from the final newline so
@@ -1142,6 +1149,73 @@ mod tests {
         assert!(!src.exists());
         let contents = fs::read_to_string(&dest).unwrap();
         assert_eq!(contents, "line2\n");
+    }
+
+    #[tokio::test]
+    async fn test_update_file_hunk_can_move_file_without_content_changes() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("src.txt");
+        let dest = dir.path().join("dst.txt");
+        fs::write(&src, "no trailing newline").unwrap();
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+*** Move to: {}"#,
+            src.display(),
+            dest.display()
+        ));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        apply_patch(
+            &patch,
+            &PathUri::from_host_native_path(dir.path()).expect("absolute test path"),
+            &mut stdout,
+            &mut stderr,
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+        )
+        .await
+        .unwrap();
+
+        let stdout_str = String::from_utf8(stdout).unwrap();
+        let stderr_str = String::from_utf8(stderr).unwrap();
+        let expected_out = format!(
+            "Success. Updated the following files:\nM {}\n",
+            dest.display()
+        );
+
+        assert_eq!(stdout_str, expected_out);
+        assert_eq!(stderr_str, "");
+        assert!(!src.exists());
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "no trailing newline");
+    }
+
+    #[tokio::test]
+    async fn test_update_file_hunk_can_move_empty_file() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("empty.txt");
+        let dest = dir.path().join("moved-empty.txt");
+        fs::write(&src, "").unwrap();
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+*** Move to: {}"#,
+            src.display(),
+            dest.display()
+        ));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        apply_patch(
+            &patch,
+            &PathUri::from_host_native_path(dir.path()).expect("absolute test path"),
+            &mut stdout,
+            &mut stderr,
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+        )
+        .await
+        .unwrap();
+
+        assert!(!src.exists());
+        assert_eq!(fs::metadata(&dest).unwrap().len(), 0);
     }
 
     #[cfg(unix)]

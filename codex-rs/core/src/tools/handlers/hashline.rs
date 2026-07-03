@@ -47,7 +47,6 @@ use self::hashline_patch::apply_patch_for_hashline_remove;
 use self::hashline_patch::apply_patch_for_hashline_rename;
 use self::hashline_patch::apply_patch_for_hashline_update;
 use self::hashline_patch::build_hashline_patch_preview;
-use self::hashline_patch::ensure_rename_representable;
 use self::hashline_patch::hashline_patch_is_aborted;
 use self::hashline_patch::parse_anchor_hash;
 use self::hashline_patch::parse_anchor_line;
@@ -415,7 +414,7 @@ fn remove_file_tool_spec(multi_environment: bool) -> ResponsesApiTool {
 fn rename_file_tool_spec(multi_environment: bool) -> ResponsesApiTool {
     ResponsesApiTool {
         name: RENAME_FILE_TOOL.to_string(),
-        description: "Rename one non-empty newline-terminated text file after optional Hashline file-hash validation."
+        description: "Rename one text file after optional Hashline file-hash validation."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -1034,7 +1033,6 @@ async fn handle_patch_file_operation(
             )))
         }
         HashlinePatchFileOperation::Rename { new_path } => {
-            ensure_rename_representable(path, contents)?;
             ensure_selected_file_missing(
                 invocation.turn.as_ref(),
                 invocation.step_context.as_ref(),
@@ -1059,7 +1057,7 @@ async fn handle_patch_file_operation(
             }
 
             let apply_patch_text =
-                apply_patch_for_hashline_rename(path, &new_path, contents, environment_id)?;
+                apply_patch_for_hashline_rename(path, &new_path, contents, environment_id);
             let post_rename_turn = std::sync::Arc::clone(&invocation.turn);
             let post_rename_step_context = std::sync::Arc::clone(&invocation.step_context);
             let apply_patch_invocation = ToolInvocation {
@@ -1165,7 +1163,6 @@ async fn handle_multi_file_patch(
                     });
                 }
                 HashlinePatchFileOperation::Rename { new_path } => {
-                    ensure_rename_representable(&section.path, &old_contents)?;
                     ensure_selected_file_missing(
                         invocation.turn.as_ref(),
                         invocation.step_context.as_ref(),
@@ -1593,7 +1590,6 @@ async fn handle_rename_file(
     )
     .await?;
     validate_file_hash(&args.path, &contents, args.expected_hash.as_deref())?;
-    ensure_rename_representable(&args.path, &contents)?;
     ensure_selected_file_missing(
         turn.as_ref(),
         step_context.as_ref(),
@@ -1624,7 +1620,7 @@ async fn handle_rename_file(
         &args.new_path,
         &contents,
         args.environment_id.as_deref(),
-    )?;
+    );
     let post_rename_turn = std::sync::Arc::clone(turn);
     let post_rename_step_context = std::sync::Arc::clone(step_context);
     let apply_patch_invocation = ToolInvocation {

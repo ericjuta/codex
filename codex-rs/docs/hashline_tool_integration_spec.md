@@ -95,7 +95,7 @@ Expose a namespace named `hashline` with these first-stage tools:
 | `hashline.patch` | Apply a Hashline patch string to one file, to multiple existing files with `[path#HASH]` sections, or to multiple missing files with `create=true` and `[path]` sections | Success/failure status; dry runs include old/new hashes, file operations, and compact changed-line previews. |
 | `hashline.find_block` | Resolve a block around an anchored line | Block span, language guess, and a small anchored excerpt. |
 | `hashline.remove_file` | Delete one text file after optional file-hash validation | Hashline success/failure status with old file hash after `apply_patch` verifies and applies the delete. |
-| `hashline.rename_file` | Move one non-empty newline-terminated text file after optional file-hash validation | Hashline success/failure status with old/new paths and refreshed destination header after `apply_patch` verifies and applies the move. |
+| `hashline.rename_file` | Move one text file after optional file-hash validation | Hashline success/failure status with old/new paths and refreshed destination header after `apply_patch` verifies and applies the move. |
 
 Use structured function tools for stage 1. A freeform `hashline_patch` tool can
 be added later if model behavior proves better with grammar-constrained patch
@@ -266,8 +266,7 @@ The tool guidance should be short and operational:
    `hashline.patch create=true` when creating via line operations, including
    sectioned `[path]` multi-file creation,
    `hashline.remove_file` for single-file deletion, and
-   `hashline.rename_file` for single-file moves that the tool can represent
-   without changing file contents. Use sectioned `hashline.patch` for
+   `hashline.rename_file` for single-file moves. Use sectioned `hashline.patch` for
    existing-file multi-file edits, including `REM` and `MV <path>` file ops.
 
 Do not present Hashline as a universal replacement during the additive stage.
@@ -378,10 +377,6 @@ If TUI-rendered text changes, add or update `insta` snapshots in `codex-tui`.
    benchmark history around line navigation, but the inspected CLI exposes
    `read` and `find_block`, not a complete search replacement. Keep search out
    of stage 1 unless a concrete model workflow needs it.
-5. Should empty-file rename/move be supported? `hashline.write` and
-   `hashline.patch create=true` support zero-byte creation through approved
-   `apply_patch` add-file hunks, but `apply_patch` move hunks still require
-   at least one context line to preserve file contents.
 
 ## Non-Goals
 

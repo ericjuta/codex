@@ -51,8 +51,14 @@ impl StreamingPatchParser {
     }
 
     fn ensure_update_hunk_is_not_empty(&self, line: &str) -> Result<(), ParseError> {
-        if let Some(UpdateFile { path, chunks, .. }) = self.state.hunks.last() {
+        if let Some(UpdateFile {
+            path,
+            move_path,
+            chunks,
+        }) = self.state.hunks.last()
+        {
             if chunks.is_empty()
+                && move_path.is_none()
                 && let StreamingParserMode::UpdateFile { hunk_line_number } = self.state.mode
             {
                 return Err(InvalidHunkError {
@@ -885,10 +891,16 @@ mod tests {
             parser.push_delta(
                 "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n*** Delete File: other.txt\n",
             ),
-            Err(InvalidHunkError {
-                message: "Update file hunk for path 'old.txt' is empty".to_string(),
-                line_number: 2,
-            })
+            Ok(vec![
+                UpdateFile {
+                    path: PathBuf::from("old.txt"),
+                    move_path: Some(PathBuf::from("new.txt")),
+                    chunks: Vec::new(),
+                },
+                DeleteFile {
+                    path: PathBuf::from("other.txt"),
+                },
+            ])
         );
 
         let mut parser = StreamingPatchParser::default();
