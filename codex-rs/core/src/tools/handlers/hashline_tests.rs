@@ -273,6 +273,18 @@ fn applies_readme_style_swap_body() {
 }
 
 #[test]
+fn applies_escaped_payload_prefixes() {
+    let updated = apply_hashline_patch(
+        "notes.txt",
+        "alpha\nbeta\ngamma\n",
+        "SWAP 2:\n++literal plus\n+-literal minus",
+    )
+    .expect("escaped payload prefixes should apply");
+
+    assert_eq!(updated, "alpha\n+literal plus\n-literal minus\ngamma\n");
+}
+
+#[test]
 fn applies_readme_style_range_swap() {
     let updated = apply_hashline_patch(
         "notes.txt",

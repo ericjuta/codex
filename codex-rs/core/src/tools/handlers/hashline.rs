@@ -321,7 +321,7 @@ fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "patch".to_string(),
                     JsonSchema::string(Some(
-                        "Hashline operations. Use README-style bodies such as SWAP 12:\n+replacement, SWAP 12:ab..14:cd:\n+replacement, DEL 12..=14, DEL 12-14, INS.POST 12:\n+text, INS.HEAD:\n+text, SWAP.BLK 12:\n+replacement block, DEL.BLK 12, INS.BLK.POST 12:\n+block, INS.BLK.PRE 12:\n+block, INS.BLK 12:\n+block, compact forms such as SWAP 12:ab|replacement and INS.TAIL|text, or multiple [path#HASH] sections for existing-file multi-file edits. Sectioned patches also accept REM, MV <path>, and *** Abort to suppress an embedded patch."
+                        "Hashline operations. Use README-style bodies such as SWAP 12:\n+replacement, SWAP 12:ab..14:cd:\n+replacement, DEL 12..=14, DEL 12-14, INS.POST 12:\n+text, INS.HEAD:\n+text, SWAP.BLK 12:\n+replacement block, DEL.BLK 12, INS.BLK.POST 12:\n+block, INS.BLK.PRE 12:\n+block, INS.BLK 12:\n+block, compact forms such as SWAP 12:ab|replacement and INS.TAIL|text, or multiple [path#HASH] sections for existing-file multi-file edits. In payload bodies, use ++ for literal + and +- for literal -. Sectioned patches also accept REM, MV <path>, and *** Abort to suppress an embedded patch."
                             .to_string(),
                     )),
                 ),
