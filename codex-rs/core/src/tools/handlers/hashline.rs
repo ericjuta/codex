@@ -29,6 +29,7 @@ mod hashline_hash;
 mod hashline_patch;
 
 use self::hashline_block::find_block_span;
+use self::hashline_block::language_for_path;
 use self::hashline_format::count_lines;
 use self::hashline_format::format_hashline_excerpt;
 use self::hashline_format::split_lines_preserve;
@@ -484,6 +485,7 @@ async fn handle_find_block(
     let body = json!({
         "path": args.path,
         "anchor": args.anchor,
+        "language": language_for_path(&args.path),
         "start_line": block_start,
         "end_line": block_end,
         "truncated": capped_end < block_end,

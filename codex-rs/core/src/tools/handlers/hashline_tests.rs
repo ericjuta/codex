@@ -1,5 +1,6 @@
 use super::build_hashline_patch_success_body;
 use super::hashline_block::find_block_span;
+use super::hashline_block::language_for_path;
 use super::hashline_hash::hash_hex;
 use super::hashline_hash::line_hash;
 use super::hashline_patch::apply_hashline_patch;
@@ -454,4 +455,14 @@ fn find_block_uses_markdown_sections() {
 
     assert_eq!(find_block_span("notes.md", &lines, 3), (1, 7));
     assert_eq!(find_block_span("notes.md", &lines, 5), (4, 5));
+}
+
+#[test]
+fn find_block_language_guess_matches_reference_extensions() {
+    assert_eq!(language_for_path("src/main.rs"), "Rust");
+    assert_eq!(language_for_path("src/main.py"), "Python");
+    assert_eq!(language_for_path("src/main.go"), "Go");
+    assert_eq!(language_for_path("include/value.hpp"), "C++");
+    assert_eq!(language_for_path("notes.md"), "Markdown");
+    assert_eq!(language_for_path("Makefile"), "Unknown");
 }

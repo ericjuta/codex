@@ -175,6 +175,73 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_find_block_reports_language_and_excerpt() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let dir_path = test.cwd.path().join("src");
+    fs::create_dir_all(&dir_path)?;
+    let file_name = "src/main.rs";
+    let file_path = test.cwd.path().join(file_name);
+    fs::write(
+        &file_path,
+        "fn main() {\n    if true {\n        println!(\"hi\");\n    }\n}\n",
+    )?;
+
+    let call_id = "hashline-find-block-call";
+    let find_args = json!({
+        "path": file_name,
+        "anchor": "3"
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                "find_block",
+                &serde_json::to_string(&find_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline block found"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, "find the Rust block with hashline").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let request = final_mock.single_request();
+    let find_output = request
+        .function_call_output_text(call_id)
+        .expect("find_block output should be sent to model");
+    assert!(find_output.contains("\"language\": \"Rust\""));
+    assert!(find_output.contains("\"start_line\": 2"));
+    assert!(find_output.contains("\"end_line\": 4"));
+    assert!(find_output.contains("3:"));
+    assert!(find_output.contains("println!"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hashline_patch_rejects_stale_line_hash() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let test = test_codex()

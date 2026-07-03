@@ -14,6 +14,36 @@ pub(super) fn find_block_span(path: &str, lines: &[&str], anchor_line: usize) ->
     find_indent_block_span(lines, anchor_line)
 }
 
+pub(super) fn language_for_path(path: &str) -> &'static str {
+    match extension(path) {
+        Some("rs") => "Rust",
+        Some("py") => "Python",
+        Some("js") => "JavaScript",
+        Some("ts") => "TypeScript",
+        Some("tsx") => "TSX",
+        Some("jsx") => "JSX",
+        Some("go") => "Go",
+        Some("rb") => "Ruby",
+        Some("verse") => "Verse",
+        Some("java") => "Java",
+        Some("c") => "C",
+        Some("cc" | "cpp" | "hpp") => "C++",
+        Some("h") => "C/C++ Header",
+        Some("cs") => "C#",
+        Some("kt" | "kts") => "Kotlin",
+        Some("swift") => "Swift",
+        Some("scala") => "Scala",
+        Some("dart") => "Dart",
+        Some("zig") => "Zig",
+        Some("m") => "Objective-C",
+        Some("mm") => "Objective-C++",
+        Some("md" | "mdx") => "Markdown",
+        Some("css") => "CSS",
+        Some("scss") => "SCSS",
+        Some(_) | None => "Unknown",
+    }
+}
+
 fn find_brace_block_span(path: &str, lines: &[&str], anchor_line: usize) -> Option<(usize, usize)> {
     if !is_brace_language(path) {
         return None;
