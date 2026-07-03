@@ -222,7 +222,7 @@ fn read_tool_spec(multi_environment: bool) -> ResponsesApiTool {
 fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
     ResponsesApiTool {
         name: PATCH_TOOL.to_string(),
-        description: "Apply a single-file Hashline line operation patch. Supported operations: SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, and INS.TAIL."
+        description: "Apply a single-file Hashline line operation patch. Supported operations: SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, and INS.TAIL, using either README-style + payload bodies or compact |text forms."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -231,7 +231,7 @@ fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "patch".to_string(),
                     JsonSchema::string(Some(
-                        "Hashline operations, one per line. Use SWAP 12:ab|replacement, DEL 12:ab, INS.PRE 12:ab|text, INS.POST 12:ab|text, INS.HEAD |text, or INS.TAIL |text. INS.HEAD|text and INS.TAIL|text are also accepted."
+                        "Hashline operations. Use README-style bodies such as SWAP 12:\n+replacement, SWAP 12..14:\n+replacement, DEL 12..14, INS.POST 12:\n+text, INS.HEAD:\n+text, or compact forms such as SWAP 12:ab|replacement and INS.TAIL|text."
                             .to_string(),
                     )),
                 ),

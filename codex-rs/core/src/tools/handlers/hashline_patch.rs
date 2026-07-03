@@ -26,72 +26,62 @@ struct ChangeBounds {
     new_end: usize,
 }
 
+#[derive(Debug, Clone)]
+struct LineAnchor {
+    line: usize,
+    expected_hash: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct LineRange {
+    start: LineAnchor,
+    end_line: usize,
+}
+
+#[derive(Debug, Clone)]
+enum HashlineOperation {
+    Swap {
+        range: LineRange,
+        replacement: Vec<String>,
+    },
+    Delete {
+        range: LineRange,
+    },
+    InsertBefore {
+        anchor: LineAnchor,
+        inserted: Vec<String>,
+    },
+    InsertAfter {
+        anchor: LineAnchor,
+        inserted: Vec<String>,
+    },
+    InsertHead {
+        inserted: Vec<String>,
+    },
+    InsertTail {
+        inserted: Vec<String>,
+    },
+}
+
 pub(super) fn apply_hashline_patch(
     path: &str,
     contents: &str,
     patch: &str,
 ) -> Result<String, FunctionCallError> {
     validate_patch_headers(path, contents, patch)?;
-
+    let operations = parse_hashline_patch(patch)?;
     let mut lines = split_lines_preserve(contents)
         .into_iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>();
-    let mut saw_operation = false;
 
-    for raw_line in patch.lines() {
-        let line = raw_line.trim_end();
-        if line.trim().is_empty() || line.starts_with('[') || line.starts_with('#') {
-            continue;
-        }
-        saw_operation = true;
-        let (op, rest) = split_hashline_operation(line)?;
-        match op {
-            "SWAP" => {
-                let (line_number, expected_hash, replacement) =
-                    parse_line_op(rest, /*needs_text*/ true)?;
-                validate_line_hash(&lines, line_number, expected_hash)?;
-                lines[line_number - 1] = replacement.to_string();
-            }
-            "DEL" => {
-                let (line_number, expected_hash, _) =
-                    parse_line_op(rest, /*needs_text*/ false)?;
-                validate_line_hash(&lines, line_number, expected_hash)?;
-                lines.remove(line_number - 1);
-            }
-            "INS.PRE" => {
-                let (line_number, expected_hash, inserted) =
-                    parse_line_op(rest, /*needs_text*/ true)?;
-                validate_line_hash(&lines, line_number, expected_hash)?;
-                lines.insert(line_number - 1, inserted.to_string());
-            }
-            "INS.POST" => {
-                let (line_number, expected_hash, inserted) =
-                    parse_line_op(rest, /*needs_text*/ true)?;
-                validate_line_hash(&lines, line_number, expected_hash)?;
-                lines.insert(line_number, inserted.to_string());
-            }
-            "INS.HEAD" => {
-                let inserted = parse_insert_text(rest)?;
-                lines.insert(0, inserted.to_string());
-            }
-            "INS.TAIL" => {
-                let inserted = parse_insert_text(rest)?;
-                lines.push(inserted.to_string());
-            }
-            _ => {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "unsupported Hashline operation {op}"
-                )));
-            }
-        }
-    }
-
-    if !saw_operation {
+    if operations.is_empty() {
         return Err(FunctionCallError::RespondToModel(
             "hashline.patch did not contain any operations".to_string(),
         ));
     }
+
+    apply_operations(&mut lines, &operations, contents)?;
 
     let mut output = lines.join("\n");
     if contents.ends_with('\n') {
@@ -174,6 +164,383 @@ fn validate_hash_token(path: &str, expected_hash: &str) -> Result<(), FunctionCa
     Err(FunctionCallError::RespondToModel(format!(
         "invalid file hash for {path}: expected a 4-hex Hashline file hash, got {expected_hash}"
     )))
+}
+
+fn parse_hashline_patch(patch: &str) -> Result<Vec<HashlineOperation>, FunctionCallError> {
+    let raw_lines = patch
+        .lines()
+        .map(|line| line.trim_end_matches('\r'))
+        .collect::<Vec<_>>();
+    let mut operations = Vec::new();
+    let mut index = 0;
+    while index < raw_lines.len() {
+        let line = raw_lines[index].trim_end();
+        if is_ignorable_patch_line(line) {
+            index += 1;
+            continue;
+        }
+        let (op, rest) = split_hashline_operation(line)?;
+        let op = op.to_ascii_uppercase();
+        index += 1;
+
+        let operation = match op.as_str() {
+            "SWAP" => {
+                if let Some((target, replacement)) = rest.split_once('|') {
+                    HashlineOperation::Swap {
+                        range: parse_line_range(target)?,
+                        replacement: vec![replacement.to_string()],
+                    }
+                } else {
+                    HashlineOperation::Swap {
+                        range: parse_line_range(rest)?,
+                        replacement: collect_payload_lines(&raw_lines, &mut index)?,
+                    }
+                }
+            }
+            "DEL" => HashlineOperation::Delete {
+                range: parse_line_range(rest)?,
+            },
+            "INS.PRE" => {
+                if let Some((target, inserted)) = rest.split_once('|') {
+                    HashlineOperation::InsertBefore {
+                        anchor: parse_line_anchor(target)?,
+                        inserted: vec![inserted.to_string()],
+                    }
+                } else {
+                    HashlineOperation::InsertBefore {
+                        anchor: parse_line_anchor(rest)?,
+                        inserted: collect_payload_lines(&raw_lines, &mut index)?,
+                    }
+                }
+            }
+            "INS.POST" => {
+                if let Some((target, inserted)) = rest.split_once('|') {
+                    HashlineOperation::InsertAfter {
+                        anchor: parse_line_anchor(target)?,
+                        inserted: vec![inserted.to_string()],
+                    }
+                } else {
+                    HashlineOperation::InsertAfter {
+                        anchor: parse_line_anchor(rest)?,
+                        inserted: collect_payload_lines(&raw_lines, &mut index)?,
+                    }
+                }
+            }
+            "INS.HEAD" => {
+                if let Some(inserted) = rest.trim_start().strip_prefix('|') {
+                    HashlineOperation::InsertHead {
+                        inserted: vec![inserted.to_string()],
+                    }
+                } else {
+                    validate_empty_target(rest, "INS.HEAD")?;
+                    HashlineOperation::InsertHead {
+                        inserted: collect_payload_lines(&raw_lines, &mut index)?,
+                    }
+                }
+            }
+            "INS.TAIL" => {
+                if let Some(inserted) = rest.trim_start().strip_prefix('|') {
+                    HashlineOperation::InsertTail {
+                        inserted: vec![inserted.to_string()],
+                    }
+                } else {
+                    validate_empty_target(rest, "INS.TAIL")?;
+                    HashlineOperation::InsertTail {
+                        inserted: collect_payload_lines(&raw_lines, &mut index)?,
+                    }
+                }
+            }
+            _ => {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "unsupported Hashline operation {op}"
+                )));
+            }
+        };
+        operations.push(operation);
+    }
+    Ok(operations)
+}
+
+fn is_ignorable_patch_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.is_empty()
+        || trimmed.starts_with('[')
+        || trimmed.starts_with('#')
+        || trimmed == "*** Begin Patch"
+        || trimmed == "*** End Patch"
+}
+
+fn collect_payload_lines(
+    raw_lines: &[&str],
+    index: &mut usize,
+) -> Result<Vec<String>, FunctionCallError> {
+    let mut payload = Vec::new();
+    while *index < raw_lines.len() {
+        let line = raw_lines[*index].trim_end();
+        if is_ignorable_patch_line(line) {
+            *index += 1;
+            if payload.is_empty() {
+                continue;
+            }
+            break;
+        }
+        if is_hashline_operation_line(line) {
+            break;
+        }
+        let Some(stripped) = line.strip_prefix('+') else {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "Hashline payload line {line:?} must start with +"
+            )));
+        };
+        payload.push(stripped.to_string());
+        *index += 1;
+    }
+    Ok(payload)
+}
+
+fn is_hashline_operation_line(line: &str) -> bool {
+    let Ok((op, _)) = split_hashline_operation(line) else {
+        return false;
+    };
+    matches!(
+        op.to_ascii_uppercase().as_str(),
+        "SWAP" | "DEL" | "INS.PRE" | "INS.POST" | "INS.HEAD" | "INS.TAIL"
+    )
+}
+
+fn validate_empty_target(rest: &str, op: &str) -> Result<(), FunctionCallError> {
+    let rest = rest.trim();
+    if rest.is_empty() || rest == ":" {
+        return Ok(());
+    }
+    Err(FunctionCallError::RespondToModel(format!(
+        "{op} does not accept a line target"
+    )))
+}
+
+fn parse_line_range(input: &str) -> Result<LineRange, FunctionCallError> {
+    let normalized = normalize_anchor_target(input);
+    let Some((range_text, expected_hash)) = split_optional_anchor_hash(&normalized) else {
+        return Err(invalid_operation_error(input));
+    };
+    let (start_text, end_text) = range_text
+        .split_once("..")
+        .map_or((range_text, range_text), |(start, end)| {
+            (start.trim(), end.trim())
+        });
+    let start_line = parse_positive_line_number(start_text, input)?;
+    let end_line = parse_positive_line_number(end_text, input)?;
+    if end_line < start_line {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "Hashline range {input} ends before it starts"
+        )));
+    }
+    Ok(LineRange {
+        start: LineAnchor {
+            line: start_line,
+            expected_hash,
+        },
+        end_line,
+    })
+}
+
+fn parse_line_anchor(input: &str) -> Result<LineAnchor, FunctionCallError> {
+    let range = parse_line_range(input)?;
+    if range.start.line != range.end_line {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "Hashline insert anchor {input} must be a single line"
+        )));
+    }
+    Ok(range.start)
+}
+
+fn normalize_anchor_target(input: &str) -> String {
+    input.trim().trim_end_matches(':').trim().to_string()
+}
+
+fn split_optional_anchor_hash(input: &str) -> Option<(&str, Option<String>)> {
+    if input.is_empty() {
+        return None;
+    }
+    let (target, expected_hash) = input
+        .rsplit_once(':')
+        .map_or((input, None), |(target, hash)| {
+            (target.trim(), Some(hash.trim().to_ascii_lowercase()))
+        });
+    if expected_hash
+        .as_deref()
+        .is_some_and(|hash| hash.len() != 2 || !hash.chars().all(|ch| ch.is_ascii_hexdigit()))
+    {
+        return None;
+    }
+    Some((target, expected_hash))
+}
+
+fn parse_positive_line_number(input: &str, source: &str) -> Result<usize, FunctionCallError> {
+    let line_number = input.trim().parse::<usize>().map_err(|err| {
+        FunctionCallError::RespondToModel(format!("invalid Hashline anchor {source}: {err}"))
+    })?;
+    if line_number == 0 {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "invalid Hashline anchor {source}: line numbers are 1-indexed"
+        )));
+    }
+    Ok(line_number)
+}
+
+fn apply_operations(
+    lines: &mut Vec<String>,
+    operations: &[HashlineOperation],
+    original_contents: &str,
+) -> Result<(), FunctionCallError> {
+    let original_lines = split_lines_preserve(original_contents)
+        .into_iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let mut shifts = vec![0_isize; original_lines.len()];
+    let mut deleted = vec![false; original_lines.len()];
+
+    for operation in operations {
+        match operation {
+            HashlineOperation::Swap { range, replacement } => {
+                validate_range(&original_lines, &deleted, range)?;
+                let start_index = adjusted_index(range.start.line, &shifts)?;
+                let replaced_count = range.end_line - range.start.line + 1;
+                replace_current_range(lines, start_index, replaced_count, replacement)?;
+                mark_deleted(&mut deleted, range.start.line, range.end_line);
+                apply_delta_after(
+                    &mut shifts,
+                    range.end_line,
+                    replacement.len() as isize - replaced_count as isize,
+                );
+            }
+            HashlineOperation::Delete { range } => {
+                validate_range(&original_lines, &deleted, range)?;
+                let start_index = adjusted_index(range.start.line, &shifts)?;
+                let deleted_count = range.end_line - range.start.line + 1;
+                replace_current_range(lines, start_index, deleted_count, &[])?;
+                mark_deleted(&mut deleted, range.start.line, range.end_line);
+                apply_delta_after(&mut shifts, range.end_line, -(deleted_count as isize));
+            }
+            HashlineOperation::InsertBefore { anchor, inserted } => {
+                validate_anchor(&original_lines, &deleted, anchor)?;
+                let index = adjusted_index(anchor.line, &shifts)?;
+                for (offset, line) in inserted.iter().enumerate() {
+                    lines.insert(index + offset, line.clone());
+                }
+                apply_delta_from(&mut shifts, anchor.line, inserted.len() as isize);
+            }
+            HashlineOperation::InsertAfter { anchor, inserted } => {
+                validate_anchor(&original_lines, &deleted, anchor)?;
+                let index = adjusted_index(anchor.line, &shifts)?.saturating_add(1);
+                for (offset, line) in inserted.iter().enumerate() {
+                    lines.insert(index + offset, line.clone());
+                }
+                apply_delta_after(&mut shifts, anchor.line, inserted.len() as isize);
+            }
+            HashlineOperation::InsertHead { inserted } => {
+                for (offset, line) in inserted.iter().enumerate() {
+                    lines.insert(offset, line.clone());
+                }
+                apply_delta_from(&mut shifts, 1, inserted.len() as isize);
+            }
+            HashlineOperation::InsertTail { inserted } => {
+                lines.extend(inserted.iter().cloned());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_range(
+    original_lines: &[String],
+    deleted: &[bool],
+    range: &LineRange,
+) -> Result<(), FunctionCallError> {
+    validate_anchor(original_lines, deleted, &range.start)?;
+    if range.end_line > original_lines.len() {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "line {} is outside file range 1..={}",
+            range.end_line,
+            original_lines.len()
+        )));
+    }
+    for line in range.start.line..=range.end_line {
+        if deleted[line - 1] {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "line {line} has already been deleted by an earlier Hashline operation"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_anchor(
+    original_lines: &[String],
+    deleted: &[bool],
+    anchor: &LineAnchor,
+) -> Result<(), FunctionCallError> {
+    validate_line_hash(original_lines, anchor.line, anchor.expected_hash.as_deref())?;
+    if deleted[anchor.line - 1] {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "line {} has already been deleted by an earlier Hashline operation",
+            anchor.line
+        )));
+    }
+    Ok(())
+}
+
+fn adjusted_index(line_number: usize, shifts: &[isize]) -> Result<usize, FunctionCallError> {
+    let shift = shifts.get(line_number - 1).copied().ok_or_else(|| {
+        FunctionCallError::RespondToModel(format!(
+            "line {line_number} is outside file range 1..={}",
+            shifts.len()
+        ))
+    })?;
+    let index = (line_number as isize - 1) + shift;
+    usize::try_from(index).map_err(|_| {
+        FunctionCallError::RespondToModel(format!(
+            "line {line_number} has shifted before the start of the file"
+        ))
+    })
+}
+
+fn replace_current_range(
+    lines: &mut Vec<String>,
+    start_index: usize,
+    removed_count: usize,
+    inserted: &[String],
+) -> Result<(), FunctionCallError> {
+    if start_index.saturating_add(removed_count) > lines.len() {
+        return Err(FunctionCallError::RespondToModel(
+            "Hashline operation no longer maps to the current file contents".to_string(),
+        ));
+    }
+    for _ in 0..removed_count {
+        lines.remove(start_index);
+    }
+    for (offset, line) in inserted.iter().enumerate() {
+        lines.insert(start_index + offset, line.clone());
+    }
+    Ok(())
+}
+
+fn mark_deleted(deleted: &mut [bool], start_line: usize, end_line: usize) {
+    for line in start_line..=end_line {
+        deleted[line - 1] = true;
+    }
+}
+
+fn apply_delta_from(shifts: &mut [isize], start_line: usize, delta: isize) {
+    for shift in shifts.iter_mut().skip(start_line.saturating_sub(1)) {
+        *shift += delta;
+    }
+}
+
+fn apply_delta_after(shifts: &mut [isize], line_number: usize, delta: isize) {
+    for shift in shifts.iter_mut().skip(line_number) {
+        *shift += delta;
+    }
 }
 
 pub(super) fn ensure_rename_representable(
@@ -306,54 +673,27 @@ pub(super) fn build_hashline_patch_preview(
     })
 }
 
-fn parse_line_op(
-    input: &str,
-    needs_text: bool,
-) -> Result<(usize, Option<&str>, &str), FunctionCallError> {
-    let (anchor, text) = if let Some((anchor, text)) = input.split_once('|') {
-        (anchor.trim(), text)
-    } else if needs_text {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "Hashline operation {input} must include |text"
-        )));
-    } else {
-        (input.trim(), "")
-    };
-    let line_number = parse_anchor_line(anchor)?;
-    let expected_hash = parse_anchor_hash(anchor);
-    Ok((line_number, expected_hash, text))
-}
-
 fn split_hashline_operation(input: &str) -> Result<(&str, &str), FunctionCallError> {
     let line = input.trim_start();
-    let Some(op_end) = line.find(|ch: char| ch.is_whitespace() || ch == '|') else {
+    let Some(op_end) = line.find(|ch: char| ch.is_whitespace() || ch == '|' || ch == ':') else {
         return Err(invalid_operation_error(line));
     };
     let (op, rest) = line.split_at(op_end);
     if op.is_empty() {
         return Err(invalid_operation_error(line));
     }
-    let rest = if rest.starts_with('|') {
+    let rest = if rest.starts_with('|') || rest.starts_with(':') {
         rest
     } else {
         rest.trim_start()
     };
-    if rest.is_empty() {
-        return Err(invalid_operation_error(line));
-    }
     Ok((op, rest))
 }
 
 fn invalid_operation_error(line: &str) -> FunctionCallError {
     FunctionCallError::RespondToModel(format!(
-        "invalid Hashline operation {line}; expected forms like SWAP 12:ab|text, DEL 12:ab, INS.POST 12:ab|text, or INS.TAIL |text"
+        "invalid Hashline operation {line}; expected forms like SWAP 12:\n+text, SWAP 12:ab|text, DEL 12, INS.POST 12:\n+text, or INS.TAIL:\n+text"
     ))
-}
-
-fn parse_insert_text(input: &str) -> Result<&str, FunctionCallError> {
-    input.trim_start().strip_prefix('|').ok_or_else(|| {
-        FunctionCallError::RespondToModel(format!("insert operation {input} must include |text"))
-    })
 }
 
 fn validate_line_hash(

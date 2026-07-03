@@ -109,6 +109,69 @@ fn patch_rejects_wrong_file_header_path() {
 }
 
 #[test]
+fn applies_readme_style_swap_body() {
+    let updated = apply_hashline_patch("notes.txt", "alpha\nbeta\ngamma\n", "SWAP 2:\n+bravo")
+        .expect("README-style swap body should apply");
+
+    assert_eq!(updated, "alpha\nbravo\ngamma\n");
+}
+
+#[test]
+fn applies_readme_style_range_swap() {
+    let updated = apply_hashline_patch(
+        "notes.txt",
+        "alpha\nbeta\ngamma\ndelta\n",
+        "SWAP 2..3:\n+bravo\n+charlie",
+    )
+    .expect("README-style range swap should apply");
+
+    assert_eq!(updated, "alpha\nbravo\ncharlie\ndelta\n");
+}
+
+#[test]
+fn applies_readme_style_delete_range() {
+    let updated = apply_hashline_patch("notes.txt", "alpha\nbeta\ngamma\ndelta\n", "DEL 2..3")
+        .expect("README-style delete range should apply");
+
+    assert_eq!(updated, "alpha\ndelta\n");
+}
+
+#[test]
+fn applies_readme_style_insert_bodies() {
+    let updated = apply_hashline_patch(
+        "notes.txt",
+        "middle\n",
+        "INS.HEAD:\n+top\nINS.POST 1:\n+after middle\nINS.TAIL:\n+bottom",
+    )
+    .expect("README-style insert bodies should apply");
+
+    assert_eq!(updated, "top\nmiddle\nafter middle\nbottom\n");
+}
+
+#[test]
+fn accepts_patch_envelope_markers() {
+    let updated = apply_hashline_patch(
+        "notes.txt",
+        "alpha\nbeta\n",
+        "*** Begin Patch\nSWAP 2:\n+bravo\n*** End Patch",
+    )
+    .expect("Hashline patch envelope should be ignored");
+
+    assert_eq!(updated, "alpha\nbravo\n");
+}
+
+#[test]
+fn subsequent_operations_use_original_line_anchors() {
+    let original = "AAA\nBBB\nCCC\nDDD\n";
+    let patch = format!("INS.POST 1:\n+XXX\nSWAP 4:{}:\n+ZZZ", line_hash("DDD"));
+
+    let updated = apply_hashline_patch("notes.txt", original, &patch)
+        .expect("later operation should target original line after earlier insert");
+
+    assert_eq!(updated, "AAA\nXXX\nBBB\nCCC\nZZZ\n");
+}
+
+#[test]
 fn generated_update_patch_is_localized() {
     let original = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\n";
     let updated = "one\ntwo\nthree\nfour\nFIVE\nsix\nseven\neight\nnine\n";
