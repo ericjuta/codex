@@ -116,6 +116,21 @@ fn patch_accepts_matching_file_header() {
 }
 
 #[test]
+fn patch_accepts_bracketed_apply_patch_style_file_header() {
+    let original = "alpha\nbeta\ngamma\n";
+    let patch = format!(
+        "[*** Update File: notes.txt#{}]\nSWAP 2:{}|bravo",
+        hash_hex(original, 4),
+        line_hash("beta")
+    );
+
+    let updated = apply_hashline_patch("notes.txt", original, &patch)
+        .expect("bracketed apply_patch-style header should recover");
+
+    assert_eq!(updated, "alpha\nbravo\ngamma\n");
+}
+
+#[test]
 fn patch_accepts_repeated_matching_file_sections() {
     let original = "alpha\nbeta\ngamma\n";
     let file_hash = hash_hex(original, 4);
@@ -243,6 +258,36 @@ fn patch_sections_accept_optional_file_hashes() {
                 path: "existing.txt".to_string(),
                 expected_hash: Some("abcd".to_string()),
                 patch: "DEL 1".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn patch_sections_recover_bracketed_apply_patch_style_headers() {
+    let sections = split_hashline_patch_sections(
+        "fallback.txt",
+        "[*** Add File: created.txt]\nINS.TAIL:\n+new\n[*** Update File: existing.txt#abcd]\nDEL 1\n[**Move to: moved.txt]\nINS.HEAD:\n+hi",
+    )
+    .expect("bracketed apply_patch-style headers should recover");
+
+    assert_eq!(
+        sections,
+        vec![
+            HashlinePatchSection {
+                path: "created.txt".to_string(),
+                expected_hash: None,
+                patch: "INS.TAIL:\n+new".to_string(),
+            },
+            HashlinePatchSection {
+                path: "existing.txt".to_string(),
+                expected_hash: Some("abcd".to_string()),
+                patch: "DEL 1".to_string(),
+            },
+            HashlinePatchSection {
+                path: "moved.txt".to_string(),
+                expected_hash: None,
+                patch: "INS.HEAD:\n+hi".to_string(),
             },
         ]
     );

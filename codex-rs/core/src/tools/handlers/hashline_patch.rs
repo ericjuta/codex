@@ -348,12 +348,47 @@ fn parse_patch_file_header(
         }
         None => (header, None),
     };
+    let header_path = strip_apply_patch_path_noise(header_path);
     if header_path.trim().is_empty() || header_path.contains('#') {
         return Err(FunctionCallError::RespondToModel(format!(
             "invalid Hashline file header {line}; expected [{target_path}#HASH] or [{target_path}]"
         )));
     }
-    Ok(Some((header_path.to_string(), expected_hash)))
+    Ok(Some((header_path, expected_hash)))
+}
+
+fn strip_apply_patch_path_noise(path_text: &str) -> String {
+    let bytes = path_text.as_bytes();
+    let mut stripped_stars = 0;
+    while stripped_stars < bytes.len() && stripped_stars < 3 && bytes[stripped_stars] == b'*' {
+        stripped_stars += 1;
+    }
+
+    let stripped = path_text[stripped_stars..].trim_start();
+    let stripped_lower = stripped.to_ascii_lowercase();
+    for keyword in ["update", "delete", "add", "move"] {
+        if !stripped_lower.starts_with(keyword) {
+            continue;
+        }
+        let after_keyword = &stripped[keyword.len()..];
+        let after_separator =
+            after_keyword.trim_start_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != ':');
+        let after_separator_lower = after_separator.to_ascii_lowercase();
+        let after_optional_word = if after_separator_lower.starts_with("file") {
+            after_separator["file".len()..]
+                .trim_start_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != ':')
+        } else if after_separator_lower.starts_with("to") {
+            after_separator["to".len()..]
+                .trim_start_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != ':')
+        } else {
+            after_separator
+        };
+        if let Some(path) = after_optional_word.strip_prefix(':') {
+            return path.trim_start().to_string();
+        }
+    }
+
+    stripped.to_string()
 }
 
 fn merge_section_hash(
@@ -402,6 +437,7 @@ fn validate_patch_headers(
                 "invalid Hashline file header {line}; expected [{path}#HASH]"
             )));
         };
+        let header_path = strip_apply_patch_path_noise(header_path);
         if header_path != path {
             return Err(FunctionCallError::RespondToModel(format!(
                 "Hashline file header path {header_path} does not match target path {path}; this single-file patch application only accepts headers for {path}"
