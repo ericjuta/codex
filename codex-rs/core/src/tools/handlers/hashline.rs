@@ -359,7 +359,7 @@ fn find_block_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "anchor".to_string(),
                     JsonSchema::string(Some(
-                        "Line anchor as line or line:hash.".to_string(),
+                        "Line anchor as line, line:hash, block N:, or a unique short line hash.".to_string(),
                     )),
                 ),
                 (
@@ -717,21 +717,7 @@ async fn handle_find_block(
     )
     .await?;
     let lines = split_lines_preserve(&contents);
-    let anchor_line = parse_anchor_line(&args.anchor)?;
-    if anchor_line == 0 || anchor_line > lines.len().max(1) {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "anchor line {anchor_line} is outside file range 1..={}",
-            lines.len()
-        )));
-    }
-    if let Some(expected_hash) = parse_anchor_hash(&args.anchor) {
-        let actual_hash = line_hash(lines.get(anchor_line - 1).copied().unwrap_or(""));
-        if expected_hash != actual_hash {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "anchor hash mismatch at line {anchor_line}: expected {expected_hash}, found {actual_hash}"
-            )));
-        }
-    }
+    let anchor_line = resolve_find_block_anchor(&args.anchor, &lines)?;
 
     let max_lines = args
         .max_lines
@@ -753,6 +739,72 @@ async fn handle_find_block(
             .unwrap_or_else(|err| format!("failed to serialize hashline.find_block output: {err}")),
         Some(true),
     )))
+}
+
+fn resolve_find_block_anchor(anchor: &str, lines: &[&str]) -> Result<usize, FunctionCallError> {
+    let trimmed = anchor.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if let Some(line_text) = lower
+        .strip_prefix("block ")
+        .and_then(|rest| rest.strip_suffix(':'))
+    {
+        let anchor_line = parse_anchor_line(line_text)?;
+        validate_find_block_line(anchor_line, lines)?;
+        return Ok(anchor_line);
+    }
+
+    if trimmed.parse::<usize>().is_err() && is_short_hash(trimmed) {
+        return resolve_unique_line_hash(trimmed, lines);
+    }
+
+    let anchor_line = parse_anchor_line(trimmed)?;
+    validate_find_block_line(anchor_line, lines)?;
+    if let Some(expected_hash) = parse_anchor_hash(trimmed) {
+        let actual_hash = line_hash(lines.get(anchor_line - 1).copied().unwrap_or(""));
+        if expected_hash.to_ascii_lowercase() != actual_hash {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "anchor hash mismatch at line {anchor_line}: expected {expected_hash}, found {actual_hash}"
+            )));
+        }
+    }
+    Ok(anchor_line)
+}
+
+fn validate_find_block_line(anchor_line: usize, lines: &[&str]) -> Result<(), FunctionCallError> {
+    if anchor_line == 0 || anchor_line > lines.len().max(1) {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "anchor line {anchor_line} is outside file range 1..={}",
+            lines.len()
+        )));
+    }
+    Ok(())
+}
+
+fn resolve_unique_line_hash(hash: &str, lines: &[&str]) -> Result<usize, FunctionCallError> {
+    let hash = hash.to_ascii_lowercase();
+    let matching_lines = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| (line_hash(line) == hash).then_some(index + 1))
+        .collect::<Vec<_>>();
+    match matching_lines.as_slice() {
+        [] => Err(FunctionCallError::RespondToModel(format!(
+            "anchor hash {hash} was not found"
+        ))),
+        [line] => Ok(*line),
+        matches => Err(FunctionCallError::RespondToModel(format!(
+            "anchor hash {hash} is ambiguous; matching lines: {}",
+            matches
+                .iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
+fn is_short_hash(value: &str) -> bool {
+    value.len() == 2 && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 async fn handle_patch(

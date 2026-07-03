@@ -18,6 +18,7 @@ use super::hashline_patch::build_hashline_patch_preview;
 use super::hashline_patch::hashline_patch_is_aborted;
 use super::hashline_patch::parse_hashline_patch_file_operation;
 use super::hashline_patch::split_hashline_patch_sections;
+use super::resolve_find_block_anchor;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -688,6 +689,34 @@ fn find_block_prefers_smallest_brace_block() {
 
     assert_eq!(find_block_span("src/main.rs", &lines, 4), (3, 5));
     assert_eq!(find_block_span("src/main.rs", &lines, 6), (1, 7));
+}
+
+#[test]
+fn find_block_anchor_accepts_block_prefix_and_unique_hash() {
+    let lines = vec!["alpha", "beta", "gamma"];
+
+    assert_eq!(
+        resolve_find_block_anchor("block 2:", &lines)
+            .expect("block-prefixed anchor should resolve"),
+        2
+    );
+    assert_eq!(
+        resolve_find_block_anchor(&line_hash("gamma"), &lines)
+            .expect("unique short hash should resolve"),
+        3
+    );
+}
+
+#[test]
+fn find_block_anchor_rejects_ambiguous_short_hash() {
+    let lines = vec!["same", "same"];
+    let error = resolve_find_block_anchor(&line_hash("same"), &lines)
+        .expect_err("ambiguous short hash should reject");
+
+    assert!(
+        error.to_string().contains("is ambiguous"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]

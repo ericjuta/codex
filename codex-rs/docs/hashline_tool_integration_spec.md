@@ -157,7 +157,7 @@ bodies.
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `path` | string | yes | Same path resolution as `read`. |
-| `anchor` | string | yes | Prefer `line:hash`; accept bare line only when no hash is available. |
+| `anchor` | string | yes | Prefer `line:hash`; also accepts `block N:`, a unique short line hash, and a bare line when no hash is available. |
 | `environment_id` | string | only when multiple environments exist | Match other file tools. |
 
 ### Output Bounds
