@@ -233,6 +233,16 @@ impl ToolOutput for FunctionToolOutput {
     fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
         self.post_tool_use_response.clone()
     }
+
+    fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
+        let Some(text) = function_call_output_content_items_to_text(&self.body) else {
+            return serde_json::to_value(&self.body).unwrap_or_else(|err| {
+                JsonValue::String(format!("failed to serialize tool output: {err}"))
+            });
+        };
+
+        serde_json::from_str(&text).unwrap_or(JsonValue::String(text))
+    }
 }
 
 pub struct ApplyPatchToolOutput {

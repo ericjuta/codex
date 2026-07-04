@@ -329,6 +329,178 @@ async fn code_mode_host_feature_runs_code_mode() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_hashline_read_returns_structured_fields() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let file_name = "code-mode-hashline-read.txt";
+    let code = format!(
+        r#"
+const read = await tools.hashline__read({{
+  path: {file_name:?},
+  start_line: 1,
+  end_line: 2,
+}});
+text(JSON.stringify({{
+  header: read.header,
+  content: read.content,
+  first_line: read.lines[0].content,
+  total_lines: read.total_lines,
+}}));
+"#
+    );
+    let test = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::CodeMode);
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+    fs::write(test.cwd.path().join(file_name), "alpha\nbeta\ngamma\n")?;
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call("call-1", "exec", &code),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let follow_up_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("read hashline output from code mode")
+        .await?;
+
+    let request = follow_up_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&request, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec hashline read call failed unexpectedly: {output}"
+    );
+    let read: Value = serde_json::from_str(
+        &custom_tool_output_last_non_empty_text(&request, "call-1")
+            .expect("exec hashline read call should emit JSON"),
+    )?;
+    assert_regex_match(
+        read["content"]
+            .as_str()
+            .expect("content should be a string"),
+        r"^1:[0-9a-f]{2}\|alpha\n2:[0-9a-f]{2}\|beta$",
+    );
+    assert_eq!(read["first_line"], Value::String("alpha".to_string()));
+    assert_eq!(read["total_lines"], Value::Number(3.into()));
+    assert_regex_match(
+        read["header"].as_str().expect("header should be a string"),
+        r"^\[code-mode-hashline-read\.txt#[0-9a-f]{4}\]$",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_hashline_multi_file_patch_returns_files_array() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let first_name = "code-mode-hashline-first.txt";
+    let second_name = "code-mode-hashline-second.txt";
+    let patch = format!("[{first_name}]\nINS.TAIL|first\n[{second_name}]\nINS.TAIL|second");
+    let code = format!(
+        r#"
+const patched = await tools.hashline__patch({{
+  path: {first_name:?},
+  patch: {patch:?},
+  create: true,
+}});
+text(JSON.stringify({{
+  operation: patched.operation,
+  top_level_content_is_missing: patched.content === undefined,
+  file_count: patched.files.length,
+  files: patched.files.map((file) => ({{
+    path: file.path,
+    operation: file.operation,
+    content: file.content,
+  }})),
+}}));
+"#
+    );
+    let (test, follow_up_mock) = run_code_mode_turn_with_config(
+        &server,
+        "patch multiple files with hashline from code mode",
+        &code,
+        |config| {
+            config.hashline.enabled = true;
+        },
+    )
+    .await?;
+
+    let request = follow_up_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&request, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec hashline patch call failed unexpectedly: {output}"
+    );
+    let patched: Value = serde_json::from_str(
+        &custom_tool_output_last_non_empty_text(&request, "call-1")
+            .expect("exec hashline patch call should emit JSON"),
+    )?;
+    assert_eq!(
+        patched["operation"],
+        Value::String("multi_file_create".to_string())
+    );
+    assert_eq!(patched["top_level_content_is_missing"], Value::Bool(true));
+    assert_eq!(patched["file_count"], Value::Number(2.into()));
+    assert_eq!(
+        patched["files"][0]["path"],
+        Value::String(first_name.to_string())
+    );
+    assert_eq!(
+        patched["files"][0]["operation"],
+        Value::String("create".to_string())
+    );
+    assert_regex_match(
+        patched["files"][0]["content"]
+            .as_str()
+            .expect("first content should be a string"),
+        r"^1:[0-9a-f]{2}\|first$",
+    );
+    assert_eq!(
+        patched["files"][1]["path"],
+        Value::String(second_name.to_string())
+    );
+    assert_eq!(
+        patched["files"][1]["operation"],
+        Value::String("create".to_string())
+    );
+    assert_regex_match(
+        patched["files"][1]["content"]
+            .as_str()
+            .expect("second content should be a string"),
+        r"^1:[0-9a-f]{2}\|second$",
+    );
+    assert_eq!(
+        fs::read_to_string(test.cwd.path().join(first_name))?,
+        "first"
+    );
+    assert_eq!(
+        fs::read_to_string(test.cwd.path().join(second_name))?,
+        "second"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_call_standalone_web_search() -> Result<()> {
     assert_code_mode_standalone_web_search(WebSearchMode::Live, serde_json::json!(true)).await
 }

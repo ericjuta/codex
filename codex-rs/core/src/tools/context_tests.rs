@@ -319,6 +319,40 @@ fn custom_tool_calls_can_derive_text_from_content_items() {
 }
 
 #[test]
+fn function_tool_code_mode_result_parses_json_text() {
+    let output = FunctionToolOutput::from_text(
+        r#"{
+  "header": "[notes.txt#abcd]",
+  "content": "1:aa|alpha"
+}"#
+        .to_string(),
+        Some(true),
+    );
+
+    assert_eq!(
+        output.code_mode_result(&ToolPayload::Function {
+            arguments: "{}".to_string(),
+        }),
+        serde_json::json!({
+            "header": "[notes.txt#abcd]",
+            "content": "1:aa|alpha",
+        })
+    );
+}
+
+#[test]
+fn function_tool_code_mode_result_keeps_plain_text() {
+    let output = FunctionToolOutput::from_text("plain output".to_string(), Some(true));
+
+    assert_eq!(
+        output.code_mode_result(&ToolPayload::Function {
+            arguments: "{}".to_string(),
+        }),
+        serde_json::json!("plain output")
+    );
+}
+
+#[test]
 fn tool_search_payloads_roundtrip_as_tool_search_outputs() {
     let payload = ToolPayload::ToolSearch {
         arguments: SearchToolCallParams {
