@@ -1,36 +1,67 @@
-# Handoff Prompt: Codex Fork Rebase (runtime/day-to-day operational set)
+# Reusable Handoff Prompt: Runtime Codex Sessions (General Session Replay)
 
-Context
-- Branch checked: `main`.
-- Repo root: `/home/ericjuta/.openclaw/workspace/repos/codex`.
-- Current objective from latest chat: pick only selected upstream runtime commits (indices 7,8,9,10,12,13,14,15,16,17,18,19,20,21,22) from `origin/main` for operational Codex sessions.
-- `origin` is `https://github.com/openai/codex`.
-- `git rev-list --left-right --count --no-merges HEAD...origin/main` reported local behind count from earlier discussion: 83 upstream vs 70 local-only.
+Use this prompt in a fresh Codex session when continuing this same workstream.
 
-Selected commits (in chronological order)
-1. `2e20d2ef44` Revert "Conditional codex_home dotenv" (#31276)
-2. `7b4e70d567` Revert "[core] Support interleaved response items" (#31261)
-3. `8917244f7d` [core] Support interleaved response items (#30876)
-4. `7094fa467e` [codex] Read retry model from buffering events (#31262)
-5. `7affe3e3e4` refactor(protocol): isolate legacy item fanout (#30956)
-6. `b9b934e99b` refactor(protocol): map canonical tool items to legacy events (#31296)
-7. `cca16a1087` feat(core): emit canonical command execution items (#31297)
-8. `f659eb12bc` feat(core): emit canonical dynamic tool call items (#31298)
-9. `1bd9d841ca` feat(core): emit canonical sub-agent activity items (#31299)
-10. `058d97c5dc` feat(core): emit canonical collab tool call items (#31300)
-11. `6b4882528e` feat(core): emit canonical collab wait items (#31301)
-12. `f1affbac5e` core: support extension-owned turn items (#31283)
-13. `ff06ab7172` [codex] Enable auth elicitation by default (#28772)
-14. `1fd0858e86` [login] support hosted success redirects (#28745)
-15. `a3f8b0b332` refactor: make ExternalAuth return CodexAuth (#31355)
+## 1) Objective
+Continue rebasing this fork on origin/main with a narrow focus on operational, day-to-day runtime improvements for Codex sessions, auth flow reliability, and tool/event stream behavior.
 
-Why this set
-- Focus: auth and auth-mediated runtime flow, execution/transcript event canonicalization, buffered response behavior, protocol event fanout shape, and extension-owned turn semantics.
+## 2) Known local context
+- Working directory: /home/ericjuta/.openclaw/workspace/repos/codex
+- Branch in use: main (fork branch)
+- Upstream remote target: origin (https://github.com/openai/codex)
+- Current task is to select and apply only high-impact runtime commits from upstream.
 
-Suggested next step
-- Cherry-pick these from oldest to newest (or rebase onto `origin/main`, then keep these as baseline):
-  `git fetch origin`
-  `git checkout main`
-  `git rebase origin/main`
-- If you only want these 15 commits explicitly:
-  `git cherry-pick 2e20d2ef44 7b4e70d567 8917244f7d 7094fa467e 7affe3e3e4 b9b934e99b cca16a1087 f659eb12bc 1bd9d841ca 058d97c5dc 6b4882528e f1affbac5e ff06ab7172 1fd0858e86 a3f8b0b332`
+## 3) Selection intent
+Prioritize commits that directly affect:
+- Session lifecycle and model/request/response orchestration
+- Tool-call event visibility and canonical event shapes
+- Interleaved response handling and runtime switching behavior
+- Auth/session handoff behavior that changes hosted or local auth flows
+
+Avoid:
+- Pure refactors with no runtime behavior impact
+- CI-only or infra-only maintenance commits
+- Documentation-only changes, unless they directly change runtime behavior expectations
+
+## 4) Commit set handling
+Use the user-selected upstream IDs exactly, evaluate in ascending order:
+1. 2e20d2ef44
+2. 7b4e70d567
+3. 8917244f7d
+4. 7094fa467e
+5. 7affe3e3e4
+6. b9b934e99b
+7. cca16a1087
+8. f659eb12bc
+9. 1bd9d841ca
+10. 058d97c5dc
+11. 6b4882528e
+12. f1affbac5e
+13. ff06ab7172
+14. 1fd0858e86
+15. a3f8b0b332
+
+For each ID:
+- apply only if it changes behavior as above
+- if empty or duplicate in current history, mark as already-covered
+- if conflict, document exactly why and resolution
+
+## 5) Commands (required order)
+1. git fetch origin
+2. git rev-list --left-right --count --no-merges HEAD...origin/main
+3. git rebase origin/main
+   - if full rebase is unsafe, use git cherry-pick <ids in order>
+4. git status --short --branch
+5. Re-run step 2 until upstream runtime deltas are expectedly reconciled
+
+## 6) Required output for next handoff
+- Which selected commits landed cleanly
+- Which were already covered as duplicates or empty
+- Any conflicts encountered and exact resolution approach
+- Whether branch now contains the requested runtime subset
+- Explicit note on any non-runtime deltas introduced by mistake
+
+## 7) Operational verification standards
+- Distinguish live proof from prior context
+- Avoid speculating on status without command-backed evidence
+- Keep branch changes minimal; do not alter unrelated code

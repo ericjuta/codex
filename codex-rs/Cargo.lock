@@ -3036,7 +3036,7 @@ dependencies = [
 
 [[package]]
 name = "codex-extension-items"
-version = "0.0.0"
+version = "0.1337.0"
 dependencies = [
  "codex-utils-absolute-path",
  "pretty_assertions",
