@@ -108,11 +108,19 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
     let file_name = "hashline-notes.txt";
     let file_path = test.cwd.path().join(file_name);
     fs::write(&file_path, "alpha\r\nbeta\r\ngamma\r\n")?;
+    let bounded_file_name = "hashline-long-line.txt";
+    fs::write(
+        test.cwd.path().join(bounded_file_name),
+        "\u{1f642}".repeat(100_000),
+    )?;
 
     let read_args = json!({
         "path": file_name,
         "start_line": 1,
-        "end_line": 3
+        "end_line": 2
+    });
+    let bounded_read_args = json!({
+        "path": bounded_file_name,
     });
     let patch_args = json!({
         "path": file_name,
@@ -127,6 +135,12 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
                 "hashline",
                 "read",
                 &serde_json::to_string(&read_args)?,
+            ),
+            ev_function_call_with_namespace(
+                "hashline-bounded-read-call",
+                "hashline",
+                "read",
+                &serde_json::to_string(&bounded_read_args)?,
             ),
             ev_function_call_with_namespace(
                 "hashline-patch-call",
@@ -166,6 +180,20 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
     assert!(read_output.contains("[hashline-notes.txt#"));
     assert!(read_output.contains("2:"));
     assert!(read_output.contains("|beta"));
+    let read_output: Value = serde_json::from_str(&read_output)?;
+    assert_eq!(read_output["truncated"], json!(false));
+    assert_eq!(read_output["next_start_line"], Value::Null);
+
+    let bounded_read_output = request
+        .function_call_output_text("hashline-bounded-read-call")
+        .expect("bounded read output should be sent to model");
+    assert!(bounded_read_output.len() <= 25 * 1024);
+    let bounded_read_output: Value = serde_json::from_str(&bounded_read_output)?;
+    assert_eq!(bounded_read_output["truncated"], json!(true));
+    assert_eq!(
+        bounded_read_output["lines"][0]["content_truncated"],
+        json!(true)
+    );
 
     let patch_output = request
         .function_call_output_text("hashline-patch-call")
@@ -839,6 +867,8 @@ async fn hashline_multi_file_dry_run_reports_success_per_file_without_writing() 
     let patch_output_json: Value = serde_json::from_str(&patch_output)?;
     assert_eq!(patch_output_json["success"], json!(true));
     assert_eq!(patch_output_json["dry_run"], json!(true));
+    assert_eq!(patch_output_json["total_files"], json!(3));
+    assert_eq!(patch_output_json["files_truncated"], json!(false));
     assert_eq!(
         patch_output_json["operation"],
         json!("multi_file_operation")

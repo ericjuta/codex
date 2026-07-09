@@ -30,10 +30,10 @@ mod hashline_patch;
 
 use self::hashline_block::find_block_span;
 use self::hashline_block::language_for_path;
-use self::hashline_format::count_lines;
-use self::hashline_format::format_hashline_excerpt;
+use self::hashline_format::build_hashline_excerpt;
 use self::hashline_format::split_lines_preserve;
 use self::hashline_hash::hash_hex;
+use self::hashline_hash::hash_normalized_hex;
 use self::hashline_hash::line_hash;
 use self::hashline_hash::normalize_file_text;
 use self::hashline_patch::HashlinePatchFileMutation;
@@ -58,6 +58,10 @@ use self::hashline_patch::validate_file_hash;
 use serde_json::Value;
 
 const PATCH_OUTPUT_MAX_LINES: usize = 40;
+const READ_EXCERPT_MAX_SERIALIZED_BYTES: usize = 24 * 1024;
+const FIND_BLOCK_EXCERPT_MAX_SERIALIZED_BYTES: usize = 24 * 1024;
+const PATCH_EXCERPT_MAX_SERIALIZED_BYTES: usize = 4 * 1024;
+const MULTI_FILE_DETAILS_MAX_SERIALIZED_BYTES: usize = 24 * 1024;
 
 const NAMESPACE: &str = "hashline";
 const READ_TOOL: &str = "read";
@@ -265,7 +269,7 @@ fn read_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "max_lines".to_string(),
                     JsonSchema::integer(Some(format!(
-                        "Maximum lines to return. Defaults to {DEFAULT_READ_MAX_LINES}; hard cap {HARD_READ_MAX_LINES}."
+                        "Maximum lines to return. Defaults to {DEFAULT_READ_MAX_LINES}; hard cap {HARD_READ_MAX_LINES}. Output may stop earlier at the serialized byte budget."
                     ))),
                 ),
             ]),
@@ -291,7 +295,8 @@ fn read_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                         "properties": {
                             "n": { "type": "integer" },
                             "hash": { "type": "string" },
-                            "content": { "type": "string" }
+                            "content": { "type": "string" },
+                            "content_truncated": { "type": "boolean" }
                         },
                         "required": ["n", "hash", "content"],
                         "additionalProperties": false
@@ -360,7 +365,7 @@ fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "dry_run".to_string(),
                     JsonSchema::boolean(Some(
-                        "Validate the patch and report the resulting file hash without writing."
+                        "Validate the patch and report the resulting file hash without writing. Changed-line previews and multi-file details are byte-bounded."
                             .to_string(),
                     )),
                 ),
@@ -397,7 +402,7 @@ fn find_block_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "max_lines".to_string(),
                     JsonSchema::integer(Some(format!(
-                        "Maximum excerpt lines to return. Defaults to {DEFAULT_FIND_BLOCK_MAX_LINES}; hard cap {HARD_FIND_BLOCK_MAX_LINES}."
+                        "Maximum excerpt lines to return. Defaults to {DEFAULT_FIND_BLOCK_MAX_LINES}; hard cap {HARD_FIND_BLOCK_MAX_LINES}. Output may stop earlier at the serialized byte budget."
                     ))),
                 ),
             ]),
@@ -531,7 +536,7 @@ async fn handle_read(
         args.start_line.unwrap_or(1),
         args.end_line,
         args.max_lines.unwrap_or(DEFAULT_READ_MAX_LINES),
-    );
+    )?;
     Ok(boxed_tool_output(FunctionToolOutput::from_text(
         serde_json::to_string_pretty(&body)
             .unwrap_or_else(|err| format!("failed to serialize hashline.read output: {err}")),
@@ -545,34 +550,60 @@ fn build_hashline_read_body(
     start_line: usize,
     requested_end_line: Option<usize>,
     max_lines: usize,
-) -> Value {
-    let total_lines = count_lines(contents);
-    let path_hash = hash_hex(contents, 4);
+) -> Result<Value, FunctionCallError> {
+    if start_line == 0 {
+        return Err(FunctionCallError::RespondToModel(
+            "hashline.read start_line must be at least 1".to_string(),
+        ));
+    }
+    if max_lines == 0 {
+        return Err(FunctionCallError::RespondToModel(
+            "hashline.read max_lines must be at least 1".to_string(),
+        ));
+    }
+    if requested_end_line.is_some_and(|end_line| end_line < start_line) {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "hashline.read end_line must be greater than or equal to start_line {start_line}"
+        )));
+    }
+
+    let normalized = normalize_file_text(contents);
+    let all_lines = split_lines_preserve(&normalized);
+    let total_lines = all_lines.len();
+    if start_line > total_lines.max(1) {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "hashline.read start_line {start_line} is outside file range 1..={total_lines}"
+        )));
+    }
+    let path_hash = hash_normalized_hex(&normalized, 4);
     let (start_line, end_line, truncated, next_start_line, content, lines) = if total_lines == 0 {
         (None, None, false, None, String::new(), Vec::new())
     } else {
         let max_lines = max_lines.clamp(1, HARD_READ_MAX_LINES);
-        let start_line = start_line.max(1);
-        let requested_end_line = requested_end_line
-            .unwrap_or_else(|| total_lines.max(start_line))
-            .max(start_line);
-        let end_line = requested_end_line
+        let requested_end_line = requested_end_line.unwrap_or(total_lines).min(total_lines);
+        let capped_end_line = requested_end_line
             .min(start_line.saturating_add(max_lines).saturating_sub(1))
-            .min(total_lines.max(1));
-        let truncated = requested_end_line > end_line || end_line < total_lines;
-        let next_start_line = truncated.then_some(end_line.saturating_add(1));
-        let content = format_hashline_excerpt(contents, start_line, end_line);
-        let lines = build_hashline_line_rows(contents, start_line, end_line);
+            .min(total_lines);
+        let excerpt = build_hashline_excerpt(
+            &all_lines,
+            start_line,
+            capped_end_line,
+            READ_EXCERPT_MAX_SERIALIZED_BYTES,
+        );
+        let end_line = excerpt.end_line.unwrap_or(start_line);
+        let truncated = capped_end_line < requested_end_line || excerpt.truncated;
+        let next_start_line =
+            (truncated && end_line < total_lines).then_some(end_line.saturating_add(1));
         (
             Some(start_line),
             Some(end_line),
             truncated,
             next_start_line,
-            content,
-            lines,
+            excerpt.content,
+            excerpt.lines,
         )
     };
-    json!({
+    Ok(json!({
         "path": path,
         "hash": path_hash,
         "header": format!("[{path}#{path_hash}]"),
@@ -583,27 +614,7 @@ fn build_hashline_read_body(
         "next_start_line": next_start_line,
         "content": content,
         "lines": lines,
-    })
-}
-
-fn build_hashline_line_rows(contents: &str, start_line: usize, end_line: usize) -> Vec<Value> {
-    if start_line > end_line {
-        return Vec::new();
-    }
-    let normalized = normalize_file_text(contents);
-    split_lines_preserve(&normalized)
-        .into_iter()
-        .enumerate()
-        .skip(start_line.saturating_sub(1))
-        .take(end_line.saturating_sub(start_line).saturating_add(1))
-        .map(|(index, line)| {
-            json!({
-                "n": index + 1,
-                "hash": line_hash(line),
-                "content": line,
-            })
-        })
-        .collect()
+    }))
 }
 
 async fn handle_write(
@@ -647,7 +658,7 @@ async fn handle_write(
         )
         .await?
     };
-    let write_contents = normalize_file_text(&args.content);
+    let write_contents = normalize_file_text(&args.content).into_owned();
     let operation = if create { "create" } else { "update" };
     let new_hash = hash_hex(&write_contents, 4);
     if args.dry_run.unwrap_or(false) {
@@ -725,7 +736,7 @@ fn build_hashline_write_output(
         /*start_line*/ 1,
         None,
         DEFAULT_READ_MAX_LINES,
-    );
+    )?;
     let new_hash = hash_hex(written_contents, 4);
     let Some(body_object) = body.as_object_mut() else {
         return Err(FunctionCallError::RespondToModel(
@@ -781,19 +792,12 @@ async fn handle_find_block(
         .clamp(1, HARD_FIND_BLOCK_MAX_LINES);
     let (block_start, block_end) = find_block_span(&args.path, &lines, anchor_line);
     let capped_end = block_end.min(block_start.saturating_add(max_lines).saturating_sub(1));
-    let block_lines = lines
-        .iter()
-        .enumerate()
-        .skip(block_start.saturating_sub(1))
-        .take(capped_end.saturating_sub(block_start).saturating_add(1))
-        .map(|(index, line)| {
-            json!({
-                "n": index + 1,
-                "hash": line_hash(line),
-                "content": line,
-            })
-        })
-        .collect::<Vec<_>>();
+    let excerpt = build_hashline_excerpt(
+        &lines,
+        block_start,
+        capped_end,
+        FIND_BLOCK_EXCERPT_MAX_SERIALIZED_BYTES,
+    );
     let body = json!({
         "file": &args.path,
         "path": &args.path,
@@ -802,9 +806,9 @@ async fn handle_find_block(
         "language": language_for_path(&args.path),
         "start_line": block_start,
         "end_line": block_end,
-        "truncated": capped_end < block_end,
-        "content": format_hashline_excerpt(&normalized_contents, block_start, capped_end),
-        "block_lines": block_lines,
+        "truncated": capped_end < block_end || excerpt.truncated,
+        "content": excerpt.content,
+        "block_lines": excerpt.lines,
     });
     Ok(boxed_tool_output(FunctionToolOutput::from_text(
         serde_json::to_string_pretty(&body)
@@ -1430,9 +1434,11 @@ async fn handle_multi_file_patch(
     };
 
     if args.dry_run.unwrap_or(false) {
-        let files = prepared_files
-            .iter()
-            .map(|file| match file {
+        let total_files = prepared_files.len();
+        let mut files = Vec::new();
+        let mut serialized_bytes = 0;
+        for file in &prepared_files {
+            let detail = match file {
                 PreparedHashlinePatchFile::Update {
                     path,
                     old_contents,
@@ -1452,14 +1458,14 @@ async fn handle_multi_file_patch(
                         "preview": preview,
                     });
                     add_hashline_warnings(&mut body, warnings);
-                    Ok(body)
+                    body
                 }
-                PreparedHashlinePatchFile::Remove { path, old_hash, .. } => Ok(json!({
+                PreparedHashlinePatchFile::Remove { path, old_hash, .. } => json!({
                     "success": true,
                     "path": path,
                     "operation": "remove_file",
                     "old_hash": old_hash,
-                })),
+                }),
                 PreparedHashlinePatchFile::Rename {
                     path,
                     new_path,
@@ -1491,14 +1497,19 @@ async fn handle_multi_file_patch(
                         "preview": preview,
                     });
                     add_hashline_warnings(&mut body, warnings);
-                    Ok(body)
+                    body
                 }
-            })
-            .collect::<Result<Vec<_>, FunctionCallError>>()?;
+            };
+            if !push_bounded_file_detail(&mut files, &mut serialized_bytes, detail) {
+                break;
+            }
+        }
         let body = json!({
             "success": true,
             "dry_run": true,
             "operation": operation,
+            "total_files": total_files,
+            "files_truncated": files.len() < total_files,
             "files": files,
         });
         return Ok(boxed_tool_output(FunctionToolOutput::from_text(
@@ -1554,9 +1565,12 @@ async fn handle_multi_file_patch(
         .handle(apply_patch_invocation)
         .await?;
 
+    let total_files = prepared_files.len();
     let mut files = Vec::new();
+    let mut serialized_bytes = 0;
+    let mut details_full = false;
     for file in &prepared_files {
-        match file {
+        let detail = match file {
             PreparedHashlinePatchFile::Update {
                 path,
                 old_contents,
@@ -1575,14 +1589,18 @@ async fn handle_multi_file_patch(
                     "hashline.patch",
                 )
                 .await?;
-                let mut body = build_hashline_patch_success_body(
-                    path,
-                    old_contents,
-                    &written_contents,
-                    *create,
-                )?;
-                add_hashline_warnings(&mut body, warnings);
-                files.push(body);
+                if details_full {
+                    None
+                } else {
+                    let mut body = build_hashline_patch_success_body(
+                        path,
+                        old_contents,
+                        &written_contents,
+                        *create,
+                    )?;
+                    add_hashline_warnings(&mut body, warnings);
+                    Some(body)
+                }
             }
             PreparedHashlinePatchFile::Remove { path, old_hash, .. } => {
                 ensure_selected_file_missing(
@@ -1592,12 +1610,14 @@ async fn handle_multi_file_patch(
                     args.environment_id.as_deref(),
                 )
                 .await?;
-                files.push(json!({
-                    "success": true,
-                    "path": path,
-                    "operation": "remove_file",
-                    "old_hash": old_hash,
-                }));
+                (!details_full).then(|| {
+                    json!({
+                        "success": true,
+                        "path": path,
+                        "operation": "remove_file",
+                        "old_hash": old_hash,
+                    })
+                })
             }
             PreparedHashlinePatchFile::Rename {
                 path,
@@ -1628,35 +1648,46 @@ async fn handle_multi_file_patch(
                         "hashline.patch rename completed but destination hash for {new_path} was {written_hash}, expected {new_hash}"
                     )));
                 }
-                let mut body = if old_hash == new_hash {
-                    json!({
-                        "success": true,
-                        "path": path,
-                        "new_path": new_path,
-                        "src": path,
-                        "dst": new_path,
-                        "operation": "rename_file",
-                        "old_hash": old_hash,
-                        "new_hash": new_hash,
-                        "header": format!("[{new_path}#{new_hash}]"),
-                    })
+                if details_full {
+                    None
                 } else {
-                    build_hashline_rename_update_success_body(
-                        path,
-                        new_path,
-                        old_contents,
-                        &renamed_contents,
-                    )?
-                };
-                add_hashline_warnings(&mut body, warnings);
-                files.push(body);
+                    let mut body = if old_hash == new_hash {
+                        json!({
+                            "success": true,
+                            "path": path,
+                            "new_path": new_path,
+                            "src": path,
+                            "dst": new_path,
+                            "operation": "rename_file",
+                            "old_hash": old_hash,
+                            "new_hash": new_hash,
+                            "header": format!("[{new_path}#{new_hash}]"),
+                        })
+                    } else {
+                        build_hashline_rename_update_success_body(
+                            path,
+                            new_path,
+                            old_contents,
+                            &renamed_contents,
+                        )?
+                    };
+                    add_hashline_warnings(&mut body, warnings);
+                    Some(body)
+                }
             }
+        };
+        if let Some(detail) = detail
+            && !push_bounded_file_detail(&mut files, &mut serialized_bytes, detail)
+        {
+            details_full = true;
         }
     }
 
     let body = json!({
         "success": true,
         "operation": operation,
+        "total_files": total_files,
+        "files_truncated": files.len() < total_files,
         "files": files,
     });
     Ok(boxed_tool_output(FunctionToolOutput::from_text(
@@ -1674,9 +1705,11 @@ fn build_hashline_patch_success_body(
     create: bool,
 ) -> Result<serde_json::Value, FunctionCallError> {
     let preview = build_hashline_patch_preview_or_none(old_contents, written_contents, create)?;
-    let total_lines = count_lines(written_contents);
-    let (start_line, end_line, excerpt_truncated) = if total_lines == 0 {
-        (None, None, false)
+    let normalized = normalize_file_text(written_contents);
+    let all_lines = split_lines_preserve(&normalized);
+    let total_lines = all_lines.len();
+    let (start_line, end_line, excerpt_truncated, content, lines) = if total_lines == 0 {
+        (None, None, false, String::new(), Vec::new())
     } else {
         let start_line = preview
             .as_ref()
@@ -1694,25 +1727,22 @@ fn build_hashline_patch_success_body(
                 .saturating_add(PATCH_OUTPUT_MAX_LINES)
                 .saturating_sub(1),
         );
+        let excerpt = build_hashline_excerpt(
+            &all_lines,
+            start_line,
+            capped_end_line,
+            PATCH_EXCERPT_MAX_SERIALIZED_BYTES,
+        );
+        let end_line = excerpt.end_line.unwrap_or(start_line);
         (
             Some(start_line),
-            Some(capped_end_line),
-            capped_end_line < requested_end_line,
+            Some(end_line),
+            capped_end_line < requested_end_line || excerpt.truncated,
+            excerpt.content,
+            excerpt.lines,
         )
     };
-    let content = start_line
-        .zip(end_line)
-        .map(|(start_line, end_line)| {
-            format_hashline_excerpt(written_contents, start_line, end_line)
-        })
-        .unwrap_or_default();
-    let lines = start_line
-        .zip(end_line)
-        .map(|(start_line, end_line)| {
-            build_hashline_line_rows(written_contents, start_line, end_line)
-        })
-        .unwrap_or_default();
-    let new_hash = hash_hex(written_contents, 4);
+    let new_hash = hash_normalized_hex(&normalized, 4);
 
     Ok(json!({
         "success": true,
@@ -1760,6 +1790,27 @@ fn add_hashline_warnings(body: &mut Value, warnings: &[String]) {
     if let Some(body_object) = body.as_object_mut() {
         body_object.insert("warnings".to_string(), json!(warnings));
     }
+}
+
+fn push_bounded_file_detail(
+    files: &mut Vec<Value>,
+    serialized_bytes: &mut usize,
+    detail: Value,
+) -> bool {
+    let detail_bytes = serde_json::to_string_pretty(&detail).map_or(usize::MAX, |value| {
+        value
+            .len()
+            .saturating_add(value.lines().count().saturating_mul(4))
+    });
+    let next_bytes = serialized_bytes
+        .saturating_add(detail_bytes)
+        .saturating_add(1);
+    if next_bytes > MULTI_FILE_DETAILS_MAX_SERIALIZED_BYTES {
+        return false;
+    }
+    *serialized_bytes = next_bytes;
+    files.push(detail);
+    true
 }
 
 fn apply_hashline_patch_or_create_empty(

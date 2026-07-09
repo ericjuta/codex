@@ -3,9 +3,9 @@ use super::build_hashline_patch_success_body;
 use super::build_hashline_read_body;
 use super::hashline_block::find_block_span;
 use super::hashline_block::language_for_path;
-use super::hashline_format::format_hashline_excerpt;
 use super::hashline_hash::hash_hex;
 use super::hashline_hash::line_hash;
+use super::hashline_hash::normalize_file_text;
 use super::hashline_patch::HashlinePatchFileMutation;
 use super::hashline_patch::HashlinePatchFileOperation;
 use super::hashline_patch::HashlinePatchFileUpdate;
@@ -187,6 +187,12 @@ fn file_hash_matches_reference_normalization_behavior() {
 }
 
 #[test]
+fn normalized_lf_text_is_borrowed() {
+    let normalized = normalize_file_text("alpha\nbeta\n");
+    assert!(matches!(normalized, std::borrow::Cow::Borrowed(_)));
+}
+
+#[test]
 fn read_body_without_end_line_only_truncates_when_capped() {
     let contents = "alpha\nbeta\n";
     let body = build_hashline_read_body(
@@ -195,7 +201,8 @@ fn read_body_without_end_line_only_truncates_when_capped() {
         /*start_line*/ 1,
         /*requested_end_line*/ None,
         /*max_lines*/ 200,
-    );
+    )
+    .expect("read body should be built");
 
     assert_eq!(
         body,
@@ -234,7 +241,8 @@ fn read_body_normalizes_model_visible_rows() {
         /*start_line*/ 1,
         /*requested_end_line*/ None,
         /*max_lines*/ 200,
-    );
+    )
+    .expect("read body should be built");
 
     assert_eq!(
         body,
@@ -262,14 +270,6 @@ fn read_body_normalizes_model_visible_rows() {
             ],
         })
     );
-    assert_eq!(
-        format_hashline_excerpt(contents, 1, 2),
-        format!(
-            "1:{}|alpha\n2:{}|beta",
-            line_hash("alpha"),
-            line_hash("beta")
-        )
-    );
 }
 
 #[test]
@@ -280,7 +280,8 @@ fn read_body_reports_empty_file_without_line_range() {
         /*start_line*/ 1,
         /*requested_end_line*/ None,
         /*max_lines*/ 200,
-    );
+    )
+    .expect("empty read body should be built");
 
     let empty_hash = hash_hex("", 4);
     assert_eq!(
@@ -298,6 +299,119 @@ fn read_body_reports_empty_file_without_line_range() {
             "lines": [],
         })
     );
+}
+
+#[test]
+fn read_body_only_reports_truncation_when_the_requested_range_is_capped() {
+    let contents = "alpha\nbeta\ngamma\n";
+    let body = build_hashline_read_body(
+        "notes.txt",
+        contents,
+        /*start_line*/ 2,
+        /*requested_end_line*/ Some(2),
+        /*max_lines*/ 200,
+    )
+    .expect("explicit read range should be built");
+
+    assert_eq!(
+        body,
+        json!({
+            "path": "notes.txt",
+            "hash": hash_hex(contents, 4),
+            "header": format!("[notes.txt#{}]", hash_hex(contents, 4)),
+            "start_line": 2,
+            "end_line": 2,
+            "total_lines": 3,
+            "truncated": false,
+            "next_start_line": null,
+            "content": format!("2:{}|beta", line_hash("beta")),
+            "lines": [{
+                "n": 2,
+                "hash": line_hash("beta"),
+                "content": "beta",
+            }],
+        })
+    );
+}
+
+#[test]
+fn read_body_rejects_invalid_ranges() {
+    let contents = "alpha\nbeta\ngamma\n";
+    let errors = [
+        build_hashline_read_body(
+            "notes.txt",
+            contents,
+            /*start_line*/ 2,
+            /*requested_end_line*/ Some(1),
+            /*max_lines*/ 200,
+        ),
+        build_hashline_read_body(
+            "notes.txt",
+            contents,
+            /*start_line*/ 4,
+            /*requested_end_line*/ None,
+            /*max_lines*/ 200,
+        ),
+        build_hashline_read_body(
+            "notes.txt",
+            contents,
+            /*start_line*/ 1,
+            /*requested_end_line*/ None,
+            /*max_lines*/ 0,
+        ),
+    ]
+    .map(|result| {
+        result
+            .expect_err("invalid read range should fail")
+            .to_string()
+    });
+
+    assert_eq!(
+        errors,
+        [
+            "hashline.read end_line must be greater than or equal to start_line 2",
+            "hashline.read start_line 4 is outside file range 1..=3",
+            "hashline.read max_lines must be at least 1",
+        ]
+    );
+}
+
+#[test]
+fn read_body_bounds_serialized_output_by_bytes() {
+    let long_line = "x".repeat(100_000);
+    let long_line_body = build_hashline_read_body(
+        "long.txt", &long_line, /*start_line*/ 1, /*requested_end_line*/ None,
+        /*max_lines*/ 200,
+    )
+    .expect("long-line read body should be built");
+    let serialized =
+        serde_json::to_string_pretty(&long_line_body).expect("serialize long-line body");
+    assert!(
+        serialized.len() <= super::READ_EXCERPT_MAX_SERIALIZED_BYTES + 512,
+        "bounded read output was {} bytes",
+        serialized.len()
+    );
+    assert_eq!(long_line_body["truncated"], json!(true));
+    assert_eq!(long_line_body["lines"][0]["content_truncated"], json!(true));
+
+    let many_lines = "line\n".repeat(1_000);
+    let many_lines_body = build_hashline_read_body(
+        "many.txt",
+        &many_lines,
+        /*start_line*/ 1,
+        /*requested_end_line*/ None,
+        /*max_lines*/ 1_000,
+    )
+    .expect("many-line read body should be built");
+    let serialized =
+        serde_json::to_string_pretty(&many_lines_body).expect("serialize many-line body");
+    assert!(
+        serialized.len() <= super::READ_EXCERPT_MAX_SERIALIZED_BYTES + 512,
+        "bounded read output was {} bytes",
+        serialized.len()
+    );
+    assert_eq!(many_lines_body["truncated"], json!(true));
+    assert!(many_lines_body["next_start_line"].as_u64().is_some());
 }
 
 #[test]
@@ -1013,6 +1127,20 @@ fn dry_run_preview_normalizes_crlf_rows() {
             line_hash("bravo")
         )
     );
+}
+
+#[test]
+fn dry_run_preview_bounds_long_lines() {
+    let original = format!("{}\n", "a".repeat(100_000));
+    let updated = format!("{}\n", "b".repeat(100_000));
+
+    let preview =
+        build_hashline_patch_preview(&original, &updated).expect("preview should be generated");
+    let serialized = serde_json::to_string(&preview.content).expect("serialize preview content");
+
+    assert!(preview.truncated);
+    assert!(serialized.len() <= 4 * 1024 + 2);
+    assert!(preview.content.contains("[content truncated]"));
 }
 
 #[test]

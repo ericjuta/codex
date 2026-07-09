@@ -1,7 +1,9 @@
 use crate::function_tool::FunctionCallError;
+use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Serialize;
 
 use super::hashline_block::find_block_span;
+use super::hashline_format::json_escaped_content_len_bounded;
 use super::hashline_format::split_lines_preserve;
 use super::hashline_hash::hash_hex;
 use super::hashline_hash::line_hash;
@@ -9,6 +11,8 @@ use super::hashline_hash::normalize_file_text;
 
 const APPLY_PATCH_CONTEXT_LINES: usize = 3;
 const PATCH_PREVIEW_MAX_LINES: usize = 40;
+const PATCH_PREVIEW_MAX_SERIALIZED_BYTES: usize = 4 * 1024;
+const PREVIEW_TRUNCATION_MARKER: &str = "... [content truncated]";
 const BARE_LINE_ANCHOR_WARNING: &str = "hashline.patch used bare line anchors; prefer line:hash anchors from hashline.read when editing existing files";
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -1012,23 +1016,17 @@ fn apply_operations(
             HashlineOperation::InsertBefore { anchor, inserted } => {
                 validate_anchor(&original_lines, &deleted, anchor)?;
                 let index = adjusted_index(anchor.line, &shifts)?;
-                for (offset, line) in inserted.iter().enumerate() {
-                    lines.insert(index + offset, line.clone());
-                }
+                lines.splice(index..index, inserted.iter().cloned());
                 apply_delta_from(&mut shifts, anchor.line, inserted.len() as isize);
             }
             HashlineOperation::InsertAfter { anchor, inserted } => {
                 validate_anchor(&original_lines, &deleted, anchor)?;
                 let index = adjusted_index(anchor.line, &shifts)?.saturating_add(1);
-                for (offset, line) in inserted.iter().enumerate() {
-                    lines.insert(index + offset, line.clone());
-                }
+                lines.splice(index..index, inserted.iter().cloned());
                 apply_delta_after(&mut shifts, anchor.line, inserted.len() as isize);
             }
             HashlineOperation::InsertHead { inserted } => {
-                for (offset, line) in inserted.iter().enumerate() {
-                    lines.insert(offset, line.clone());
-                }
+                lines.splice(0..0, inserted.iter().cloned());
                 apply_delta_from(&mut shifts, 1, inserted.len() as isize);
             }
             HashlineOperation::InsertTail { inserted } => {
@@ -1081,9 +1079,8 @@ fn apply_operations(
                 validate_not_deleted(&deleted, original_span.0, original_span.1)?;
                 let current_line = adjusted_index(anchor.line, &shifts)?.saturating_add(1);
                 let current_span = block_span(path, lines, current_line)?;
-                for (offset, line) in inserted.iter().enumerate() {
-                    lines.insert(current_span.0 - 1 + offset, line.clone());
-                }
+                let index = current_span.0 - 1;
+                lines.splice(index..index, inserted.iter().cloned());
                 apply_delta_from(&mut shifts, original_span.0, inserted.len() as isize);
             }
             HashlineOperation::InsertBlockAfter { anchor, inserted } => {
@@ -1092,9 +1089,8 @@ fn apply_operations(
                 validate_not_deleted(&deleted, original_span.0, original_span.1)?;
                 let current_line = adjusted_index(anchor.line, &shifts)?.saturating_add(1);
                 let current_span = block_span(path, lines, current_line)?;
-                for (offset, line) in inserted.iter().enumerate() {
-                    lines.insert(current_span.1 + offset, line.clone());
-                }
+                let index = current_span.1;
+                lines.splice(index..index, inserted.iter().cloned());
                 apply_delta_after(&mut shifts, original_span.1, inserted.len() as isize);
             }
             HashlineOperation::RemoveFile | HashlineOperation::RenameFile { .. } => {
@@ -1208,12 +1204,8 @@ fn replace_current_range(
             "Hashline operation no longer maps to the current file contents".to_string(),
         ));
     }
-    for _ in 0..removed_count {
-        lines.remove(start_index);
-    }
-    for (offset, line) in inserted.iter().enumerate() {
-        lines.insert(start_index + offset, line.clone());
-    }
+    let end_index = start_index + removed_count;
+    lines.splice(start_index..end_index, inserted.iter().cloned());
     Ok(())
 }
 
@@ -1386,26 +1378,37 @@ pub(super) fn build_hashline_patch_preview(
         ));
     }
 
+    let total_changed_lines = bounds.old_end.saturating_sub(bounds.old_start)
+        + bounds.new_end.saturating_sub(bounds.new_start);
     let mut content = Vec::new();
-    let mut seen = 0;
+    let mut serialized_bytes = 0;
+    let mut byte_truncated = false;
     for (line_number, line) in old_lines[bounds.old_start..bounds.old_end]
         .iter()
         .enumerate()
     {
-        seen += 1;
-        if content.len() < PATCH_PREVIEW_MAX_LINES {
-            let line_number = bounds.old_start + line_number + 1;
-            content.push(format!("-{line_number}:{}|{line}", line_hash(line)));
+        if content.len() == PATCH_PREVIEW_MAX_LINES {
+            break;
+        }
+        let line_number = bounds.old_start + line_number + 1;
+        if !push_preview_line(&mut content, &mut serialized_bytes, '-', line_number, line) {
+            byte_truncated = true;
+            break;
         }
     }
-    for (line_number, line) in new_lines[bounds.new_start..bounds.new_end]
-        .iter()
-        .enumerate()
-    {
-        seen += 1;
-        if content.len() < PATCH_PREVIEW_MAX_LINES {
+    if !byte_truncated && content.len() < PATCH_PREVIEW_MAX_LINES {
+        for (line_number, line) in new_lines[bounds.new_start..bounds.new_end]
+            .iter()
+            .enumerate()
+        {
+            if content.len() == PATCH_PREVIEW_MAX_LINES {
+                break;
+            }
             let line_number = bounds.new_start + line_number + 1;
-            content.push(format!("+{line_number}:{}|{line}", line_hash(line)));
+            if !push_preview_line(&mut content, &mut serialized_bytes, '+', line_number, line) {
+                byte_truncated = true;
+                break;
+            }
         }
     }
 
@@ -1414,9 +1417,62 @@ pub(super) fn build_hashline_patch_preview(
         old_end_line: span_end(bounds.old_start, bounds.old_end),
         new_start_line: span_start(bounds.new_start, bounds.new_end),
         new_end_line: span_end(bounds.new_start, bounds.new_end),
-        truncated: seen > PATCH_PREVIEW_MAX_LINES,
+        truncated: byte_truncated || total_changed_lines > content.len(),
         content: content.join("\n"),
     })
+}
+
+fn push_preview_line(
+    content: &mut Vec<String>,
+    serialized_bytes: &mut usize,
+    prefix: char,
+    line_number: usize,
+    line: &str,
+) -> bool {
+    let hash = line_hash(line);
+    let remaining = PATCH_PREVIEW_MAX_SERIALIZED_BYTES.saturating_sub(*serialized_bytes);
+    if let Some(cost) = preview_line_serialized_cost(line_number, &hash, line, remaining) {
+        let formatted = format!("{prefix}{line_number}:{hash}|{line}");
+        *serialized_bytes += cost;
+        content.push(formatted);
+        return true;
+    }
+
+    let mut prefix_bytes = line.len().min(remaining / 2);
+    loop {
+        let line_prefix = take_bytes_at_char_boundary(line, prefix_bytes);
+        let formatted =
+            format!("{prefix}{line_number}:{hash}|{line_prefix}{PREVIEW_TRUNCATION_MARKER}");
+        let cost = serialized_string_cost(&formatted);
+        if cost <= remaining {
+            content.push(formatted);
+            return false;
+        }
+        if prefix_bytes == 0 {
+            return false;
+        }
+        prefix_bytes /= 2;
+    }
+}
+
+fn preview_line_serialized_cost(
+    line_number: usize,
+    hash: &str,
+    line: &str,
+    limit: usize,
+) -> Option<usize> {
+    let fixed = 7_usize
+        .saturating_add(line_number.checked_ilog10().unwrap_or_default() as usize)
+        .saturating_add(hash.len());
+    let line_limit = limit.checked_sub(fixed)?;
+    let line_len = json_escaped_content_len_bounded(line, line_limit)?;
+    fixed.checked_add(line_len)
+}
+
+fn serialized_string_cost(value: &str) -> usize {
+    serde_json::to_string(value)
+        .map_or(usize::MAX, |serialized| serialized.len())
+        .saturating_add(2)
 }
 
 fn split_hashline_operation(input: &str) -> Result<(&str, &str), FunctionCallError> {
