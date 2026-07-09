@@ -322,29 +322,52 @@ fn reserved_agent_path_is_released_when_spawn_fails() {
 }
 
 #[test]
-fn committed_agent_path_is_indexed_until_release() {
+fn committed_agent_metadata_is_indexed_by_path_and_thread_until_release() {
     let registry = Arc::new(AgentRegistry::default());
+    let root_thread_id = ThreadId::new();
     let thread_id = ThreadId::new();
+    let path = agent_path("/root/researcher");
+    registry.register_root_thread(root_thread_id);
     let mut reservation = registry
         .reserve_spawn_slot(/*max_threads*/ None)
         .expect("reserve slot");
-    reservation
-        .reserve_agent_path(&agent_path("/root/researcher"))
-        .expect("reserve path");
-    reservation.commit(AgentMetadata {
+    reservation.reserve_agent_path(&path).expect("reserve path");
+    let mut expected_metadata = AgentMetadata {
         agent_id: Some(thread_id),
-        agent_path: Some(agent_path("/root/researcher")),
+        agent_path: Some(path.clone()),
+        last_task_message: Some("initial task".to_string()),
         ..Default::default()
-    });
+    };
+    reservation.commit(expected_metadata.clone());
 
+    assert_eq!(registry.agent_id_for_path(&path), Some(thread_id));
     assert_eq!(
-        registry.agent_id_for_path(&agent_path("/root/researcher")),
-        Some(thread_id)
+        registry.agent_metadata_for_thread(thread_id),
+        Some(expected_metadata.clone())
+    );
+    assert_eq!(
+        registry.spawned_agents_for_thread_ids(&[root_thread_id, ThreadId::new(), thread_id,]),
+        vec![expected_metadata.clone()]
+    );
+
+    registry.update_last_task_message(thread_id, "updated task".to_string());
+    expected_metadata.last_task_message = Some("updated task".to_string());
+    assert_eq!(
+        registry.agent_metadata_for_thread(thread_id),
+        Some(expected_metadata.clone())
+    );
+    registry.clear_last_task_message(thread_id);
+    expected_metadata.last_task_message = None;
+    assert_eq!(
+        registry.agent_metadata_for_thread(thread_id),
+        Some(expected_metadata)
     );
 
     registry.release_spawned_thread(thread_id);
+    assert_eq!(registry.agent_id_for_path(&path), None);
+    assert_eq!(registry.agent_metadata_for_thread(thread_id), None);
     assert_eq!(
-        registry.agent_id_for_path(&agent_path("/root/researcher")),
-        None
+        registry.spawned_agents_for_thread_ids(&[thread_id]),
+        Vec::new()
     );
 }

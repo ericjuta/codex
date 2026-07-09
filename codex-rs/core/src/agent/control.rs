@@ -392,7 +392,8 @@ impl AgentControl {
             })
             .transpose()?;
 
-        let mut live_agents = self.state.live_agents();
+        let loaded_thread_ids = state.list_thread_ids().await;
+        let mut live_agents = self.state.spawned_agents_for_thread_ids(&loaded_thread_ids);
         live_agents.sort_by(|left, right| {
             left.agent_path
                 .as_deref()

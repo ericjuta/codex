@@ -28,11 +28,12 @@ pub(crate) struct AgentRegistry {
 #[derive(Default)]
 struct ActiveAgents {
     agent_tree: HashMap<String, AgentMetadata>,
+    agent_keys_by_id: HashMap<ThreadId, String>,
     used_agent_nicknames: HashSet<String>,
     nickname_reset_count: usize,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct AgentMetadata {
     pub(crate) agent_id: Option<ThreadId>,
     pub(crate) agent_path: Option<AgentPath>,
@@ -97,23 +98,19 @@ impl AgentRegistry {
     }
 
     pub(crate) fn release_spawned_thread(&self, thread_id: ThreadId) {
-        let removed_counted_agent = {
+        let removed_metadata = {
             let mut active_agents = self
                 .active_agents
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let removed_key = active_agents
-                .agent_tree
-                .iter()
-                .find_map(|(key, metadata)| (metadata.agent_id == Some(thread_id)).then_some(key))
-                .cloned();
-            removed_key
-                .and_then(|key| active_agents.agent_tree.remove(key.as_str()))
-                .is_some_and(|metadata| {
-                    !metadata.agent_path.as_ref().is_some_and(AgentPath::is_root)
-                })
+            let Some(key) = active_agents.agent_keys_by_id.remove(&thread_id) else {
+                return;
+            };
+            active_agents.agent_tree.remove(&key)
         };
-        if removed_counted_agent {
+        if removed_metadata
+            .is_some_and(|metadata| !metadata.agent_path.as_ref().is_some_and(AgentPath::is_root))
+        {
             self.total_count.fetch_sub(1, Ordering::AcqRel);
         }
     }
@@ -123,14 +120,20 @@ impl AgentRegistry {
             .active_agents
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        active_agents
-            .agent_tree
-            .entry(AgentPath::ROOT.to_string())
-            .or_insert_with(|| AgentMetadata {
+        if active_agents.agent_tree.contains_key(AgentPath::ROOT) {
+            return;
+        }
+        active_agents.agent_tree.insert(
+            AgentPath::ROOT.to_string(),
+            AgentMetadata {
                 agent_id: Some(thread_id),
                 agent_path: Some(AgentPath::root()),
                 ..Default::default()
-            });
+            },
+        );
+        active_agents
+            .agent_keys_by_id
+            .insert(thread_id, AgentPath::ROOT.to_string());
     }
 
     pub(crate) fn agent_id_for_path(&self, agent_path: &AgentPath) -> Option<ThreadId> {
@@ -143,26 +146,30 @@ impl AgentRegistry {
     }
 
     pub(crate) fn agent_metadata_for_thread(&self, thread_id: ThreadId) -> Option<AgentMetadata> {
-        self.active_agents
+        let active_agents = self
+            .active_agents
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .agent_tree
-            .values()
-            .find(|metadata| metadata.agent_id == Some(thread_id))
-            .cloned()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let key = active_agents.agent_keys_by_id.get(&thread_id)?;
+        active_agents.agent_tree.get(key).cloned()
     }
 
-    pub(crate) fn live_agents(&self) -> Vec<AgentMetadata> {
-        self.active_agents
+    pub(crate) fn spawned_agents_for_thread_ids(
+        &self,
+        thread_ids: &[ThreadId],
+    ) -> Vec<AgentMetadata> {
+        let active_agents = self
+            .active_agents
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .agent_tree
-            .values()
-            .filter(|metadata| {
-                metadata.agent_id.is_some()
-                    && !metadata.agent_path.as_ref().is_some_and(AgentPath::is_root)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        thread_ids
+            .iter()
+            .filter_map(|thread_id| {
+                let key = active_agents.agent_keys_by_id.get(thread_id)?;
+                let metadata = active_agents.agent_tree.get(key)?;
+                (!metadata.agent_path.as_ref().is_some_and(AgentPath::is_root))
+                    .then(|| metadata.clone())
             })
-            .cloned()
             .collect()
     }
 
@@ -171,11 +178,15 @@ impl AgentRegistry {
             .active_agents
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(metadata) = active_agents
-            .agent_tree
-            .values_mut()
-            .find(|metadata| metadata.agent_id == Some(thread_id))
-        {
+        let ActiveAgents {
+            agent_tree,
+            agent_keys_by_id,
+            ..
+        } = &mut *active_agents;
+        let Some(key) = agent_keys_by_id.get(&thread_id) else {
+            return;
+        };
+        if let Some(metadata) = agent_tree.get_mut(key) {
             metadata.last_task_message = Some(last_task_message);
         }
     }
@@ -185,11 +196,15 @@ impl AgentRegistry {
             .active_agents
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(metadata) = active_agents
-            .agent_tree
-            .values_mut()
-            .find(|metadata| metadata.agent_id == Some(thread_id))
-        {
+        let ActiveAgents {
+            agent_tree,
+            agent_keys_by_id,
+            ..
+        } = &mut *active_agents;
+        let Some(key) = agent_keys_by_id.get(&thread_id) else {
+            return;
+        };
+        if let Some(metadata) = agent_tree.get_mut(key) {
             metadata.last_task_message = None;
         }
     }
@@ -210,7 +225,19 @@ impl AgentRegistry {
         if let Some(agent_nickname) = agent_metadata.agent_nickname.clone() {
             active_agents.used_agent_nicknames.insert(agent_nickname);
         }
-        active_agents.agent_tree.insert(key, agent_metadata);
+        if let Some(previous_key) = active_agents
+            .agent_keys_by_id
+            .insert(thread_id, key.clone())
+            && previous_key != key
+        {
+            active_agents.agent_tree.remove(&previous_key);
+        }
+        if let Some(previous_metadata) = active_agents.agent_tree.insert(key, agent_metadata)
+            && let Some(previous_thread_id) = previous_metadata.agent_id
+            && previous_thread_id != thread_id
+        {
+            active_agents.agent_keys_by_id.remove(&previous_thread_id);
+        }
     }
 
     fn reserve_agent_nickname(&self, names: &[&str], preferred: Option<&str>) -> Option<String> {
