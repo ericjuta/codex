@@ -91,7 +91,15 @@ pub fn collect_code_mode_tool_definitions<'a>(
             definitions
         })
         .filter(|definition| codex_code_mode::is_code_mode_nested_tool(&definition.name))
-        .map(codex_code_mode::augment_tool_definition)
+        .map(|definition| {
+            let mut definition = codex_code_mode::augment_tool_definition(definition);
+            // The rendered description now carries the input and output types. The runtime
+            // does not inspect the source schemas, so retaining them would duplicate the
+            // largest part of every process-host execute request.
+            definition.input_schema = None;
+            definition.output_schema = None;
+            definition
+        })
         .collect::<Vec<_>>();
     tool_definitions.sort_by(|left, right| left.name.cmp(&right.name));
     tool_definitions.dedup_by(|left, right| left.name == right.name);

@@ -1,5 +1,6 @@
 use super::augment_tool_spec_for_code_mode;
 use super::augment_tool_spec_for_mixed_code_mode;
+use super::collect_code_mode_tool_definitions;
 use super::tool_spec_to_code_mode_tool_definition;
 use crate::AdditionalProperties;
 use crate::FreeformTool;
@@ -182,5 +183,47 @@ fn tool_spec_to_code_mode_tool_definition_skips_unsupported_variants() {
             ),
         }),
         None
+    );
+}
+
+#[test]
+fn collected_runtime_definitions_render_then_drop_source_schemas() {
+    let definitions = collect_code_mode_tool_definitions([&ToolSpec::Function(ResponsesApiTool {
+        name: "lookup_order".to_string(),
+        description: "Look up an order".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            BTreeMap::from([(
+                "order_id".to_string(),
+                JsonSchema::string(/*description*/ None),
+            )]),
+            Some(vec!["order_id".to_string()]),
+            Some(AdditionalProperties::Boolean(false)),
+        ),
+        output_schema: Some(json!({
+            "type": "object",
+            "properties": { "ok": { "type": "boolean" } },
+            "required": ["ok"]
+        })),
+    })]);
+
+    assert_eq!(
+        definitions,
+        vec![codex_code_mode::ToolDefinition {
+            name: "lookup_order".to_string(),
+            tool_name: ToolName::plain("lookup_order"),
+            description: concat!(
+                "Look up an order\n\n",
+                "exec tool declaration:\n",
+                "```ts\n",
+                "declare const tools: { lookup_order(args: { order_id: string; }): Promise<{ ok: boolean; }>; };\n",
+                "```"
+            )
+            .to_string(),
+            kind: codex_code_mode::CodeModeToolKind::Function,
+            input_schema: None,
+            output_schema: None,
+        }]
     );
 }
