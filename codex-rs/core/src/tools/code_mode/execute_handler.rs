@@ -8,6 +8,7 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use std::sync::OnceLock;
 use tokio_util::sync::CancellationToken;
 
 use super::ExecContext;
@@ -57,6 +58,7 @@ impl ToolOutput for CodeModeExecuteOutput {
 pub struct CodeModeExecuteHandler {
     spec: ToolSpec,
     nested_tool_specs: Vec<ToolSpec>,
+    nested_tools: OnceLock<Vec<codex_code_mode::ToolDefinition>>,
 }
 
 impl CodeModeExecuteHandler {
@@ -64,6 +66,7 @@ impl CodeModeExecuteHandler {
         Self {
             spec,
             nested_tool_specs,
+            nested_tools: OnceLock::new(),
         }
     }
 
@@ -78,8 +81,12 @@ impl CodeModeExecuteHandler {
         let args =
             codex_code_mode::parse_exec_source(&code).map_err(FunctionCallError::RespondToModel)?;
         let exec = ExecContext { session, turn };
-        let enabled_tools =
-            codex_tools::collect_code_mode_tool_definitions(&self.nested_tool_specs);
+        let enabled_tools = self
+            .nested_tools
+            .get_or_init(|| {
+                codex_tools::collect_code_mode_tool_definitions(&self.nested_tool_specs)
+            })
+            .clone();
         let started_at = std::time::Instant::now();
         let execute =
             exec.session
