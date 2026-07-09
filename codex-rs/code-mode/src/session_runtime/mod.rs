@@ -42,7 +42,7 @@ pub(crate) struct SessionRuntime<D: SessionRuntimeDelegate> {
 }
 
 struct Inner<D: SessionRuntimeDelegate> {
-    stored_values: Mutex<HashMap<String, JsonValue>>,
+    stored_values: Mutex<HashMap<String, Arc<JsonValue>>>,
     cells: Mutex<HashMap<CellId, CellHandle>>,
     cell_tasks: TaskTracker,
     shutdown_token: CancellationToken,
@@ -135,7 +135,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
     pub(crate) async fn shutdown(&self) -> Result<(), Error> {
         self.begin_shutdown();
         // Taking the registry lock ensures every cell that passed the shutdown
-        // check has registered its actor with the tracker before we wait.
+        // check has registered an admission token with the tracker before we wait.
         let cells = self.inner.cells.lock().await;
         self.inner.cell_tasks.close();
         drop(cells);
@@ -164,15 +164,20 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
             cell_id: cell_id.clone(),
             inner: Arc::clone(&self.inner),
         });
-        let mut cells = self.inner.cells.lock().await;
-        if self.inner.shutdown_token.is_cancelled() {
-            return Err(Error::ShuttingDown);
-        }
-        if cells.contains_key(&cell_id) {
-            return Err(Error::DuplicateCell(cell_id));
-        }
+        // Keep shutdown waiting across the unlocked, awaitable startup interval. Once the actor
+        // task is tracked below, dropping this token transfers ownership without an empty gap.
+        let admission = {
+            let cells = self.inner.cells.lock().await;
+            if self.inner.shutdown_token.is_cancelled() {
+                return Err(Error::ShuttingDown);
+            }
+            if cells.contains_key(&cell_id) {
+                return Err(Error::DuplicateCell(cell_id));
+            }
+            self.inner.cell_tasks.token()
+        };
         let cell_state = Arc::new(CellState::new(self.inner.shutdown_token.child_token()));
-        let (handle, initial_event, task) = CellActor::prepare(
+        let (handle, initial_event, task, runtime_startup_guard) = CellActor::prepare(
             request,
             stored_values,
             host,
@@ -180,7 +185,12 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
             cell_state,
             self.inner.task_failure_handler.clone(),
         )
+        .await
         .map_err(Error::Runtime)?;
+        let mut cells = self.inner.cells.lock().await;
+        if cells.contains_key(&cell_id) {
+            return Err(Error::DuplicateCell(cell_id));
+        }
         cells.insert(cell_id.clone(), handle);
         let task = self.inner.cell_tasks.spawn(task);
         if let Some(task_failure_handler) = self.inner.task_failure_handler.clone() {
@@ -193,6 +203,8 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
                 }
             });
         }
+        runtime_startup_guard.disarm();
+        drop(admission);
         drop(cells);
         Ok(map_actor_event(cell_id, initial_event))
     }
@@ -279,7 +291,7 @@ impl<D: SessionRuntimeDelegate> CellHost for RuntimeCellHost<D> {
 
     async fn commit_completion(
         &self,
-        stored_value_writes: HashMap<String, JsonValue>,
+        stored_value_writes: HashMap<String, Arc<JsonValue>>,
         event: CellEvent,
         pending_initial_yield_items: Option<Vec<OutputItem>>,
         cell_state: Arc<CellState>,

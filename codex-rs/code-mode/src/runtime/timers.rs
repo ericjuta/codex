@@ -41,15 +41,22 @@ impl TimerScheduler {
             wake: Condvar::new(),
             runtime_command_tx,
         });
-        let worker_shared = Arc::clone(&shared);
-        let worker = thread::spawn(move || run_timer_scheduler(worker_shared));
         Self {
             shared,
-            worker: Some(worker),
+            worker: None,
         }
     }
 
-    pub(super) fn schedule(&self, id: u64, delay_ms: u64) {
+    pub(super) fn schedule(&mut self, id: u64, delay_ms: u64) -> Result<(), String> {
+        if self.worker.is_none() {
+            let worker_shared = Arc::clone(&self.shared);
+            self.worker = Some(
+                thread::Builder::new()
+                    .name("codex-code-mode-timer".to_string())
+                    .spawn(move || run_timer_scheduler(worker_shared))
+                    .map_err(|error| format!("failed to spawn code-mode timer thread: {error}"))?,
+            );
+        }
         let deadline = Instant::now()
             .checked_add(Duration::from_millis(delay_ms))
             .unwrap_or_else(Instant::now);
@@ -61,6 +68,7 @@ impl TimerScheduler {
         state.deadlines.insert(id, deadline);
         state.heap.push(Reverse((deadline, id)));
         self.shared.wake.notify_one();
+        Ok(())
     }
 
     pub(super) fn clear(&self, id: u64) {
@@ -76,6 +84,9 @@ impl TimerScheduler {
 
 impl Drop for TimerScheduler {
     fn drop(&mut self) {
+        let Some(worker) = self.worker.take() else {
+            return;
+        };
         {
             let mut state = self
                 .shared
@@ -85,9 +96,7 @@ impl Drop for TimerScheduler {
             state.shutdown = true;
         }
         self.shared.wake.notify_one();
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
+        let _ = worker.join();
     }
 }
 
@@ -155,10 +164,10 @@ pub(super) fn schedule_timeout(
         .ok_or_else(|| "runtime state unavailable".to_string())?;
     let timeout_id = state.next_timeout_id;
     state.next_timeout_id = state.next_timeout_id.saturating_add(1);
+    state.timer_scheduler.schedule(timeout_id, delay_ms)?;
     state
         .pending_timeouts
         .insert(timeout_id, ScheduledTimeout { callback });
-    state.timer_scheduler.schedule(timeout_id, delay_ms);
 
     Ok(timeout_id)
 }
@@ -233,3 +242,7 @@ fn normalize_delay_ms(delay_ms: f64) -> u64 {
         delay_ms.trunc().min(u64::MAX as f64) as u64
     }
 }
+
+#[cfg(test)]
+#[path = "timers_tests.rs"]
+mod tests;

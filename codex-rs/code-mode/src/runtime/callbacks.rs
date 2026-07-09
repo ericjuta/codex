@@ -1,4 +1,5 @@
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
+use std::sync::Arc;
 
 use super::RuntimeEvent;
 use super::RuntimeState;
@@ -223,7 +224,10 @@ pub(super) fn store_callback(
         }
     };
     if let Some(state) = scope.get_slot_mut::<RuntimeState>() {
-        state.stored_values.insert(key.clone(), serialized.clone());
+        let serialized = Arc::new(serialized);
+        state
+            .stored_values
+            .insert(key.clone(), Arc::clone(&serialized));
         state.stored_value_writes.insert(key, serialized);
     }
 }
@@ -251,7 +255,7 @@ pub(super) fn load_callback(
         retval.set(v8::undefined(scope).into());
         return;
     };
-    let Some(value) = json_to_v8(scope, &value) else {
+    let Some(value) = json_to_v8(scope, value.as_ref()) else {
         throw_type_error(scope, "failed to load stored value");
         return;
     };

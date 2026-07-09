@@ -36,6 +36,7 @@ use crate::runtime::PendingRuntimeMode;
 use crate::runtime::RuntimeCommand;
 use crate::runtime::RuntimeControlCommand;
 use crate::runtime::RuntimeEvent;
+use crate::runtime::RuntimeStartupGuard;
 use crate::runtime::spawn_runtime;
 use crate::session_runtime::CellEvent;
 use crate::session_runtime::CreateCellRequest as CellRequest;
@@ -46,9 +47,9 @@ use crate::session_runtime::ToolName as CellToolName;
 pub(crate) struct CellActor;
 
 impl CellActor {
-    pub(crate) fn prepare<H: CellHost>(
+    pub(crate) async fn prepare<H: CellHost>(
         request: CellRequest,
-        stored_values: HashMap<String, JsonValue>,
+        stored_values: HashMap<String, Arc<JsonValue>>,
         host: Arc<H>,
         initial_observe_mode: ObserveMode,
         cell_state: Arc<CellState>,
@@ -58,19 +59,22 @@ impl CellActor {
             CellHandle,
             CellEventFuture,
             impl Future<Output = ()> + Send + 'static,
+            RuntimeStartupGuard,
         ),
         String,
     > {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (initial_response_tx, initial_response_rx) = oneshot::channel();
-        let (runtime_tx, runtime_control_tx, runtime_terminate_handle) = spawn_runtime(
+        let (runtime_tx, runtime_control_tx, runtime_startup_guard) = spawn_runtime(
             stored_values,
             runtime_request(request),
             event_tx,
             PendingRuntimeMode::PauseUntilResumed,
             task_failure_handler.clone(),
-        )?;
+        )
+        .await?;
+        let runtime_terminate_handle = runtime_startup_guard.isolate_handle();
         let handle = CellHandle::new(command_tx, Arc::clone(&cell_state));
         let task = run_cell(
             host,
@@ -94,7 +98,7 @@ impl CellActor {
                 .map(CellObservation::into_result)
                 .unwrap_or(Err(CellError::Closed))
         });
-        Ok((handle, initial_response, task))
+        Ok((handle, initial_response, task, runtime_startup_guard))
     }
 }
 
