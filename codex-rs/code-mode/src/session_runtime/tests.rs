@@ -116,7 +116,7 @@ async fn termination_rejects_a_waiting_store_commit_before_the_next_cell_can_loa
     let commit = host.commit_completion(
         HashMap::from([(
             "candidate".to_string(),
-            JsonValue::String("lost".to_string()),
+            Arc::new(JsonValue::String("lost".to_string())),
         )]),
         completion.clone(),
         /*pending_initial_yield_items*/ None,
@@ -169,6 +169,39 @@ async fn termination_rejects_a_waiting_store_commit_before_the_next_cell_can_loa
         })
     );
     runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn completion_commit_reuses_the_runtime_stored_value_allocation() {
+    let runtime = SessionRuntime::new(Arc::new(RecordingDelegate));
+    let host = RuntimeCellHost {
+        cell_id: CellId::new("writer"),
+        inner: Arc::clone(&runtime.inner),
+    };
+    let stored_value = Arc::new(JsonValue::String("shared".to_string()));
+
+    assert_eq!(
+        host.commit_completion(
+            HashMap::from([("candidate".to_string(), Arc::clone(&stored_value))]),
+            CellEvent::Completed {
+                content_items: Vec::new(),
+                error_text: None,
+            },
+            /*pending_initial_yield_items*/ None,
+            Arc::new(CellState::new(CancellationToken::new())),
+        )
+        .await,
+        CompletionCommit::Committed
+    );
+    assert!(
+        runtime
+            .inner
+            .stored_values
+            .lock()
+            .await
+            .get("candidate")
+            .is_some_and(|committed_value| Arc::ptr_eq(committed_value, &stored_value))
+    );
 }
 
 fn execute_request(source: &str) -> CreateCellRequest {
