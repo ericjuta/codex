@@ -1,7 +1,5 @@
 use anyhow::Context;
 use anyhow::Result;
-use codex_config::permissions_toml::FilesystemPermissionToml;
-use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_protocol::config_types::CollaborationMode;
@@ -21,6 +19,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -45,14 +44,13 @@ use serde_json::json;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
-use toml_edit::Key as TomlKey;
 use wiremock::MockServer;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_zsh_fork_parent_approval_preserves_denied_reads() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let denied_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let denied_dir = tempfile::tempdir()?;
     let denied_path = denied_dir.path().join("secret.env");
     let secret = "unified-exec-zsh-fork-denied-read-secret";
     fs::write(&denied_path, format!("{secret}\n"))?;
@@ -99,7 +97,8 @@ async fn unified_exec_zsh_fork_parent_approval_preserves_denied_reads() -> Resul
     assert_ne!(
         result.exit_code.unwrap_or(0),
         0,
-        "denied-read command should stay sandboxed after parent approval"
+        "denied-read command should stay sandboxed after parent approval; output: {}",
+        result.stdout
     );
     assert!(
         !result.stdout.contains(secret),
@@ -294,63 +293,29 @@ where
 }
 
 fn denied_read_permission_profile(denied_path: &Path) -> Result<PermissionProfile> {
-    let denied_path_key = TomlKey::new(denied_path.to_string_lossy().into_owned());
-    permission_profile_from_toml(&format!(
-        r#"
-[filesystem]
-"/" = "read"
-":project_roots" = "write"
-{denied_path_key} = "deny"
-
-[network]
-enabled = false
-"#
-    ))
-}
-
-fn permission_profile_from_toml(profile: &str) -> Result<PermissionProfile> {
-    let profile = toml::from_str::<PermissionProfileToml>(profile)
-        .context("test permission profile should deserialize")?;
-    let filesystem = profile
-        .filesystem
-        .as_ref()
-        .context("test permission profile should include filesystem entries")?;
-    let entries = filesystem
-        .entries
-        .iter()
-        .map(|(path, permission)| {
-            let FilesystemPermissionToml::Access(access) = permission else {
-                anyhow::bail!("unexpected scoped filesystem permission in test profile: {path}");
-            };
-            let path = match path.as_str() {
-                "/" => FileSystemPath::Special {
-                    value: FileSystemSpecialPath::Root,
-                },
-                ":project_roots" => FileSystemPath::Special {
-                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
-                },
-                _ if *access == FileSystemAccessMode::Deny => FileSystemPath::GlobPattern {
-                    pattern: path.clone(),
-                },
-                _ => anyhow::bail!("unexpected filesystem entry in test profile: {path}"),
-            };
-            Ok(FileSystemSandboxEntry {
-                path,
-                access: *access,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let mut file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(entries);
-    file_system_sandbox_policy.glob_scan_max_depth = filesystem.glob_scan_max_depth;
-    let network_sandbox_policy = match profile.network.as_ref().and_then(|network| network.enabled)
-    {
-        Some(true) => NetworkSandboxPolicy::Enabled,
-        Some(false) | None => NetworkSandboxPolicy::Restricted,
-    };
-
+    let denied_path = AbsolutePathBuf::try_from(denied_path.to_path_buf())?;
+    let mut file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: denied_path },
+            access: FileSystemAccessMode::Deny,
+        },
+    ]);
+    file_system_sandbox_policy.glob_scan_max_depth = None;
     Ok(PermissionProfile::from_runtime_permissions(
         &file_system_sandbox_policy,
-        network_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
     ))
 }
 

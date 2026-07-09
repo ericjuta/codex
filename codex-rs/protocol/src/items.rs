@@ -16,6 +16,8 @@ use crate::protocol::ExecCommandSource;
 use crate::protocol::ExecCommandStatus;
 use crate::protocol::FileChange;
 use crate::protocol::PatchApplyStatus;
+use crate::protocol::ReviewOutputEvent;
+use crate::protocol::ReviewTarget;
 use crate::protocol::SubAgentActivityKind;
 use crate::user_input::ByteRange;
 use crate::user_input::TextElement;
@@ -33,110 +35,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 use ts_rs::TS;
 
-const CONTEXTUAL_USER_MARKERS: &[(&str, &str)] = &[
-    ("# AGENTS.md instructions", "</INSTRUCTIONS>"),
-    ("# AGENTS.md instructions for ", "</INSTRUCTIONS>"),
-    (
-        crate::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG,
-        crate::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG,
-    ),
-    ("<skill>", "</skill>"),
-    ("<user_shell_command>", "</user_shell_command>"),
-    ("<turn_aborted>", "</turn_aborted>"),
-    ("<subagent_notification>", "</subagent_notification>"),
-    ("<recommended_plugins>", "</recommended_plugins>"),
-    ("<goal_context>", "</goal_context>"),
-];
-
-const INTERNAL_CONTEXT_START_MARKER: &str = "<codex_internal_context";
-const INTERNAL_CONTEXT_END_MARKER: &str = "</codex_internal_context>";
-const INTERNAL_CONTEXT_SOURCE_ATTR_START: &str = " source=\"";
-const INTERNAL_CONTEXT_SOURCE_ATTR_END: &str = "\">";
-
-const LEGACY_CONTEXTUAL_USER_PREFIXES: &[&str] = &[
-    "Warning: The maximum number of unified exec processes you can keep open is",
-    "Warning: Your account was flagged for potentially high-risk cyber activity",
-];
-
-pub fn is_contextual_user_message_content(message: &[ContentItem]) -> bool {
-    message.iter().any(is_contextual_user_fragment)
-}
-
-pub fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
-    let ContentItem::InputText { text } = content_item else {
-        return false;
-    };
-    parse_hook_prompt_fragment(text).is_some()
-        || is_standard_contextual_user_text(text)
-        || is_legacy_contextual_user_text(text)
-}
-
-fn is_standard_contextual_user_text(text: &str) -> bool {
-    matches_internal_model_context_text(text)
-        || CONTEXTUAL_USER_MARKERS
-            .iter()
-            .any(|(start, end)| matches_marked_text(start, end, text))
-        || matches_additional_context_user_text(text)
-}
-
-fn matches_internal_model_context_text(text: &str) -> bool {
-    let trimmed = text.trim();
-    let Some(rest) = trimmed.strip_prefix(INTERNAL_CONTEXT_START_MARKER) else {
-        return false;
-    };
-    let Some(rest) = rest.strip_prefix(INTERNAL_CONTEXT_SOURCE_ATTR_START) else {
-        return false;
-    };
-    let Some((source, body_and_close)) = rest.split_once(INTERNAL_CONTEXT_SOURCE_ATTR_END) else {
-        return false;
-    };
-
-    is_valid_internal_context_source(source)
-        && body_and_close.ends_with(INTERNAL_CONTEXT_END_MARKER)
-}
-
-fn is_valid_internal_context_source(source: &str) -> bool {
-    let mut chars = source.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    first.is_ascii_lowercase()
-        && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
-}
-
-fn matches_marked_text(start_marker: &str, end_marker: &str, text: &str) -> bool {
-    let trimmed_start = text.trim_start();
-    let starts_with_marker = trimmed_start
-        .get(..start_marker.len())
-        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(start_marker));
-    let trimmed = trimmed_start.trim_end();
-    let ends_with_marker = trimmed
-        .get(trimmed.len().saturating_sub(end_marker.len())..)
-        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(end_marker));
-    starts_with_marker && ends_with_marker
-}
-
-fn matches_additional_context_user_text(text: &str) -> bool {
-    let trimmed = text.trim();
-    let Some(rest) = trimmed.strip_prefix("<external_") else {
-        return false;
-    };
-    let Some((key, value_and_close)) = rest.split_once('>') else {
-        return false;
-    };
-
-    value_and_close.ends_with(&format!("</external_{key}>"))
-}
-
-fn is_legacy_contextual_user_text(text: &str) -> bool {
-    let trimmed = text.trim();
-    LEGACY_CONTEXTUAL_USER_PREFIXES
-        .iter()
-        .any(|prefix| trimmed.starts_with(prefix))
-        || (trimmed.starts_with("Warning: apply_patch was requested via ")
-            && trimmed.ends_with("Use the apply_patch tool instead of exec_command."))
-}
-
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 #[serde(tag = "type")]
@@ -151,19 +49,25 @@ pub enum TurnItem {
     DynamicToolCall(DynamicToolCallItem),
     CollabAgentToolCall(CollabAgentToolCallItem),
     SubAgentActivity(SubAgentActivityItem),
+    /// Hosted Responses API web-search item handled directly by core.
+    ///
+    /// Standalone web search uses Self::Extension instead because its display
+    /// schema is owned by the web-search extension.
     WebSearch(WebSearchItem),
     ImageView(ImageViewItem),
     Sleep(SleepItem),
     /// Item whose schema and lifecycle details are owned by an extension.
     ///
-    /// Standalone image generation uses this path. App-server wraps the same
-    /// typed item in its public image-generation variant.
+    /// Standalone image generation and web search use this path. App-server
+    /// wraps the same typed items in their public variants.
     Extension(ExtensionItem),
     /// Hosted Responses API image-generation item handled directly by core.
     ///
     /// This remains separate from [`Self::Extension`] because core still owns
     /// hosted image persistence and legacy-event fanout.
     ImageGeneration(ImageGenerationItem),
+    EnteredReviewMode(EnteredReviewModeItem),
+    ExitedReviewMode(ExitedReviewModeItem),
     FileChange(FileChangeItem),
     McpToolCall(McpToolCallItem),
     ContextCompaction(ContextCompactionItem),
@@ -227,6 +131,19 @@ pub struct AgentMessageItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub memory_citation: Option<MemoryCitation>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct EnteredReviewModeItem {
+    pub id: String,
+    pub target: ReviewTarget,
+    pub user_facing_hint: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct ExitedReviewModeItem {
+    pub id: String,
+    pub review_output: Option<ReviewOutputEvent>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -492,11 +409,13 @@ pub struct ContextCompactionItem {
     pub id: String,
 }
 
+fn new_item_id() -> String {
+    uuid::Uuid::now_v7().to_string()
+}
+
 impl ContextCompactionItem {
     pub fn new() -> Self {
-        Self {
-            id: uuid::Uuid::new_v4().to_string(),
-        }
+        Self { id: new_item_id() }
     }
 }
 
@@ -509,7 +428,7 @@ impl Default for ContextCompactionItem {
 impl UserMessageItem {
     pub fn new(content: &[UserInput]) -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: new_item_id(),
             client_id: None,
             content: content.to_vec(),
         }
@@ -611,9 +530,7 @@ fn trim_trailing_default_image_details(
 impl HookPromptItem {
     pub fn from_fragments(id: Option<&String>, fragments: Vec<HookPromptFragment>) -> Self {
         Self {
-            id: id
-                .cloned()
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            id: id.cloned().unwrap_or_else(new_item_id),
             fragments,
         }
     }
@@ -643,7 +560,7 @@ pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<Res
     }
 
     Some(ResponseItem::Message {
-        id: Some(uuid::Uuid::new_v4().to_string()),
+        id: Some(new_item_id()),
         role: "user".to_string(),
         content,
         phase: None,
@@ -682,6 +599,38 @@ pub fn parse_hook_prompt_fragment(text: &str) -> Option<HookPromptFragment> {
     Some(HookPromptFragment { text, hook_run_id })
 }
 
+pub fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
+    let ContentItem::InputText { text } = content_item else {
+        return false;
+    };
+    let trimmed = text.trim();
+    if trimmed.starts_with(crate::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG)
+        && trimmed.ends_with(crate::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG)
+    {
+        return true;
+    }
+    if trimmed.starts_with("# AGENTS.md instructions") && trimmed.ends_with("</INSTRUCTIONS>") {
+        return true;
+    }
+    if parse_hook_prompt_fragment(trimmed).is_some() {
+        return true;
+    }
+    if trimmed.starts_with("<codex_internal_context source=\"extension\"")
+        && trimmed.ends_with("</codex_internal_context>")
+    {
+        return true;
+    }
+    if trimmed.starts_with("<recommended_plugins>") && trimmed.ends_with("</recommended_plugins>") {
+        return true;
+    }
+    if trimmed.starts_with("<goal_context>") && trimmed.ends_with("</goal_context>") {
+        return true;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    lower.starts_with("<subagent_notification>") && lower.ends_with("</subagent_notification>")
+}
+
 fn serialize_hook_prompt_fragment(text: &str, hook_run_id: &str) -> Option<String> {
     if hook_run_id.trim().is_empty() {
         return None;
@@ -696,7 +645,7 @@ fn serialize_hook_prompt_fragment(text: &str, hook_run_id: &str) -> Option<Strin
 impl AgentMessageItem {
     pub fn new(content: &[AgentMessageContent]) -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: new_item_id(),
             content: content.to_vec(),
             phase: None,
             memory_citation: None,
@@ -721,6 +670,8 @@ impl TurnItem {
             TurnItem::Sleep(item) => item.id.clone(),
             TurnItem::Extension(item) => item.id().to_string(),
             TurnItem::ImageGeneration(item) => item.id.clone(),
+            TurnItem::EnteredReviewMode(item) => item.id.clone(),
+            TurnItem::ExitedReviewMode(item) => item.id.clone(),
             TurnItem::FileChange(item) => item.id.clone(),
             TurnItem::McpToolCall(item) => item.id.clone(),
             TurnItem::ContextCompaction(item) => item.id.clone(),
@@ -763,23 +714,5 @@ mod tests {
                 hook_run_id: "hook-run-1".to_string(),
             }
         );
-    }
-
-    #[test]
-    fn detects_contextual_user_message_content() {
-        let content = vec![ContentItem::InputText {
-            text: "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>".to_string(),
-        }];
-
-        assert!(is_contextual_user_message_content(&content));
-    }
-
-    #[test]
-    fn ignores_regular_user_message_content() {
-        let content = vec![ContentItem::InputText {
-            text: "please inspect the diff".to_string(),
-        }];
-
-        assert!(!is_contextual_user_message_content(&content));
     }
 }

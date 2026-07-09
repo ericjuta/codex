@@ -153,9 +153,9 @@ fn ins_post_rejects_anchor_with_extra_colon() {
         .expect_err("anchors with extra trailing colon should be rejected");
 
     assert!(
-        error
-            .to_string()
-            .contains("invalid Hashline anchor 2:gg:: expected formats like 1, 1:ab, or 1-2 hex hash with one optional ':'"),
+        error.to_string().contains(
+            "invalid Hashline anchor 2:gg:: expected a 1-2 hex hash token after ':'; got gg"
+        ),
         "unexpected error: {error}"
     );
 }

@@ -898,8 +898,8 @@ fn parse_line_anchor(input: &str) -> Result<LineAnchor, FunctionCallError> {
 
 fn normalize_anchor_target(input: &str) -> String {
     let input = input.trim();
-    if input.ends_with(':') {
-        return input[..input.len() - 1].to_string();
+    if let Some(input) = input.strip_suffix(':') {
+        return input.to_string();
     }
     input.to_string()
 }

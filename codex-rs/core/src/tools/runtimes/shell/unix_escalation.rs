@@ -289,6 +289,13 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
     let exec_policy = Arc::new(RwLock::new(
         ctx.session.services.exec_policy.current().as_ref().clone(),
     ));
+    let approval_sandbox_permissions = approval_sandbox_permissions(
+        sandbox_permissions_preserving_denied_reads(
+            req.sandbox_permissions,
+            &exec_request.file_system_sandbox_policy,
+        ),
+        req.additional_permissions_preapproved,
+    );
     // TODO(anp): Keep PathUri through the zsh-fork executor boundary.
     let cwd = exec_request
         .cwd
@@ -327,10 +334,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         permission_profile: exec_request.permission_profile.clone(),
         file_system_sandbox_policy: exec_request.file_system_sandbox_policy.clone(),
         sandbox_permissions: req.sandbox_permissions,
-        approval_sandbox_permissions: approval_sandbox_permissions(
-            req.sandbox_permissions,
-            req.additional_permissions_preapproved,
-        ),
+        approval_sandbox_permissions,
         prompt_permissions: req.additional_permissions.clone(),
         stopwatch: Stopwatch::unlimited(),
     };
@@ -550,6 +554,10 @@ impl CoreShellActionProvider {
         escalation_execution: EscalationExecution,
         decision_source: DecisionSource,
     ) -> anyhow::Result<EscalationDecision> {
+        let execute_via_escalation = needs_escalation
+            || (self.sandbox_permissions.requests_sandbox_override()
+                && matches!(escalation_execution, EscalationExecution::TurnDefault));
+
         let action = match decision {
             Decision::Forbidden => {
                 EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
@@ -567,7 +575,7 @@ impl CoreShellActionProvider {
                         ReviewDecision::Approved
                         | ReviewDecision::ApprovedForSession
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
-                            if needs_escalation {
+                            if execute_via_escalation {
                                 EscalationDecision::escalate(escalation_execution.clone())
                             } else {
                                 EscalationDecision::run()
@@ -577,7 +585,7 @@ impl CoreShellActionProvider {
                             network_policy_amendment,
                         } => match network_policy_amendment.action {
                             NetworkPolicyRuleAction::Allow => {
-                                if needs_escalation {
+                                if execute_via_escalation {
                                     EscalationDecision::escalate(escalation_execution.clone())
                                 } else {
                                     EscalationDecision::run()
@@ -611,7 +619,7 @@ impl CoreShellActionProvider {
                 }
             }
             Decision::Allow => {
-                if needs_escalation {
+                if execute_via_escalation {
                     EscalationDecision::escalate(escalation_execution)
                 } else {
                     EscalationDecision::run()

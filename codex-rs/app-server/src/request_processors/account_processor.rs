@@ -1,5 +1,6 @@
 use super::*;
 use crate::auth_mode::auth_mode_to_api;
+use crate::external_auth::ExternalAuthBridge;
 use chrono::DateTime;
 
 mod rate_limit_resets;
@@ -654,14 +655,19 @@ impl AccountRequestProcessor {
             )));
         }
 
-        login_with_chatgpt_auth_tokens(
-            &self.config.codex_home,
+        let auth = CodexAuth::from_external_chatgpt_tokens(
             &access_token,
             &chatgpt_account_id,
             chatgpt_plan_type.as_deref(),
         )
         .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
-        self.auth_manager.reload().await;
+        self.auth_manager
+            .set_external_auth(Arc::new(ExternalAuthBridge::new(
+                Arc::clone(&self.outgoing),
+                auth,
+            )))
+            .await
+            .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
         self.config_manager.replace_cloud_config_bundle_loader(
             self.auth_manager.clone(),
             self.config.chatgpt_base_url.clone(),
@@ -849,7 +855,9 @@ impl AccountRequestProcessor {
                     let auth_mode = auth_mode_to_api(auth.api_auth_mode());
                     let (reported_auth_method, token_opt) = if matches!(
                         auth,
-                        CodexAuth::AgentIdentity(_) | CodexAuth::PersonalAccessToken(_)
+                        CodexAuth::Headers(_)
+                            | CodexAuth::AgentIdentity(_)
+                            | CodexAuth::PersonalAccessToken(_)
                     ) || include_token
                         && permanent_refresh_failure
                     {
@@ -928,9 +936,11 @@ impl AccountRequestProcessor {
         let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
             .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
 
-        let response = client
-            .get_rate_limits_with_reset_credits()
-            .await
+        let (response, detailed_rate_limit_reset_credits) = tokio::join!(
+            client.get_rate_limits_with_reset_credits(),
+            Self::detailed_rate_limit_reset_credits(&client),
+        );
+        let response = response
             .map_err(|err| internal_error(format!("failed to fetch codex rate limits: {err}")))?;
         if response.rate_limits.is_empty() {
             return Err(internal_error(
@@ -957,6 +967,15 @@ impl AccountRequestProcessor {
             .cloned()
             .unwrap_or_else(|| response.rate_limits[0].clone());
 
+        let rate_limit_reset_credits = detailed_rate_limit_reset_credits.or_else(|| {
+            response
+                .rate_limit_reset_credits
+                .map(|summary| RateLimitResetCreditsSummary {
+                    available_count: summary.available_count,
+                    credits: None,
+                })
+        });
+
         Ok(GetAccountRateLimitsResponse {
             rate_limits: rate_limits.into(),
             rate_limits_by_limit_id: Some(
@@ -965,11 +984,7 @@ impl AccountRequestProcessor {
                     .map(|(limit_id, snapshot)| (limit_id, snapshot.into()))
                     .collect(),
             ),
-            rate_limit_reset_credits: response.rate_limit_reset_credits.map(|summary| {
-                RateLimitResetCreditsSummary {
-                    available_count: summary.available_count,
-                }
-            }),
+            rate_limit_reset_credits,
         })
     }
 
