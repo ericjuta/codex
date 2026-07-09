@@ -75,7 +75,10 @@
         },
         "approvals": null
       },
-      "experimental_supported_tools": [],
+      "experimental_supported_tools": [
+        "exec",
+        "wait"
+      ],
       "available_in_plans": [
         "business",
         "edu",
@@ -187,7 +190,10 @@
         },
         "approvals": null
       },
-      "experimental_supported_tools": [],
+      "experimental_supported_tools": [
+        "exec",
+        "wait"
+      ],
       "available_in_plans": [
         "business",
         "edu",
@@ -295,7 +301,10 @@
         },
         "approvals": null
       },
-      "experimental_supported_tools": [],
+      "experimental_supported_tools": [
+        "exec",
+        "wait"
+      ],
       "available_in_plans": [
         "business",
         "edu",

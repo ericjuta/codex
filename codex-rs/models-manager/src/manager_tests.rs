@@ -12,6 +12,8 @@ use codex_login::ExternalAuthRefreshContext;
 use codex_login::TokenData;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ToolMode;
+use codex_protocol::protocol::MultiAgentVersion;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::VecDeque;
@@ -1130,4 +1132,39 @@ fn bundled_models_json_roundtrips() {
         !response.models.is_empty(),
         "bundled models.json should contain at least one model"
     );
+}
+
+#[test]
+fn bundled_gpt_5_6_models_advertise_code_mode_tools() {
+    let response = crate::bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+
+    for (slug, multi_agent_version) in [
+        ("gpt-5.6-sol", MultiAgentVersion::V2),
+        ("gpt-5.6-terra", MultiAgentVersion::V2),
+        ("gpt-5.6-luna", MultiAgentVersion::V1),
+    ] {
+        let model = response
+            .models
+            .iter()
+            .find(|model| model.slug == slug)
+            .unwrap_or_else(|| panic!("bundled models.json should include {slug}"));
+
+        assert!(model.use_responses_lite, "{slug} should use Responses Lite");
+        assert_eq!(
+            model.tool_mode,
+            Some(ToolMode::CodeModeOnly),
+            "{slug} should expose Code Mode-only tool execution"
+        );
+        assert_eq!(
+            model.multi_agent_version,
+            Some(multi_agent_version),
+            "{slug} should expose its configured multi-agent runtime"
+        );
+        assert_eq!(
+            model.experimental_supported_tools,
+            vec!["exec".to_string(), "wait".to_string()],
+            "{slug} should advertise Code Mode entrypoints"
+        );
+    }
 }
