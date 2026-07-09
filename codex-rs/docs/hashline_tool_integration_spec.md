@@ -103,7 +103,14 @@ bodies.
 
 Successful dry runs for write, patch, remove, and rename tools include
 `"success": true` with `"dry_run": true`. Multi-file patch dry runs also mark
-each per-file entry with `"success": true`.
+each returned per-file entry with `"success": true`. Multi-file patch outputs
+include `total_files` and `files_truncated` because the detail array is bounded.
+
+Read and block excerpts have a 24 KiB serialized-content budget in addition to
+their line caps. Patch previews and post-patch excerpts have a 4 KiB budget,
+and multi-file detail arrays have a 24 KiB budget. If one source line exceeds
+an excerpt budget, Hashline returns a UTF-8-safe prefix with a truncation marker
+and sets `content_truncated=true` on its structured row.
 
 Empty-file reads and refreshed empty write/create outputs return no line range:
 `start_line` and `end_line` are `null`, with empty `content` and `lines`.
@@ -121,7 +128,7 @@ also accept the reference MCP aliases: `file` for single-path tools and
 | `path` | string | yes | Resolved relative to selected environment cwd. |
 | `start_line` | integer | no | 1-indexed inclusive. |
 | `end_line` | integer | no | 1-indexed inclusive. |
-| `max_lines` | integer | no | Default 200, hard cap 1000. |
+| `max_lines` | integer | no | Default 200, hard cap 1000; the serialized byte budget may cap output earlier. |
 | `environment_id` | string | only when multiple environments exist | Match existing multi-environment patterns. |
 
 `hashline.write`:
@@ -140,7 +147,7 @@ also accept the reference MCP aliases: `file` for single-path tools and
 | --- | --- | --- | --- |
 | `path` | string | yes | Default target path when `patch` has no file sections. |
 | `patch` | string | yes | Hashline ops such as `SWAP 12:ab:`, `SWAP 12:ab..14:cd:`, a `[path#HASH]` section plus ops, multiple `[path#HASH]` sections for existing-file multi-file edits, or `[path]` sections with `create=true` for missing-file creation. Bracketed section headers recover common apply-patch-style path noise such as `[*** Update File: path#HASH]`. Payload rows may use README-style `+` prefixes, bare replacement lines, or uniform pasted read-output rows like `1:ab\|content`, `>>> 1:ab\|content`, or `* 1:ab\|content`; `++` emits a literal `+`, `+-` emits a literal `-`, and `+1:ab\|content` emits the read-output prefix literally. Sectioned patches also accept reference-style `REM` and `MV <path>` file ops; `MV` may be combined with line ops to rename and edit one file section, while `REM` must stand alone. `*** Abort` suppresses an embedded patch without writing. |
-| `dry_run` | boolean | no | Defaults to false. Validates without writing and returns old/new hashes plus a compact changed-line preview. |
+| `dry_run` | boolean | no | Defaults to false. Validates without writing and returns old/new hashes plus a byte-bounded changed-line preview. Multi-file details are also byte-bounded. |
 | `create` | boolean | no | Defaults to false. When true, every target must be missing and the patch is applied to empty file contents before routing through `apply_patch` add-file handling. Empty patches create zero-byte files. Use `[path]` sections for multi-file creation. |
 | `environment_id` | string | only when multiple environments exist | Match `apply_patch` environment selection behavior. |
 
@@ -182,10 +189,11 @@ Required caps:
 
 | Output | Default cap | Hard cap | Behavior on overflow |
 | --- | --- | --- | --- |
-| `read` lines | 200 lines | 1000 lines | Return selected range plus `truncated=true`, `next_start_line`, and file total when available. |
-| `write` refreshed lines | 200 lines | 1000 lines | Return bounded post-write hashline output using the same cap shape as `read`. |
-| `patch` diff/excerpt | 200 lines | 1000 lines | Return compact diff first, then refreshed anchors for changed region only. |
-| `find_block` excerpt | 80 lines | 300 lines | Return span metadata even when excerpt is capped. |
+| `read` lines | 200 lines | 1000 lines and 24 KiB serialized excerpt | Return selected range plus `truncated=true`, `next_start_line`, and file total when available. |
+| `write` refreshed lines | 200 lines | 1000 lines and 24 KiB serialized excerpt | Return bounded post-write hashline output using the same cap shape as `read`. |
+| `patch` preview/excerpt | 40 lines | 40 lines and 4 KiB per preview/excerpt | Return a compact preview, then refreshed anchors for the changed region only. |
+| Multi-file patch details | all files | 24 KiB serialized detail array | Return `total_files` and `files_truncated` when not every detail fits. |
+| `find_block` excerpt | 80 lines | 300 lines and 24 KiB serialized excerpt | Return span metadata even when excerpt is capped. |
 | Any single textual payload | provider/model truncation policy plus local byte cap | less than 10k tokens equivalent | Truncate before building `FunctionCallOutputPayload`. |
 
 This is stricter than the reference Hashline CLI, which reads whole files by
