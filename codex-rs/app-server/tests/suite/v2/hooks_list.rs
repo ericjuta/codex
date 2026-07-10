@@ -154,7 +154,10 @@ async fn hooks_list_shows_unsupported_prompt_and_agent_hooks_as_non_runnable() -
     let cwd = TempDir::new()?;
     write_unsupported_user_hook_config(codex_home.path())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
