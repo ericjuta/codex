@@ -1486,6 +1486,7 @@ impl Config {
             base_instructions: self.base_instructions.clone(),
             personality_enabled: self.features.enabled(Feature::Personality),
             model_supports_reasoning_summaries: self.model_supports_reasoning_summaries,
+            personality: self.personality,
             model_catalog: self.model_catalog.clone(),
         }
     }
