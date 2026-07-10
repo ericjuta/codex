@@ -4020,6 +4020,7 @@ async fn remote_mid_turn_compact_v2_sends_turn_state_over_http() -> Result<()> {
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
                 let _ = config.features.enable(Feature::RemoteCompactionV2);
+                let _ = config.features.enable(Feature::ItemIds);
                 config.model_auto_compact_token_limit = Some(200);
             }),
     )
@@ -4097,6 +4098,18 @@ async fn remote_mid_turn_compact_v2_sends_turn_state_over_http() -> Result<()> {
     assert_eq!(
         requests[2].header(TURN_STATE_HEADER).as_deref(),
         Some("sampling-state")
+    );
+    let compacted_item = requests[2]
+        .input()
+        .into_iter()
+        .find(|item| item.get("type").and_then(Value::as_str) == Some("compaction"))
+        .expect("follow-up request should include the compacted item");
+    assert_eq!(
+        compacted_item,
+        json!({
+            "type": "compaction",
+            "encrypted_content": "V2_COMPACT_SUMMARY",
+        })
     );
     assert_eq!(
         requests[3].header(TURN_STATE_HEADER).as_deref(),
