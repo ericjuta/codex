@@ -297,6 +297,7 @@ async fn mark_thread_completed_with_message(thread: &CodexThread, message: &str)
                 turn_id: turn.sub_id.clone(),
                 started_at: None,
                 last_agent_message: Some(message.to_string()),
+                error: None,
                 completed_at: None,
                 duration_ms: None,
                 time_to_first_token_ms: None,
