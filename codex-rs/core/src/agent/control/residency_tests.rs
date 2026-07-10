@@ -1,13 +1,19 @@
+use super::super::SpawnAgentOptions;
 use crate::ThreadManager;
 use crate::agent::AgentControl;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::config::test_config;
+use crate::init_state_db;
 use crate::thread_manager::ThreadManagerState;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::MessagePhase;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -15,6 +21,7 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
@@ -126,6 +133,131 @@ async fn interrupted_v2_agent_is_lost_after_residency_eviction() {
     }
 }
 
+#[tokio::test]
+async fn completed_v2_agent_history_survives_repeated_residency_eviction() {
+    const AGENT_COUNT: usize = 5;
+    let mut config = test_config().await;
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    let _ = config.features.enable(Feature::Sqlite);
+    config.multi_agent_v2.max_concurrent_threads_per_session = 3;
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    config.codex_home = temp_home.path().to_path_buf().try_into().unwrap();
+    config.cwd = temp_home.path().to_path_buf().try_into().unwrap();
+    let state_db = init_state_db(&config).await;
+    let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        state_db,
+    );
+    let root = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start root thread");
+    let control = manager.agent_control();
+    let mut agents = Vec::new();
+
+    for index in 0..AGENT_COUNT {
+        let path_text = format!("/root/worker_{index}");
+        let agent_path = AgentPath::try_from(path_text.as_str()).expect("agent path");
+        let message = format!("persisted response {index}");
+        let spawned = control
+            .spawn_agent_with_metadata(
+                config.clone(),
+                vec![UserInput::Text {
+                    text: format!("task {index}"),
+                    text_elements: Vec::new(),
+                }],
+                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id: root.thread_id,
+                    depth: 1,
+                    agent_path: Some(agent_path.clone()),
+                    agent_nickname: None,
+                    agent_role: None,
+                })),
+                SpawnAgentOptions {
+                    parent_thread_id: Some(root.thread_id),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("spawn v2 agent");
+        let thread = manager
+            .get_thread(spawned.thread_id)
+            .await
+            .expect("new agent should be resident");
+        mark_thread_completed_with_message(thread.as_ref(), &message).await;
+        thread
+            .inject_response_items(vec![assistant_message(&message)])
+            .await
+            .expect("persist agent response");
+        thread.ensure_rollout_materialized().await;
+        thread.flush_rollout().await.expect("flush agent rollout");
+        agents.push((agent_path, spawned.thread_id, message));
+    }
+
+    for (index, (agent_path, thread_id, _)) in agents.iter().enumerate() {
+        assert_eq!(
+            control
+                .resolve_agent_reference(root.thread_id, &SessionSource::Cli, agent_path.as_str())
+                .await
+                .expect("evicted agent path should remain resolvable"),
+            *thread_id
+        );
+        if index < AGENT_COUNT - 2 {
+            assert!(matches!(
+                manager.get_thread(*thread_id).await,
+                Err(CodexErr::ThreadNotFound(id)) if id == *thread_id
+            ));
+        } else {
+            assert!(manager.get_thread(*thread_id).await.is_ok());
+        }
+    }
+
+    let (first_path, first_thread_id, first_message) = &agents[0];
+    control
+        .ensure_v2_agent_loaded(config, *first_thread_id)
+        .await
+        .expect("completed evicted agent should reload");
+    let reloaded = manager
+        .get_thread(*first_thread_id)
+        .await
+        .expect("reloaded agent should be resident");
+    let history = reloaded.codex.session.clone_history().await;
+    assert!(history.raw_items().iter().any(|item| {
+        matches!(
+            item,
+            ResponseItem::Message { content, .. }
+                if content.iter().any(|content| {
+                    matches!(
+                        content,
+                        ContentItem::OutputText { text } if text == first_message
+                    )
+                })
+        )
+    }));
+    assert_eq!(
+        control
+            .resolve_agent_reference(root.thread_id, &SessionSource::Cli, first_path.as_str())
+            .await
+            .expect("reloaded agent path should remain resolvable"),
+        *first_thread_id
+    );
+}
+
+fn assistant_message(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: text.to_string(),
+        }],
+        phase: Some(MessagePhase::FinalAnswer),
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
 async fn spawn_v2_subagent(
     control: &AgentControl,
     state: &Arc<ThreadManagerState>,
@@ -151,6 +283,10 @@ async fn spawn_v2_subagent(
 }
 
 async fn mark_thread_completed(thread: &CodexThread) {
+    mark_thread_completed_with_message(thread, "done").await;
+}
+
+async fn mark_thread_completed_with_message(thread: &CodexThread, message: &str) {
     let turn = thread.codex.session.new_default_turn().await;
     thread
         .codex
@@ -159,7 +295,7 @@ async fn mark_thread_completed(thread: &CodexThread) {
             turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: turn.sub_id.clone(),
-                last_agent_message: Some("done".to_string()),
+                last_agent_message: Some(message.to_string()),
                 completed_at: None,
                 duration_ms: None,
                 time_to_first_token_ms: None,

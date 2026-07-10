@@ -144,10 +144,18 @@ impl AgentControl {
         input: Vec<UserInput>,
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
-        self.ensure_execution_capacity_for_turn_start(agent_id, /*starts_turn*/ true)
+        let admission = self
+            .reserve_execution_capacity_for_turn_start(agent_id, /*starts_turn*/ true)
             .await?;
-        self.send_input_after_capacity_check(agent_id, &state, input)
-            .await
+        let result = self
+            .send_input_after_capacity_check(agent_id, &state, input)
+            .await;
+        if result.is_ok()
+            && let Some(admission) = admission
+        {
+            admission.commit();
+        }
+        result
     }
 
     async fn send_input_after_capacity_check(
@@ -182,15 +190,23 @@ impl AgentControl {
         agent_communication_context: AgentCommunicationContext,
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
-        self.ensure_execution_capacity_for_turn_start(agent_id, communication.trigger_turn)
+        let admission = self
+            .reserve_execution_capacity_for_turn_start(agent_id, communication.trigger_turn)
             .await?;
-        self.send_inter_agent_communication_after_capacity_check(
-            agent_id,
-            &state,
-            communication,
-            agent_communication_context,
-        )
-        .await
+        let result = self
+            .send_inter_agent_communication_after_capacity_check(
+                agent_id,
+                &state,
+                communication,
+                agent_communication_context,
+            )
+            .await;
+        if result.is_ok()
+            && let Some(admission) = admission
+        {
+            admission.commit();
+        }
+        result
     }
 
     async fn send_inter_agent_communication_after_capacity_check(

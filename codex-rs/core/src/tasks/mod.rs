@@ -328,6 +328,30 @@ impl Session {
         input: Vec<TurnInput>,
         task: T,
     ) {
+        let agent_execution_guard = match self.services.agent_control.execution_guard(
+            self.thread_id,
+            turn_context.multi_agent_version,
+            &turn_context.session_source,
+        ) {
+            Ok(agent_execution_guard) => agent_execution_guard,
+            Err(err) => {
+                {
+                    let mut active_turn = self.active_turn.lock().await;
+                    if active_turn
+                        .as_ref()
+                        .is_some_and(|active_turn| active_turn.task.is_none())
+                    {
+                        *active_turn = None;
+                    }
+                }
+                self.send_event(
+                    turn_context.as_ref(),
+                    EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+                )
+                .await;
+                return;
+            }
+        };
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
@@ -368,10 +392,6 @@ impl Session {
         let mut active = self.active_turn.lock().await;
         let turn = active.get_or_insert_with(ActiveTurn::default);
         debug_assert!(turn.task.is_none());
-        let agent_execution_guard = self.services.agent_control.execution_guard(
-            turn_context.multi_agent_version,
-            &turn_context.session_source,
-        );
         let done_clone = Arc::clone(&done);
         let session_ctx = Arc::new(SessionTaskContext::new(
             Arc::clone(self),

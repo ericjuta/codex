@@ -244,9 +244,12 @@ impl AgentControl {
                 &config,
             )
             .await;
-        if let Some(session_source) = session_source.as_ref() {
-            self.ensure_execution_capacity(multi_agent_version, session_source)?;
-        }
+        let agent_execution_guard = match session_source.as_ref() {
+            Some(session_source) => {
+                self.reserve_execution_guard(multi_agent_version, session_source)?
+            }
+            None => None,
+        };
         let agent_max_threads = config.effective_agent_max_threads(multi_agent_version);
         let spawn_uses_v2_residency = multi_agent_version == MultiAgentVersion::V2
             && session_source
@@ -389,10 +392,13 @@ impl AgentControl {
         )
         .await;
 
-        match initial_input {
+        if let Some(agent_execution_guard) = agent_execution_guard {
+            self.bind_execution_guard(new_thread.thread_id, agent_execution_guard);
+        }
+        let initial_input_result = match initial_input {
             SpawnInitialInput::UserInput(input) => {
                 self.send_input_after_capacity_check(new_thread.thread_id, &state, input)
-                    .await?;
+                    .await
             }
             SpawnInitialInput::InterAgentCommunication(communication, context) => {
                 self.send_inter_agent_communication_after_capacity_check(
@@ -401,8 +407,12 @@ impl AgentControl {
                     communication,
                     context,
                 )
-                .await?;
+                .await
             }
+        };
+        if let Err(err) = initial_input_result {
+            self.release_execution_reservation(new_thread.thread_id);
+            return Err(err);
         }
         if multi_agent_version != MultiAgentVersion::V2 {
             let child_reference = agent_metadata

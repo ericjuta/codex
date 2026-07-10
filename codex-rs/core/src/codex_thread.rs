@@ -265,15 +265,23 @@ impl CodexThread {
         trace: Option<W3cTraceContext>,
         client_user_message_id: Option<String>,
     ) -> CodexResult<String> {
-        self.codex
+        let admission = self
+            .codex
             .session
             .services
             .agent_control
-            .ensure_execution_capacity_for_op(self.session_configured.thread_id, &op)
+            .reserve_execution_capacity_for_op(self.session_configured.thread_id, &op)
             .await?;
-        self.codex
+        let result = self
+            .codex
             .submit_user_input_with_client_user_message_id(op, trace, client_user_message_id)
-            .await
+            .await;
+        if result.is_ok()
+            && let Some(admission) = admission
+        {
+            admission.commit();
+        }
+        result
     }
 
     /// Persist whether this thread is eligible for future memory generation.
