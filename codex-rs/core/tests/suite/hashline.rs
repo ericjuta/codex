@@ -61,6 +61,34 @@ async fn submit_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The read-only permission profile routes hashline file access through the
+/// bwrap-based fs sandbox helper; hosts that restrict unprivileged user
+/// namespaces (e.g. Ubuntu with kernel.apparmor_restrict_unprivileged_userns=1)
+/// cannot run it, so tests that need it should skip there.
+#[cfg(target_os = "linux")]
+fn fs_sandbox_helper_available() -> bool {
+    std::process::Command::new("bwrap")
+        .args([
+            "--unshare-user",
+            "--unshare-pid",
+            "--unshare-net",
+            "--ro-bind",
+            "/",
+            "/",
+            "true",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn fs_sandbox_helper_available() -> bool {
+    true
+}
+
 async fn submit_turn_with_read_only_approval(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
     let cwd = test.cwd.abs();
     let (sandbox_policy, permission_profile) =
@@ -1655,6 +1683,13 @@ async fn hashline_rename_file_moves_empty_file_through_apply_patch() -> anyhow::
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hashline_patch_uses_apply_patch_approval_flow() -> anyhow::Result<()> {
+    if !fs_sandbox_helper_available() {
+        eprintln!(
+            "skipping test: bwrap cannot create sandbox namespaces in this environment, so the read-only fs sandbox helper cannot run"
+        );
+        return Ok(());
+    }
+
     let server = start_mock_server().await;
     let test = test_codex()
         .with_config(|config| {
@@ -1686,7 +1721,7 @@ async fn hashline_patch_uses_apply_patch_approval_flow() -> anyhow::Result<()> {
         ]),
     )
     .await;
-    mount_sse_once(
+    let second_mock = mount_sse_once(
         &server,
         sse(vec![
             ev_assistant_message("msg-1", "hashline edit approved"),
@@ -1705,7 +1740,11 @@ async fn hashline_patch_uses_apply_patch_approval_flow() -> anyhow::Result<()> {
     })
     .await;
     let EventMsg::ApplyPatchApprovalRequest(approval) = approval_event else {
-        panic!("expected apply_patch approval request before completion");
+        let request = second_mock.single_request();
+        panic!(
+            "expected apply_patch approval request before completion; model saw: {:?}",
+            request.function_call_output_text(call_id)
+        );
     };
     assert_eq!(approval.call_id, call_id);
     assert!(

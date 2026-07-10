@@ -59,6 +59,12 @@ fn rejects_stale_line_hash() {
         error.to_string().contains("hash mismatch"),
         "unexpected error: {error}"
     );
+    assert!(
+        error
+            .to_string()
+            .contains("reread the file with hashline.read and rebuild the patch"),
+        "stale line hash error should tell the model how to recover: {error}"
+    );
 }
 
 #[test]
@@ -503,6 +509,28 @@ fn patch_tool_spec_advertises_mv_with_line_ops() {
 }
 
 #[test]
+fn patch_tool_spec_exposes_hash_guardrails() {
+    let spec = super::patch_tool_spec(/*multi_environment*/ false);
+    let patch_description = spec
+        .parameters
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.get("patch"))
+        .and_then(|schema| schema.description.as_deref())
+        .expect("patch parameter should have a description");
+
+    assert!(
+        patch_description.contains("start operation lines only with documented operation tokens")
+    );
+    assert!(patch_description.contains("never invent or reconstruct hashes"));
+    assert!(patch_description.contains("prefix each payload body line with +"));
+    assert!(
+        patch_description
+            .contains("reread the file and rebuild the patch from the refreshed anchors")
+    );
+}
+
+#[test]
 fn patch_accepts_matching_file_header() {
     let original = "alpha\nbeta\ngamma\n";
     let patch = format!(
@@ -622,6 +650,12 @@ fn patch_rejects_stale_file_header() {
     assert!(
         error.to_string().contains("file hash mismatch"),
         "unexpected error: {error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("reread it with hashline.read and rebuild the patch"),
+        "stale file hash error should tell the model how to recover: {error}"
     );
 }
 

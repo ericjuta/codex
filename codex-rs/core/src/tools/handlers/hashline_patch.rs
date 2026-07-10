@@ -310,7 +310,7 @@ pub(super) fn validate_file_hash(
         let actual_hash = hash_hex(contents, 4);
         if expected_hash != actual_hash {
             return Err(FunctionCallError::RespondToModel(format!(
-                "file hash mismatch for {path}: expected {expected_hash}, found {actual_hash}"
+                "file hash mismatch for {path}: expected {expected_hash}, found {actual_hash}; the file changed since it was read, so reread it with hashline.read and rebuild the patch from the refreshed anchors before retrying"
             )));
         }
     }
@@ -1513,7 +1513,7 @@ fn validate_line_hash(
         let actual_hash = line_hash(&lines[line_number - 1]);
         if !line_hash_matches(expected_hash, &actual_hash) {
             return Err(FunctionCallError::RespondToModel(format!(
-                "line {line_number} hash mismatch: expected {expected_hash}, found {actual_hash}"
+                "line {line_number} hash mismatch: expected {expected_hash}, found {actual_hash}; the anchor is stale, so reread the file with hashline.read and rebuild the patch from the refreshed anchors before retrying"
             )));
         }
     }
