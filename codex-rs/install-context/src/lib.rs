@@ -81,8 +81,6 @@ impl InstallContext {
             is_macos,
             current_exe,
             method_override,
-            /*managed_by_npm*/ false,
-            /*managed_by_bun*/ false,
             codex_home.as_deref(),
             managed_package_root.as_deref(),
         )
@@ -95,28 +93,23 @@ impl InstallContext {
         method_override: Option<InstallMethod>,
         codex_home: Option<&Path>,
     ) -> Self {
-        Self::from_exe_with_context(
-            is_macos,
-            current_exe,
-            method_override,
-            /*managed_by_npm*/ false,
-            /*managed_by_bun*/ false,
-            codex_home,
-            None,
-        )
+        Self::from_exe_with_context(is_macos, current_exe, method_override, codex_home, None)
     }
 
     fn from_exe_with_context(
         is_macos: bool,
         current_exe: Option<&Path>,
         method_override: Option<InstallMethod>,
-        managed_by_npm: bool,
-        managed_by_bun: bool,
         codex_home: Option<&Path>,
         managed_package_root: Option<&Path>,
     ) -> Self {
         let mut package_layout = current_exe.and_then(CodexPackageLayout::from_exe);
-        if package_layout.is_none() && (managed_by_npm || managed_by_bun) {
+        if package_layout.is_none()
+            && matches!(
+                method_override.as_ref(),
+                Some(InstallMethod::Npm | InstallMethod::Bun | InstallMethod::Pnpm)
+            )
+        {
             package_layout =
                 managed_package_root.and_then(CodexPackageLayout::from_managed_package_root);
         }
@@ -510,8 +503,7 @@ mod tests {
         let context = InstallContext::from_exe_with_codex_home(
             /*is_macos*/ false,
             /*current_exe*/ Some(&exe_path),
-            /*managed_by_npm*/ false,
-            /*managed_by_bun*/ false,
+            /*method_override*/ None,
             /*codex_home*/ None,
         );
         assert_eq!(
@@ -609,8 +601,7 @@ mod tests {
         let context = InstallContext::from_exe_with_context(
             /*is_macos*/ false,
             /*current_exe*/ Some(&exe_path),
-            /*managed_by_npm*/ false,
-            /*managed_by_bun*/ true,
+            /*method_override*/ Some(InstallMethod::Bun),
             /*codex_home*/ None,
             /*managed_package_root*/ Some(&main_package_dir),
         );
