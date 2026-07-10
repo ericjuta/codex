@@ -23,11 +23,6 @@ const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 const PERSONALITY_SECTION_HEADER: &str = "# Personality";
 
 pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig) -> ModelInfo {
-    if let Some(supports_reasoning_summaries) = config.model_supports_reasoning_summaries
-        && supports_reasoning_summaries
-    {
-        model.supports_reasoning_summaries = true;
-    }
     if let Some(context_window) = config.model_context_window {
         model.context_window = Some(
             model
@@ -144,7 +139,6 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         base_instructions: BASE_INSTRUCTIONS.to_string(),
         model_messages: local_personality_messages_for_slug(slug),
         include_skills_usage_instructions: false,
-        supports_reasoning_summaries: false,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
         default_verbosity: None,

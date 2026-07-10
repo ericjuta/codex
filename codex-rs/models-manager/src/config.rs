@@ -8,7 +8,6 @@ pub struct ModelsManagerConfig {
     pub tool_output_token_limit: Option<usize>,
     pub base_instructions: Option<String>,
     pub personality_enabled: bool,
-    pub model_supports_reasoning_summaries: Option<bool>,
     pub personality: Option<Personality>,
     pub model_catalog: Option<ModelsResponse>,
 }
