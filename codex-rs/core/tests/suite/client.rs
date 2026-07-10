@@ -482,7 +482,7 @@ async fn synthetic_call_output_id_is_stable_across_resumes() -> anyhow::Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn response_item_ids_are_sent_for_all_remote_v2_compaction_requests() -> anyhow::Result<()> {
+async fn response_item_ids_skip_idless_remote_v2_compaction_items() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     let response_mock = mount_sse_sequence(
         &server,
@@ -525,8 +525,20 @@ async fn response_item_ids_are_sent_for_all_remote_v2_compaction_requests() -> a
         let input = request.input();
         assert!(!input.is_empty(), "request {request_index} input is empty");
         for item in input {
-            if item.get("type").and_then(serde_json::Value::as_str) == Some("compaction_trigger") {
-                continue;
+            match item.get("type").and_then(serde_json::Value::as_str) {
+                Some("compaction_trigger") => continue,
+                Some("compaction") => {
+                    assert_eq!(
+                        item,
+                        json!({
+                            "type": "compaction",
+                            "encrypted_content": "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY",
+                        }),
+                        "request {request_index} must preserve an ID-less compaction item"
+                    );
+                    continue;
+                }
+                _ => {}
             }
             assert!(
                 item.get("id").and_then(serde_json::Value::as_str).is_some(),

@@ -258,6 +258,31 @@ fn assign_missing_response_item_ids_assigns_additional_tools_ids() {
     assert!(items[0].id().is_some_and(|id| id.starts_with("at_")));
 }
 
+#[test]
+fn assign_missing_response_item_ids_preserves_compaction_identity() {
+    let expected = vec![
+        ResponseItem::Compaction {
+            id: None,
+            encrypted_content: "encrypted-without-id".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::Compaction {
+            id: Some("cmp_upstream".to_string()),
+            encrypted_content: "encrypted-with-id".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::ContextCompaction {
+            id: None,
+            encrypted_content: Some("legacy-encrypted-without-id".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    let items = Session::assign_missing_response_item_ids(Cow::Owned(expected.clone()));
+
+    assert_eq!(items.as_ref(), expected.as_slice());
+}
+
 #[tokio::test]
 async fn paginated_turn_context_assigns_missing_response_item_ids_without_feature() {
     let (session, mut turn_context) = make_session_and_context().await;

@@ -2822,7 +2822,13 @@ impl Session {
     }
 
     fn assign_missing_response_item_id(item: &mut ResponseItem) {
-        if item.id().is_some() {
+        // Encrypted compaction content is bound to upstream identity, so missing IDs stay absent.
+        if item.id().is_some()
+            || matches!(
+                item,
+                ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
+            )
+        {
             return;
         }
         let Some(prefix) = response_item_id_prefix(item) else {
