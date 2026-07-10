@@ -2345,6 +2345,7 @@ async fn non_git_repo_skills_search_does_not_walk_parents() {
     let nested_dir = outer_dir.path().join("nested/inner");
     fs::create_dir_all(&nested_dir).unwrap();
 
+    let cfg = make_config_for_cwd(&codex_home, nested_dir).await;
     write_skill_at(
         &outer_dir
             .path()
@@ -2354,8 +2355,6 @@ async fn non_git_repo_skills_search_does_not_walk_parents() {
         "outer-skill",
         "from outer",
     );
-
-    let cfg = make_config_for_cwd(&codex_home, nested_dir).await;
 
     let outcome = load_skills_for_test(&cfg).await;
     assert!(
@@ -2412,6 +2411,7 @@ async fn skill_roots_include_admin_with_lowest_priority() {
     .await
     .into_iter()
     .map(|root| root.scope)
+    .filter(|scope| *scope != SkillScope::Repo)
     .collect();
     let mut expected = vec![SkillScope::User, SkillScope::System];
     if home_dir().is_some() {

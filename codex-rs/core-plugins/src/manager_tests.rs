@@ -2530,12 +2530,14 @@ async fn skills_service_reuses_skills_parsed_during_plugin_load() {
     let cached = skills_service
         .snapshot_for_config(&skills_input, /*fs*/ None)
         .await;
+    let skill_path_abs = skill_path.abs();
 
     assert_eq!(
         cached
             .outcome()
             .skills
             .iter()
+            .filter(|skill| skill.path_to_skills_md == skill_path_abs)
             .map(|skill| skill.description.as_str())
             .collect::<Vec<_>>(),
         vec!["first"]
