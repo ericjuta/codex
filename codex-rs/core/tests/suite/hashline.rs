@@ -1157,7 +1157,7 @@ async fn hashline_patch_can_create_multi_file_sections() -> anyhow::Result<()> {
     let patch_args = json!({
         "path": first_name,
         "patch": format!(
-            "[{first_name}]\n[{second_name}]\nINS.TAIL:\n+created beta"
+            "[{first_name}]\nINS.TAIL:\n+created alpha\n[{second_name}]\nINS.TAIL:\n+created beta"
         ),
         "create": true
     });
@@ -1191,8 +1191,7 @@ async fn hashline_patch_can_create_multi_file_sections() -> anyhow::Result<()> {
     })
     .await;
 
-    assert!(first_path.exists());
-    assert_eq!(fs::metadata(&first_path)?.len(), 0);
+    assert_eq!(fs::read_to_string(first_path)?, "created alpha");
     assert_eq!(fs::read_to_string(second_path)?, "created beta");
     let request = final_mock.single_request();
     let patch_output = request

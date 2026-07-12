@@ -56,6 +56,7 @@ use self::hashline_patch::parse_anchor_hash;
 use self::hashline_patch::parse_anchor_line;
 use self::hashline_patch::parse_hashline_patch_file_operation;
 use self::hashline_patch::split_hashline_patch_sections;
+use self::hashline_patch::split_hashline_patch_sections_for_create;
 use self::hashline_patch::validate_file_hash;
 use serde_json::Value;
 
@@ -959,7 +960,11 @@ async fn handle_patch(
         ));
     }
     let create = args.create.unwrap_or(false);
-    let sections = split_hashline_patch_sections(&args.path, &args.patch)?;
+    let sections = if create {
+        split_hashline_patch_sections_for_create(&args.path, &args.patch)?
+    } else {
+        split_hashline_patch_sections(&args.path, &args.patch)?
+    };
     if sections.len() > 1 {
         return handle_multi_file_patch(&invocation, &args, &sections, multi_environment).await;
     }
@@ -2171,6 +2176,16 @@ async fn read_selected_file_after_update(
 ) -> Result<String, FunctionCallError> {
     let written_contents = read_selected_file(turn, step_context, path, environment_id).await?;
     let written_hash = hash_hex(&written_contents);
+    let normalized_expected_contents = normalize_file_text(expected_contents);
+    let normalized_written_contents = normalize_file_text(&written_contents);
+    let apply_patch_added_trailing_newline = !normalized_expected_contents.ends_with('\n')
+        && normalized_written_contents.strip_suffix('\n')
+            == Some(normalized_expected_contents.as_ref());
+    if written_hash != expected_hash && !apply_patch_added_trailing_newline {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "{operation} applied but post-write file hash for {path} was {written_hash}, expected {expected_hash}"
+        )));
+    }
     if written_contents == expected_contents {
         return Ok(written_contents);
     }

@@ -23,6 +23,7 @@ use super::hashline_patch::hashline_patch_is_aborted;
 use super::hashline_patch::hashline_patch_warnings;
 use super::hashline_patch::parse_hashline_patch_file_operation;
 use super::hashline_patch::split_hashline_patch_sections;
+use super::hashline_patch::split_hashline_patch_sections_for_create;
 use super::hashline_patch::validate_file_hash;
 use super::resolve_find_block_anchor;
 use pretty_assertions::assert_eq;
@@ -832,6 +833,36 @@ fn patch_sections_allow_unhashed_create_headers() {
             },
         ]
     );
+}
+
+#[test]
+fn create_sections_split_new_headers_after_payload_and_escape_brackets() {
+    let sections = split_hashline_patch_sections_for_create(
+        "fallback.txt",
+        "[a.txt]\nINS.TAIL:\n+alpha\n[b.txt]\nINS.TAIL:\n+beta",
+    )
+    .expect("create sections should recognize a new header after payload");
+
+    assert_eq!(
+        sections,
+        vec![
+            HashlinePatchSection {
+                path: "a.txt".to_string(),
+                expected_hash: None,
+                patch: "INS.TAIL:\n+alpha".to_string(),
+            },
+            HashlinePatchSection {
+                path: "b.txt".to_string(),
+                expected_hash: None,
+                patch: "INS.TAIL:\n+beta".to_string(),
+            },
+        ]
+    );
+
+    let escaped =
+        split_hashline_patch_sections_for_create("fallback.txt", "[a.txt]\nINS.TAIL:\n+[literal]")
+            .expect("create payloads should require + for bracket-shaped literals");
+    assert_eq!(escaped[0].patch, "INS.TAIL:\n+[literal]");
 }
 
 #[test]

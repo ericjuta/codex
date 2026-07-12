@@ -372,9 +372,30 @@ pub(super) fn validate_file_hash(
     }
     Ok(())
 }
+#[derive(Clone, Copy)]
+enum HashlinePatchSectionMode {
+    Standard,
+    Create,
+}
+
 pub(super) fn split_hashline_patch_sections(
     default_path: &str,
     patch: &str,
+) -> Result<Vec<HashlinePatchSection>, FunctionCallError> {
+    split_hashline_patch_sections_with_mode(default_path, patch, HashlinePatchSectionMode::Standard)
+}
+
+pub(super) fn split_hashline_patch_sections_for_create(
+    default_path: &str,
+    patch: &str,
+) -> Result<Vec<HashlinePatchSection>, FunctionCallError> {
+    split_hashline_patch_sections_with_mode(default_path, patch, HashlinePatchSectionMode::Create)
+}
+
+fn split_hashline_patch_sections_with_mode(
+    default_path: &str,
+    patch: &str,
+    mode: HashlinePatchSectionMode,
 ) -> Result<Vec<HashlinePatchSection>, FunctionCallError> {
     let mut has_header = false;
     let mut payload_active = false;
@@ -401,7 +422,7 @@ pub(super) fn split_hashline_patch_sections(
     for raw_line in patch.lines() {
         let line = raw_line.trim_end_matches('\r');
         if let Some((path, expected_hash)) =
-            parse_contextual_section_header(default_path, line, payload_active, &sections)?
+            parse_contextual_section_header(default_path, line, payload_active, &sections, mode)?
         {
             let section_index = match sections.iter().position(|section| section.path == path) {
                 Some(index) => {
@@ -924,6 +945,7 @@ fn parse_contextual_section_header(
     line: &str,
     payload_active: bool,
     sections: &[HashlinePatchSection],
+    mode: HashlinePatchSectionMode,
 ) -> Result<Option<(String, Option<String>)>, FunctionCallError> {
     if !payload_active {
         return parse_contextual_patch_file_header(default_path, line, false);
@@ -931,7 +953,8 @@ fn parse_contextual_section_header(
     let Some((path, expected_hash)) = parse_patch_file_header(default_path, line)? else {
         return Ok(None);
     };
-    if expected_hash.is_some()
+    if matches!(mode, HashlinePatchSectionMode::Create)
+        || expected_hash.is_some()
         || path == default_path
         || sections.iter().any(|section| section.path == path)
     {
