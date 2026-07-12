@@ -4,6 +4,7 @@ use super::build_hashline_read_body;
 use super::hashline_block::find_block_span;
 use super::hashline_block::find_normalized_block_span;
 use super::hashline_block::language_for_path;
+use super::hashline_format::json_escaped_content_len_bounded;
 use super::hashline_format::split_lines_preserve;
 use super::hashline_hash::hash_hex;
 use super::hashline_hash::line_hash;
@@ -501,6 +502,22 @@ fn read_body_bounds_serialized_output_by_bytes() {
     );
     assert_eq!(many_lines_body["truncated"], json!(true));
     assert!(many_lines_body["next_start_line"].as_u64().is_some());
+}
+
+#[test]
+fn json_escape_heavy_byte_accounting_matches_serde_json_at_boundary() {
+    let value = "\"\\\u{0000}\u{001f}\n\r\té🦀".repeat(32);
+    let serialized = serde_json::to_string(&value).expect("escape-heavy value should serialize");
+    let escaped_content_bytes = serialized.len() - 2;
+
+    assert_eq!(
+        json_escaped_content_len_bounded(&value, escaped_content_bytes),
+        Some(escaped_content_bytes)
+    );
+    assert_eq!(
+        json_escaped_content_len_bounded(&value, escaped_content_bytes - 1),
+        None
+    );
 }
 
 #[test]

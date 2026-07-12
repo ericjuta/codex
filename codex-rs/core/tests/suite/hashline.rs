@@ -36,6 +36,46 @@ fn hashline_line_hash(line: &str) -> String {
     format!("{:04x}", xxh32(line.as_bytes(), 0) & 0xffff)
 }
 
+async fn run_hashline_tool(
+    harness: &TestCodexHarness,
+    call_id: &str,
+    tool_name: &str,
+    arguments: &Value,
+    prompt: &str,
+) -> anyhow::Result<String> {
+    let response_id = format!("{call_id}-response");
+    mount_sse_once(
+        harness.server(),
+        sse(vec![
+            ev_response_created(&response_id),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                tool_name,
+                &serde_json::to_string(arguments)?,
+            ),
+            ev_completed(&response_id),
+        ]),
+    )
+    .await;
+
+    let final_response_id = format!("{call_id}-final-response");
+    let final_mock = mount_sse_once(
+        harness.server(),
+        sse(vec![
+            ev_assistant_message(&format!("{call_id}-message"), "hashline test call complete"),
+            ev_completed(&final_response_id),
+        ]),
+    )
+    .await;
+
+    harness.submit(prompt).await?;
+    Ok(final_mock
+        .single_request()
+        .function_call_output_text(call_id)
+        .expect("hashline output should be sent to model"))
+}
+
 async fn submit_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
     let cwd = test.cwd.abs();
     let (sandbox_policy, permission_profile) =
@@ -2323,6 +2363,436 @@ async fn hashline_only_keeps_apply_patch_dispatch_for_compatibility() -> anyhow:
     .await;
 
     assert_eq!(fs::read_to_string(file_path)?, "legacy compatibility\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_review_multi_file_stale_final_section_is_atomic() -> anyhow::Result<()> {
+    let harness = TestCodexHarness::with_auto_env_builder(test_codex().with_config(|config| {
+        config.hashline.enabled = true;
+    }))
+    .await?;
+
+    let update_name = "hashline-atomic-update.txt";
+    let remove_name = "hashline-atomic-remove.txt";
+    let rename_name = "hashline-atomic-rename.txt";
+    let renamed_name = "hashline-atomic-renamed.txt";
+    let update_contents = "alpha\nbeta\n";
+    let remove_contents = "remove me\n";
+    let rename_contents = "rename me\n";
+    harness.write_file(update_name, update_contents).await?;
+    harness.write_file(remove_name, remove_contents).await?;
+    harness.write_file(rename_name, rename_contents).await?;
+
+    let rename_hash = hashline_file_hash(rename_contents);
+    let stale_rename_hash = if rename_hash == "00000000" {
+        "00000001"
+    } else {
+        "00000000"
+    };
+    let patch_args = json!({
+        "path": update_name,
+        "patch": format!(
+            "[{update_name}]#{}\nSWAP 2:{}\n+bravo\n[{remove_name}]#{}\nREM\n[{rename_name}]#{stale_rename_hash}\nMV {renamed_name}",
+            hashline_file_hash(update_contents),
+            hashline_line_hash("beta"),
+            hashline_file_hash(remove_contents),
+        ),
+    });
+
+    let output = run_hashline_tool(
+        &harness,
+        "hashline-atomic-stale-call",
+        "patch",
+        &patch_args,
+        "try the multi-file patch with the stale final section",
+    )
+    .await?;
+
+    assert!(output.contains("file hash mismatch"));
+    assert_eq!(harness.read_file_text(update_name).await?, update_contents);
+    assert_eq!(harness.read_file_text(remove_name).await?, remove_contents);
+    assert_eq!(harness.read_file_text(rename_name).await?, rename_contents);
+    assert!(!harness.path_exists(renamed_name).await?);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_review_bom_mixed_endings_cardinality_edit_preserves_exact_bytes()
+-> anyhow::Result<()> {
+    let harness = TestCodexHarness::with_auto_env_builder(test_codex().with_config(|config| {
+        config.hashline.enabled = true;
+    }))
+    .await?;
+
+    let file_name = "hashline-bom-mixed-endings.txt";
+    let original = "\u{feff}alpha\r\nbeta\ngamma\rdelta\n";
+    let normalized = "alpha\nbeta\ngamma\ndelta\n";
+    let expected = "\u{feff}alpha\r\nbravo\ncharlie\ngamma\rdelta\n";
+    harness.write_file(file_name, original).await?;
+    let patch_args = json!({
+        "path": file_name,
+        "patch": format!(
+            "[{file_name}]#{}\nSWAP 2:{}:\n+bravo\n+charlie",
+            hashline_file_hash(normalized),
+            hashline_line_hash("beta"),
+        ),
+    });
+
+    let output = run_hashline_tool(
+        &harness,
+        "hashline-bom-mixed-call",
+        "patch",
+        &patch_args,
+        "apply the mixed-ending cardinality edit",
+    )
+    .await?;
+
+    assert_eq!(
+        serde_json::from_str::<Value>(&output)?["success"],
+        json!(true)
+    );
+    let actual = harness.read_file_text(file_name).await?;
+    assert_eq!(actual.as_bytes(), expected.as_bytes());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_review_multi_file_detail_budget_bounds_dry_run_and_applied_output()
+-> anyhow::Result<()> {
+    const FILE_COUNT: usize = 32;
+
+    let harness = TestCodexHarness::with_auto_env_builder(test_codex().with_config(|config| {
+        config.hashline.enabled = true;
+    }))
+    .await?;
+
+    let mut dry_patch = String::new();
+    let mut applied_patch = String::new();
+    let mut dry_files = Vec::new();
+    let mut applied_files = Vec::new();
+    for index in 0..FILE_COUNT {
+        let dry_name = format!("hashline-budget-dry-{index}.txt");
+        let applied_name = format!("hashline-budget-applied-{index}.txt");
+        let old_contents = format!("old-{index}-{}\n", "x".repeat(6_000));
+        let new_contents = format!("new-{index}-{}\n", "y".repeat(6_000));
+        harness.write_file(&dry_name, &old_contents).await?;
+        harness.write_file(&applied_name, &old_contents).await?;
+        let section = |name: &str| {
+            format!(
+                "[{name}]#{}\nSWAP 1:{}:\n+{}",
+                hashline_file_hash(&old_contents),
+                hashline_line_hash(old_contents.trim_end()),
+                new_contents.trim_end(),
+            )
+        };
+        if index > 0 {
+            dry_patch.push('\n');
+            applied_patch.push('\n');
+        }
+        dry_patch.push_str(&section(&dry_name));
+        applied_patch.push_str(&section(&applied_name));
+        dry_files.push((dry_name, old_contents.clone()));
+        applied_files.push((applied_name, new_contents));
+    }
+
+    let dry_output = run_hashline_tool(
+        &harness,
+        "hashline-budget-dry-call",
+        "patch",
+        &json!({
+            "path": dry_files[0].0,
+            "patch": dry_patch,
+            "dry_run": true,
+        }),
+        "dry-run the oversized multi-file details",
+    )
+    .await?;
+    let applied_output = run_hashline_tool(
+        &harness,
+        "hashline-budget-applied-call",
+        "patch",
+        &json!({
+            "path": applied_files[0].0,
+            "patch": applied_patch,
+        }),
+        "apply the oversized multi-file details",
+    )
+    .await?;
+
+    for (output, dry_run) in [(&dry_output, true), (&applied_output, false)] {
+        let body: Value = serde_json::from_str(output)?;
+        let files = body["files"]
+            .as_array()
+            .expect("multi-file output should contain bounded details");
+        assert_eq!(body["success"], json!(true));
+        assert_eq!(body["total_files"], json!(FILE_COUNT));
+        assert_eq!(
+            body["files_truncated"],
+            json!(true),
+            "dry_run={dry_run}, returned {} of {FILE_COUNT} details",
+            files.len()
+        );
+        assert!(!files.is_empty());
+        assert!(files.len() < FILE_COUNT);
+        assert!(serde_json::to_vec(&body["files"])?.len() <= 24 * 1024);
+        assert!(
+            output.len() <= 26 * 1024,
+            "output was {} bytes",
+            output.len()
+        );
+        if dry_run {
+            assert_eq!(body["dry_run"], json!(true));
+        } else {
+            assert!(body.get("dry_run").is_none());
+        }
+    }
+    for (name, original) in dry_files {
+        assert_eq!(harness.read_file_text(name).await?, original);
+    }
+    for (name, expected) in applied_files {
+        assert_eq!(harness.read_file_text(name).await?, expected);
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_review_single_section_remove_rename_and_rename_with_edit() -> anyhow::Result<()> {
+    let harness = TestCodexHarness::with_auto_env_builder(test_codex().with_config(|config| {
+        config.hashline.enabled = true;
+    }))
+    .await?;
+
+    let remove_name = "hashline-single-remove.txt";
+    let rename_name = "hashline-single-rename.txt";
+    let renamed_name = "hashline-single-renamed.txt";
+    let edit_name = "hashline-single-rename-edit.txt";
+    let edited_name = "hashline-single-renamed-edited.txt";
+    let remove_contents = "remove me\n";
+    let rename_contents = "rename me\n";
+    let edit_contents = "before\nchange me\n";
+    harness.write_file(remove_name, remove_contents).await?;
+    harness.write_file(rename_name, rename_contents).await?;
+    harness.write_file(edit_name, edit_contents).await?;
+
+    let remove_output = run_hashline_tool(
+        &harness,
+        "hashline-single-remove-call",
+        "patch",
+        &json!({
+            "path": remove_name,
+            "patch": format!("[{remove_name}]#{}\nREM", hashline_file_hash(remove_contents)),
+        }),
+        "remove one file through a single patch section",
+    )
+    .await?;
+    let rename_output = run_hashline_tool(
+        &harness,
+        "hashline-single-rename-call",
+        "patch",
+        &json!({
+            "path": rename_name,
+            "patch": format!(
+                "[{rename_name}]#{}\nMV {renamed_name}",
+                hashline_file_hash(rename_contents),
+            ),
+        }),
+        "rename one file through a single patch section",
+    )
+    .await?;
+    let edit_output = run_hashline_tool(
+        &harness,
+        "hashline-single-rename-edit-call",
+        "patch",
+        &json!({
+            "path": edit_name,
+            "patch": format!(
+                "[{edit_name}]#{}\nMV {edited_name}\nSWAP 2:{}\n+changed",
+                hashline_file_hash(edit_contents),
+                hashline_line_hash("change me"),
+            ),
+        }),
+        "rename and edit one file through a single patch section",
+    )
+    .await?;
+
+    assert!(!harness.path_exists(remove_name).await?);
+    assert!(!harness.path_exists(rename_name).await?);
+    assert_eq!(harness.read_file_text(renamed_name).await?, rename_contents);
+    assert!(!harness.path_exists(edit_name).await?);
+    assert_eq!(
+        harness.read_file_text(edited_name).await?,
+        "before\nchanged\n"
+    );
+    for output in [&remove_output, &rename_output, &edit_output] {
+        assert_eq!(
+            serde_json::from_str::<Value>(output)?["success"],
+            json!(true)
+        );
+    }
+    assert_eq!(
+        serde_json::from_str::<Value>(&remove_output)?["operation"],
+        json!("remove_file")
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&rename_output)?["operation"],
+        json!("rename_file")
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&edit_output)?["operation"],
+        json!("rename_file")
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_review_direct_rename_rejects_stale_hash() -> anyhow::Result<()> {
+    let harness = TestCodexHarness::with_auto_env_builder(test_codex().with_config(|config| {
+        config.hashline.enabled = true;
+    }))
+    .await?;
+
+    let old_name = "hashline-direct-stale-rename.txt";
+    let new_name = "hashline-direct-stale-renamed.txt";
+    let original = "before\n";
+    let changed = "changed\n";
+    harness.write_file(old_name, original).await?;
+    let stale_hash = hashline_file_hash(original);
+    harness.write_file(old_name, changed).await?;
+
+    let output = run_hashline_tool(
+        &harness,
+        "hashline-direct-stale-rename-call",
+        "rename_file",
+        &json!({
+            "path": old_name,
+            "new_path": new_name,
+            "expected_hash": stale_hash,
+        }),
+        "rename with the stale hash",
+    )
+    .await?;
+
+    assert!(output.contains("file hash mismatch"));
+    assert_eq!(harness.read_file_text(old_name).await?, changed);
+    assert!(!harness.path_exists(new_name).await?);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_review_truncated_find_block_keeps_full_span_and_replayable_anchor()
+-> anyhow::Result<()> {
+    let harness = TestCodexHarness::with_auto_env_builder(test_codex().with_config(|config| {
+        config.hashline.enabled = true;
+    }))
+    .await?;
+
+    let file_name = "hashline-oversized-block.rs";
+    let anchor_line = format!("    let value_000 = \"{}\";", "x".repeat(120));
+    let mut contents = String::from("fn oversized() {\n");
+    contents.push_str(&anchor_line);
+    contents.push('\n');
+    for index in 1..350 {
+        contents.push_str(&format!(
+            "    let value_{index:03} = \"{}\";\n",
+            "x".repeat(120)
+        ));
+    }
+    contents.push_str("}\n");
+    harness.write_file(file_name, &contents).await?;
+
+    let first_output = run_hashline_tool(
+        &harness,
+        "hashline-oversized-find-call",
+        "find_block",
+        &json!({
+            "path": file_name,
+            "anchor": format!("2:{}", hashline_line_hash(&anchor_line)),
+            "max_lines": 300,
+        }),
+        "find the oversized block",
+    )
+    .await?;
+    let first: Value = serde_json::from_str(&first_output)?;
+    let replay_anchor = first["block_anchor"]
+        .as_str()
+        .expect("find_block should return a replayable block anchor");
+
+    assert_eq!(first["start_line"], json!(1));
+    assert_eq!(first["end_line"], json!(352));
+    assert_eq!(first["line_count"], json!(352));
+    assert_eq!(first["truncated"], json!(true));
+    assert!(
+        first["block_lines"]
+            .as_array()
+            .is_some_and(|lines| lines.len() < 352)
+    );
+    assert!(
+        first_output.len() <= 26 * 1024,
+        "find_block output was {} bytes",
+        first_output.len()
+    );
+
+    let file_header = first["header"]
+        .as_str()
+        .expect("find_block should return a replayable file header");
+    let replay_output = run_hashline_tool(
+        &harness,
+        "hashline-oversized-find-replay-call",
+        "patch",
+        &json!({
+            "path": file_name,
+            "patch": format!(
+                "{file_header}\nSWAP.BLK {replay_anchor}:\n+fn replacement() {{\n+}}"
+            ),
+        }),
+        "replace the oversized block with its replayable anchor",
+    )
+    .await?;
+    let replay: Value = serde_json::from_str(&replay_output)?;
+    assert_eq!(replay["success"], json!(true));
+    assert_eq!(
+        harness.read_file_text(file_name).await?,
+        "fn replacement() {\n}\n"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_review_actual_bracket_hash_path_edits_end_to_end() -> anyhow::Result<()> {
+    let harness = TestCodexHarness::with_auto_env_builder(test_codex().with_config(|config| {
+        config.hashline.enabled = true;
+    }))
+    .await?;
+
+    let file_name = "hashline]#actual.txt";
+    let original = "alpha\nbeta\n";
+    harness.write_file(file_name, original).await?;
+    let output = run_hashline_tool(
+        &harness,
+        "hashline-bracket-hash-path-call",
+        "patch",
+        &json!({
+            "path": file_name,
+            "patch": format!(
+                "[{file_name}]#{}\nSWAP 2:{}\n+bravo",
+                hashline_file_hash(original),
+                hashline_line_hash("beta"),
+            ),
+        }),
+        "edit the actual bracket-hash path",
+    )
+    .await?;
+
+    assert_eq!(harness.read_file_text(file_name).await?, "alpha\nbravo\n");
+    let body: Value = serde_json::from_str(&output)?;
+    assert_eq!(body["success"], json!(true));
+    assert_eq!(body["path"], json!(file_name));
+    assert!(
+        body["header"]
+            .as_str()
+            .is_some_and(|header| header.starts_with(&format!("[{file_name}]#")))
+    );
     Ok(())
 }
 
