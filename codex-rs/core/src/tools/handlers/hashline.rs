@@ -28,7 +28,7 @@ mod hashline_hash;
 #[path = "hashline_patch.rs"]
 mod hashline_patch;
 
-use self::hashline_block::find_block_span;
+use self::hashline_block::find_normalized_block_span;
 use self::hashline_block::language_for_path;
 use self::hashline_format::build_hashline_excerpt;
 use self::hashline_format::split_lines_preserve;
@@ -778,7 +778,7 @@ async fn handle_find_block(
         .max_lines
         .unwrap_or(DEFAULT_FIND_BLOCK_MAX_LINES)
         .clamp(1, HARD_FIND_BLOCK_MAX_LINES);
-    let (block_start, block_end) = find_block_span(&args.path, &lines, anchor_line);
+    let (block_start, block_end) = find_normalized_block_span(&args.path, &lines, anchor_line);
     let capped_end = block_end.min(block_start.saturating_add(max_lines).saturating_sub(1));
     let excerpt = build_hashline_excerpt(
         &lines,
@@ -852,7 +852,7 @@ fn resolve_find_block_anchor(
                 "invalid Hashline block anchor {anchor}: expected a {FILE_HASH_WIDTH}-hex block hash"
             )));
         }
-        let (block_start, block_end) = find_block_span(path, lines, anchor_line);
+        let (block_start, block_end) = find_normalized_block_span(path, lines, anchor_line);
         let actual_block_hash = hash_hex(&lines[block_start - 1..block_end].join("\n"));
         if actual_block_hash != block_hash {
             return Err(FunctionCallError::RespondToModel(format!(

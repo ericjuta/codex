@@ -25,6 +25,18 @@ pub(super) fn find_block_span(path: &str, lines: &[&str], anchor_line: usize) ->
     find_indent_block_span(lines, anchor_line)
 }
 
+pub(super) fn find_normalized_block_span(
+    path: &str,
+    lines: &[&str],
+    anchor_line: usize,
+) -> (usize, usize) {
+    let (start, mut end) = find_block_span(path, lines, anchor_line);
+    while end > start && lines[end - 1].trim().is_empty() {
+        end -= 1;
+    }
+    (start, end)
+}
+
 pub(super) fn language_for_path(path: &str) -> &'static str {
     match extension(path) {
         Some("rs") => "Rust",

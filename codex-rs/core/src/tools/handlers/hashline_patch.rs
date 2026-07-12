@@ -2,7 +2,7 @@ use crate::function_tool::FunctionCallError;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Serialize;
 
-use super::hashline_block::find_block_span;
+use super::hashline_block::find_normalized_block_span;
 use super::hashline_format::json_escaped_content_len_bounded;
 use super::hashline_format::split_lines_preserve;
 use super::hashline_hash::FILE_HASH_WIDTH;
@@ -370,10 +370,14 @@ pub(super) fn split_hashline_patch_sections(
     patch: &str,
 ) -> Result<Vec<HashlinePatchSection>, FunctionCallError> {
     let mut has_header = false;
+    let mut payload_active = false;
     for line in patch.lines() {
-        if parse_patch_file_header(default_path, line)?.is_some() {
+        if parse_contextual_patch_file_header(default_path, line, payload_active)?.is_some() {
             has_header = true;
             break;
+        }
+        if is_hashline_operation_line(line) {
+            payload_active = hashline_operation_has_payload(line);
         }
     }
     if !has_header {
@@ -386,9 +390,12 @@ pub(super) fn split_hashline_patch_sections(
 
     let mut sections = Vec::<HashlinePatchSection>::new();
     let mut current_index = None;
+    let mut payload_active = false;
     for raw_line in patch.lines() {
         let line = raw_line.trim_end_matches('\r');
-        if let Some((path, expected_hash)) = parse_patch_file_header(default_path, line)? {
+        if let Some((path, expected_hash)) =
+            parse_contextual_section_header(default_path, line, payload_active, &sections)?
+        {
             let section_index = match sections.iter().position(|section| section.path == path) {
                 Some(index) => {
                     merge_section_hash(&mut sections[index], expected_hash)?;
@@ -404,6 +411,7 @@ pub(super) fn split_hashline_patch_sections(
                 }
             };
             current_index = Some(section_index);
+            payload_active = false;
             continue;
         }
 
@@ -423,6 +431,9 @@ pub(super) fn split_hashline_patch_sections(
             sections[section_index].patch.push('\n');
         }
         sections[section_index].patch.push_str(line);
+        if is_hashline_operation_line(line) {
+            payload_active = hashline_operation_has_payload(line);
+        }
     }
 
     if sections.is_empty() {
@@ -530,29 +541,36 @@ fn validate_patch_headers(
     patch: &str,
 ) -> Result<(), FunctionCallError> {
     let mut section_hash = None;
+    let mut payload_active = false;
     for raw_line in patch.lines() {
         let line = raw_line.trim();
-        let Some((header_path, expected_hash)) = parse_patch_file_header(path, line)? else {
-            continue;
-        };
-        if header_path != path {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "Hashline file header path {header_path} does not match target path {path}; this single-file patch application only accepts headers for {path}"
-            )));
-        }
-        let Some(expected_hash) = expected_hash else {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "existing-file Hashline patches require a [{path}]#HASH header"
-            )));
-        };
-        match &section_hash {
-            Some(previous_hash) if previous_hash != &expected_hash => {
+        if let Some((header_path, expected_hash)) =
+            parse_contextual_patch_file_header(path, line, payload_active)?
+        {
+            payload_active = false;
+            if header_path != path {
                 return Err(FunctionCallError::RespondToModel(format!(
-                    "conflicting hash tags for {path}: {previous_hash} vs {expected_hash}"
+                    "Hashline file header path {header_path} does not match target path {path}; this single-file patch application only accepts headers for {path}"
                 )));
             }
-            None => section_hash = Some(expected_hash),
-            Some(_) => {}
+            let Some(expected_hash) = expected_hash else {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "existing-file Hashline patches require a [{path}]#HASH header"
+                )));
+            };
+            match &section_hash {
+                Some(previous_hash) if previous_hash != &expected_hash => {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "conflicting hash tags for {path}: {previous_hash} vs {expected_hash}"
+                    )));
+                }
+                None => section_hash = Some(expected_hash),
+                Some(_) => {}
+            }
+            continue;
+        }
+        if is_hashline_operation_line(line) {
+            payload_active = hashline_operation_has_payload(line);
         }
     }
     if let Some(expected_hash) = section_hash {
@@ -585,7 +603,7 @@ fn parse_hashline_patch(patch: &str) -> Result<Vec<HashlineOperation>, FunctionC
             index += 1;
             continue;
         }
-        if line.starts_with('[') && parse_patch_file_header("", line)?.is_some() {
+        if line.starts_with('[') && parse_contextual_patch_file_header("", line, false)?.is_some() {
             index += 1;
             continue;
         }
@@ -721,7 +739,7 @@ fn collect_payload_lines(
             }
             break;
         }
-        if line.starts_with('[') && parse_patch_file_header("", line)?.is_some() {
+        if parse_contextual_patch_file_header("", line, true)?.is_some() {
             break;
         }
         if let Some(message) = apply_patch_contamination_message(line) {
@@ -857,6 +875,63 @@ fn is_hashline_operation_line(line: &str) -> bool {
             | "REM"
             | "MV"
     )
+}
+
+fn hashline_operation_has_payload(line: &str) -> bool {
+    let Ok((op, rest)) = split_hashline_operation(line) else {
+        return false;
+    };
+    !rest.contains('|')
+        && matches!(
+            op.to_ascii_uppercase().as_str(),
+            "SWAP"
+                | "INS.PRE"
+                | "INS.POST"
+                | "INS.HEAD"
+                | "INS.TAIL"
+                | "SWAP.BLK"
+                | "INS.BLK"
+                | "INS.BLK.POST"
+                | "INS.BLK.PRE"
+        )
+}
+
+fn parse_contextual_patch_file_header(
+    target_path: &str,
+    line: &str,
+    payload_active: bool,
+) -> Result<Option<(String, Option<String>)>, FunctionCallError> {
+    let trimmed = line.trim();
+    let is_strong_header = trimmed.contains("]#")
+        || trimmed
+            .strip_prefix('[')
+            .is_some_and(|inner| inner.starts_with('*'));
+    if payload_active && !is_strong_header {
+        return Ok(None);
+    }
+    parse_patch_file_header(target_path, line)
+}
+
+fn parse_contextual_section_header(
+    default_path: &str,
+    line: &str,
+    payload_active: bool,
+    sections: &[HashlinePatchSection],
+) -> Result<Option<(String, Option<String>)>, FunctionCallError> {
+    if !payload_active {
+        return parse_contextual_patch_file_header(default_path, line, false);
+    }
+    let Some((path, expected_hash)) = parse_patch_file_header(default_path, line)? else {
+        return Ok(None);
+    };
+    if expected_hash.is_some()
+        || path == default_path
+        || sections.iter().any(|section| section.path == path)
+    {
+        Ok(Some((path, expected_hash)))
+    } else {
+        Ok(None)
+    }
 }
 
 fn validate_empty_target(rest: &str, op: &str) -> Result<(), FunctionCallError> {
@@ -1222,11 +1297,7 @@ fn block_span(
         )));
     }
     let refs = lines.iter().map(AsRef::as_ref).collect::<Vec<_>>();
-    let (start, mut end) = find_block_span(path, &refs, anchor_line);
-    while end > start && refs[end - 1].trim().is_empty() {
-        end -= 1;
-    }
-    Ok((start, end))
+    Ok(find_normalized_block_span(path, &refs, anchor_line))
 }
 
 fn validate_block_hash(

@@ -2,6 +2,7 @@ use super::apply_hashline_patch_or_create_empty;
 use super::build_hashline_patch_success_body;
 use super::build_hashline_read_body;
 use super::hashline_block::find_block_span;
+use super::hashline_block::find_normalized_block_span;
 use super::hashline_block::language_for_path;
 use super::hashline_format::split_lines_preserve;
 use super::hashline_hash::hash_hex;
@@ -624,6 +625,30 @@ fn patch_accepts_matching_file_header() {
     let updated = apply_hashline_patch("notes.txt", original, &patch).expect("patch should apply");
 
     assert_eq!(updated, "alpha\nbravo\ngamma\n");
+}
+
+#[test]
+fn patch_preserves_bare_bracket_payload_lines() {
+    let original = "alpha\n";
+    let patch = format!(
+        "[notes.txt]#{}\nSWAP 1:{}\n[literal]",
+        hash_hex(original),
+        line_hash("alpha")
+    );
+
+    assert_eq!(
+        split_hashline_patch_sections("notes.txt", &patch)
+            .expect("bare bracket payload should remain in the file section"),
+        vec![HashlinePatchSection {
+            path: "notes.txt".to_string(),
+            expected_hash: Some(hash_hex(original)),
+            patch: format!("SWAP 1:{}\n[literal]", line_hash("alpha")),
+        }]
+    );
+    assert_eq!(
+        apply_hashline_patch("notes.txt", original, &patch).expect("patch should apply"),
+        "[literal]\n"
+    );
 }
 
 #[test]
@@ -1696,6 +1721,29 @@ fn find_block_anchor_round_trips_from_find_block_output() {
     let path = "src/main.rs";
     let lines = vec!["fn main() {", "    work();", "}"];
     let (block_start, block_end) = find_block_span(path, &lines, 2);
+    let block_hash = hash_hex(&lines[block_start - 1..block_end].join("\n"));
+    let anchor = format!("2:{}@{block_hash}", line_hash(lines[1]));
+
+    assert_eq!(
+        resolve_find_block_anchor(path, &anchor, &lines)
+            .expect("find_block block anchor should round-trip"),
+        2
+    );
+}
+
+#[test]
+fn find_block_anchor_round_trips_trailing_blank_lines() {
+    let path = "src/main.py";
+    let lines = vec![
+        "def hello():",
+        "    return 1",
+        "",
+        "def next():",
+        "    pass",
+    ];
+    assert_eq!(find_block_span(path, &lines, 2), (1, 3));
+    let (block_start, block_end) = find_normalized_block_span(path, &lines, 2);
+    assert_eq!((block_start, block_end), (1, 2));
     let block_hash = hash_hex(&lines[block_start - 1..block_end].join("\n"));
     let anchor = format!("2:{}@{block_hash}", line_hash(lines[1]));
 
