@@ -1,6 +1,7 @@
 # Prompt Caching Observability and Stabilization Spec
 
-Status: measurement-first design, based on the July 12, 2026 prompt-cache audit.
+Status: Stage 1 implemented; Stage 2 live baseline pending, based on the July 12,
+2026 prompt-cache audit.
 
 This spec defines how Codex should measure provider prompt-cache behavior before
 changing prompt assembly, tool ordering, or cache-key scope. The immediate goal
@@ -19,6 +20,27 @@ The first implementation slice is a request-level observation ledger containing
 bounded digests and provider usage. A later change is justified only when the
 ledger shows a repeated miss pattern and the provider's cached-token counts
 show material input-token impact.
+
+## Implementation Status
+
+Stage 1 is implemented at the model-client boundary in commit `627072e855`:
+
+- HTTP Responses, WebSocket, reused WebSocket, warmup, retry, and fallback
+  requests emit bounded observations after request-item preparation.
+- HMAC-SHA256 digests cover the cache key, instructions, ordered tools, tool
+  set, ordered input, and bounded input-prefix comparisons without recording
+  raw model-visible values.
+- Completion, provider-error, transport-error, cancellation, and stream-close
+  outcomes record provider usage, cache ratio, and TTFT when available.
+- Synthetic tests cover redaction, stable-surface changes, tool reordering,
+  input deltas, rebuild boundaries, transport reuse, provider usage, and caps.
+
+The initial request-class enum is intentionally small: `normal`, `tool_heavy`,
+`prewarm`, and `retry`. Guardian isolation is represented by the
+`guardian_parent` key scope. Compaction, resume, fork, MCP, skill, plugin, and
+subagent paths do not yet have distinct request classes or a provider-backed
+baseline; they remain Stage 2 measurement work. No prompt-assembly or cache-key
+change is justified until that baseline shows a repeatable client-side miss.
 
 ## Goals
 
@@ -157,23 +179,24 @@ is unavailable, report the lane as unmeasured rather than estimating it.
 
 ## Implementation Stages
 
-### Stage 1: ledger and synthetic proof
+### Stage 1: ledger and synthetic proof (implemented)
 
-- Add a request observation type at the model-client boundary.
-- Compute bounded digests after request preparation and before transport send.
-- Record provider usage and TTFT at completion or failure.
-- Add mocked tests that vary exactly one stable property, tool order, input
-  item, context delta, transport path, and rebuild boundary.
-- Keep ledger output local or explicitly sampled; do not add digest labels to
-  metrics.
+- [x] Add a request observation type at the model-client boundary.
+- [x] Compute bounded digests after request preparation and before transport
+  send.
+- [x] Record provider usage and TTFT at completion or failure.
+- [x] Add synthetic tests that vary exactly one stable property, tool order,
+  input item, context delta, transport path, and rebuild boundary.
+- [x] Keep ledger output local or explicitly sampled; do not add digest labels
+  to metrics.
 
-### Stage 2: controlled live baseline
+### Stage 2: controlled live baseline (pending)
 
-- Run the measurement matrix against a provider path that reports cached input
-  tokens.
-- Compare cache ratios and TTFT by class and transport.
-- Retain only aggregate results and redacted, bounded attribution data in the
-  report.
+- [ ] Run the measurement matrix against a provider path that reports cached
+  input tokens.
+- [ ] Compare cache ratios and TTFT by class and transport.
+- [ ] Retain only aggregate results and redacted, bounded attribution data in
+  the report.
 
 ### Stage 3: smallest confirmed fix
 
