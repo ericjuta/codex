@@ -16,6 +16,7 @@ use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
@@ -133,22 +134,20 @@ async fn submit_turn_with_read_only_approval(test: &TestCodex, prompt: &str) -> 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
-    let server = start_mock_server().await;
-    let test = test_codex()
-        .with_config(|config| {
-            config.hashline.enabled = true;
-        })
-        .build(&server)
-        .await?;
+    let harness = TestCodexHarness::with_auto_env_builder(test_codex().with_config(|config| {
+        config.hashline.enabled = true;
+    }))
+    .await?;
+    let server = harness.server();
 
     let file_name = "hashline-notes.txt";
-    let file_path = test.cwd.path().join(file_name);
-    fs::write(&file_path, "alpha\r\nbeta\r\ngamma\r\n")?;
+    harness
+        .write_file(file_name, "alpha\r\nbeta\r\ngamma\r\n")
+        .await?;
     let bounded_file_name = "hashline-long-line.txt";
-    fs::write(
-        test.cwd.path().join(bounded_file_name),
-        "\u{1f642}".repeat(100_000),
-    )?;
+    harness
+        .write_file(bounded_file_name, "\u{1f642}".repeat(100_000))
+        .await?;
 
     let read_args = json!({
         "path": file_name,
@@ -158,15 +157,8 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
     let bounded_read_args = json!({
         "path": bounded_file_name,
     });
-    let patch_args = json!({
-        "path": file_name,
-        "patch": format!(
-            "[{file_name}]#{}\nSWAP 2:f589|bravo",
-            hashline_file_hash("alpha\nbeta\ngamma\n")
-        )
-    });
     mount_sse_once(
-        &server,
+        server,
         sse(vec![
             ev_response_created("resp-1"),
             ev_function_call_with_namespace(
@@ -181,47 +173,48 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
                 "read",
                 &serde_json::to_string(&bounded_read_args)?,
             ),
-            ev_function_call_with_namespace(
-                "hashline-patch-call",
-                "hashline",
-                "patch",
-                &serde_json::to_string(&patch_args)?,
-            ),
             ev_completed("resp-1"),
         ]),
     )
     .await;
 
-    let final_mock = mount_sse_once(
-        &server,
+    let read_result_mock = mount_sse_once(
+        server,
         sse(vec![
-            ev_assistant_message("msg-1", "hashline edit complete"),
+            ev_assistant_message("msg-1", "hashline read complete"),
             ev_completed("resp-2"),
         ]),
     )
     .await;
 
-    submit_turn(&test, "read and update the file with hashline").await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+    harness.submit("read the file with hashline").await?;
 
-    assert_eq!(
-        fs::read_to_string(file_path)?,
-        "alpha\r\nbravo\r\ngamma\r\n"
-    );
-
-    let request = final_mock.single_request();
+    let request = read_result_mock.single_request();
     let read_output = request
         .function_call_output_text("hashline-read-call")
         .expect("read output should be sent to model");
-    assert!(read_output.contains("[hashline-notes.txt]#"));
-    assert!(read_output.contains("2:"));
-    assert!(read_output.contains("|beta"));
     let read_output: Value = serde_json::from_str(&read_output)?;
-    assert_eq!(read_output["truncated"], json!(false));
-    assert_eq!(read_output["next_start_line"], Value::Null);
+    let file_hash = hashline_file_hash("alpha\nbeta\ngamma\n");
+    let alpha_hash = hashline_line_hash("alpha");
+    let beta_hash = hashline_line_hash("beta");
+    assert_eq!(
+        read_output,
+        json!({
+            "path": file_name,
+            "hash": file_hash,
+            "header": format!("[{file_name}]#{file_hash}"),
+            "start_line": 1,
+            "end_line": 2,
+            "total_lines": 3,
+            "truncated": false,
+            "next_start_line": null,
+            "content": format!("1:{alpha_hash}|alpha\n2:{beta_hash}|beta"),
+            "lines": [
+                {"n": 1, "hash": alpha_hash},
+                {"n": 2, "hash": beta_hash},
+            ],
+        })
+    );
 
     let bounded_read_output = request
         .function_call_output_text("hashline-bounded-read-call")
@@ -234,15 +227,83 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
         json!(true)
     );
 
-    let patch_output = request
+    let patch_args = json!({
+        "path": file_name,
+        "patch": format!(
+            "{}\nSWAP {}:{}|bravo",
+            read_output["header"].as_str().expect("read header should be a string"),
+            read_output["lines"][1]["n"]
+                .as_u64()
+                .expect("read line number should be an integer"),
+            read_output["lines"][1]["hash"]
+                .as_str()
+                .expect("read line hash should be a string"),
+        ),
+    });
+    mount_sse_once(
+        server,
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_function_call_with_namespace(
+                "hashline-patch-call",
+                "hashline",
+                "patch",
+                &serde_json::to_string(&patch_args)?,
+            ),
+            ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+    let patch_result_mock = mount_sse_once(
+        server,
+        sse(vec![
+            ev_assistant_message("msg-2", "hashline edit complete"),
+            ev_completed("resp-4"),
+        ]),
+    )
+    .await;
+
+    harness
+        .submit("update the line using the hashline.read anchors")
+        .await?;
+
+    assert_eq!(
+        harness.read_file_text(file_name).await?,
+        "alpha\r\nbravo\r\ngamma\r\n"
+    );
+
+    let patch_output = patch_result_mock
+        .single_request()
         .function_call_output_text("hashline-patch-call")
         .expect("patch output should be sent to model");
-    assert!(patch_output.contains("\"success\":true"));
-    assert!(patch_output.contains(&format!("\"header\":\"[{file_name}]#")));
-    assert!(patch_output.contains("\"operation\":\"update\""));
-    assert!(patch_output.contains("|bravo"));
-    assert!(!patch_output.contains("\\r"));
-    assert!(patch_output.contains("\"preview\""));
+    let patch_output: Value = serde_json::from_str(&patch_output)?;
+    let new_hash = hashline_file_hash("alpha\nbravo\ngamma\n");
+    let bravo_hash = hashline_line_hash("bravo");
+    assert_eq!(
+        patch_output,
+        json!({
+            "success": true,
+            "path": file_name,
+            "header": format!("[{file_name}]#{new_hash}"),
+            "operation": "update",
+            "old_hash": read_output["hash"],
+            "new_hash": new_hash,
+            "start_line": 2,
+            "end_line": 2,
+            "total_lines": 3,
+            "truncated": false,
+            "content": format!("2:{bravo_hash}|bravo"),
+            "lines": [{"n": 2, "hash": bravo_hash}],
+            "preview": {
+                "old_start_line": 2,
+                "old_end_line": 2,
+                "new_start_line": 2,
+                "new_end_line": 2,
+                "truncated": false,
+                "content": format!("-2:{beta_hash}|beta\n+2:{bravo_hash}|bravo"),
+            },
+        })
+    );
 
     Ok(())
 }
@@ -372,31 +433,25 @@ async fn hashline_patch_abort_marker_does_not_write() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn hashline_find_block_reports_language_and_excerpt() -> anyhow::Result<()> {
-    let server = start_mock_server().await;
-    let test = test_codex()
-        .with_config(|config| {
-            config.hashline.enabled = true;
-        })
-        .build(&server)
-        .await?;
+async fn hashline_find_block_output_round_trips_to_swap_block() -> anyhow::Result<()> {
+    let harness = TestCodexHarness::with_auto_env_builder(test_codex().with_config(|config| {
+        config.hashline.enabled = true;
+    }))
+    .await?;
+    let server = harness.server();
 
-    let dir_path = test.cwd.path().join("src");
-    fs::create_dir_all(&dir_path)?;
     let file_name = "src/main.rs";
-    let file_path = test.cwd.path().join(file_name);
-    fs::write(
-        &file_path,
-        "fn main() {\r\n    if true {\r\n        println!(\"hi\");\r\n    }\r\n}\r\n",
-    )?;
+    let original = "fn main() {\r\n    if true {\r\n        println!(\"hi\");\r\n    }\r\n}\r\n";
+    harness.write_file(file_name, original).await?;
 
     let call_id = "hashline-find-block-call";
+    let anchor = format!("3:{}", hashline_line_hash("        println!(\"hi\");"));
     let find_args = json!({
         "path": file_name,
-        "anchor": format!("3:{}", hashline_line_hash("        println!(\"hi\");"))
+        "anchor": anchor,
     });
     mount_sse_once(
-        &server,
+        server,
         sse(vec![
             ev_response_created("resp-1"),
             ev_function_call_with_namespace(
@@ -410,8 +465,8 @@ async fn hashline_find_block_reports_language_and_excerpt() -> anyhow::Result<()
     )
     .await;
 
-    let final_mock = mount_sse_once(
-        &server,
+    let find_result_mock = mount_sse_once(
+        server,
         sse(vec![
             ev_assistant_message("msg-1", "hashline block found"),
             ev_completed("resp-2"),
@@ -419,92 +474,311 @@ async fn hashline_find_block_reports_language_and_excerpt() -> anyhow::Result<()
     )
     .await;
 
-    submit_turn(&test, "find the Rust block with hashline").await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+    harness.submit("find the Rust block with hashline").await?;
 
-    let request = final_mock.single_request();
+    let request = find_result_mock.single_request();
     let find_output = request
         .function_call_output_text(call_id)
         .expect("find_block output should be sent to model");
-    let find_output_json: Value = serde_json::from_str(&find_output)?;
-    assert!(find_output.contains("\"language\":\"Rust\""));
-    assert!(find_output.contains("\"start_line\":2"));
-    assert!(find_output.contains("\"end_line\":4"));
-    assert!(find_output.contains("3:"));
-    assert!(find_output.contains("println!"));
-    assert_eq!(find_output_json["file"], json!(file_name));
-    assert_eq!(find_output_json["line_count"], json!(5));
-    assert_eq!(find_output_json["block_lines"][1]["n"], json!(3));
+    let find_output: Value = serde_json::from_str(&find_output)?;
+    let normalized = "fn main() {\n    if true {\n        println!(\"hi\");\n    }\n}\n";
+    let block = "    if true {\n        println!(\"hi\");\n    }";
+    let block_hash = hashline_file_hash(block);
+    let line_two_hash = hashline_line_hash("    if true {");
+    let line_three_hash = hashline_line_hash("        println!(\"hi\");");
+    let line_four_hash = hashline_line_hash("    }");
+    let expected_block_anchor = format!("3:{line_three_hash}@{block_hash}");
     assert_eq!(
-        find_output_json["block_lines"][1]["hash"],
-        json!(hashline_line_hash("        println!(\"hi\");")),
+        find_output,
+        json!({
+            "file": file_name,
+            "path": file_name,
+            "hash": hashline_file_hash(normalized),
+            "header": format!("[{file_name}]#{}", hashline_file_hash(normalized)),
+            "block_hash": block_hash,
+            "block_anchor": expected_block_anchor,
+            "anchor": anchor,
+            "line_count": 5,
+            "language": "Rust",
+            "start_line": 2,
+            "end_line": 4,
+            "truncated": false,
+            "content": format!(
+                "2:{line_two_hash}|    if true {{\n3:{line_three_hash}|        println!(\"hi\");\n4:{line_four_hash}|    }}"
+            ),
+            "block_lines": [
+                {"n": 2, "hash": line_two_hash},
+                {"n": 3, "hash": line_three_hash},
+                {"n": 4, "hash": line_four_hash},
+            ],
+        })
     );
+
+    let patch_args = json!({
+        "path": file_name,
+        "patch": format!(
+            "{}\nSWAP.BLK {}:\n+    if false {{\n+        println!(\"bye\");\n+    }}",
+            find_output["header"]
+                .as_str()
+                .expect("find_block header should be a string"),
+            find_output["block_anchor"]
+                .as_str()
+                .expect("find_block anchor should be a string"),
+        ),
+    });
+    mount_sse_once(
+        server,
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_function_call_with_namespace(
+                "hashline-swap-block-call",
+                "hashline",
+                "patch",
+                &serde_json::to_string(&patch_args)?,
+            ),
+            ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+    let patch_result_mock = mount_sse_once(
+        server,
+        sse(vec![
+            ev_assistant_message("msg-2", "hashline block updated"),
+            ev_completed("resp-4"),
+        ]),
+    )
+    .await;
+
+    harness
+        .submit("replace the block using the exact find_block fields")
+        .await?;
+
+    assert_eq!(
+        harness.read_file_text(file_name).await?,
+        "fn main() {\r\n    if false {\r\n        println!(\"bye\");\r\n    }\r\n}\r\n"
+    );
+    let patch_output = patch_result_mock
+        .single_request()
+        .function_call_output_text("hashline-swap-block-call")
+        .expect("SWAP.BLK output should be sent to model");
+    let patch_output: Value = serde_json::from_str(&patch_output)?;
+    assert_eq!(patch_output["success"], json!(true));
+    assert_eq!(patch_output["operation"], json!("update"));
+    assert_eq!(patch_output["path"], json!(file_name));
+    assert_eq!(patch_output["old_hash"], find_output["hash"]);
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn hashline_patch_rejects_stale_line_hash() -> anyhow::Result<()> {
-    let server = start_mock_server().await;
-    let test = test_codex()
-        .with_config(|config| {
-            config.hashline.enabled = true;
-        })
-        .build(&server)
-        .await?;
+async fn hashline_swap_block_rejects_stale_block_without_writing() -> anyhow::Result<()> {
+    let harness = TestCodexHarness::with_auto_env_builder(test_codex().with_config(|config| {
+        config.hashline.enabled = true;
+    }))
+    .await?;
+    let server = harness.server();
+    let file_name = "src/stale_block.rs";
+    let original = "fn main() {\n    let x = 1;\n    println!(\"{x}\");\n}\n";
+    let externally_mutated = "fn main() {\n    let x = 1;\n    dbg!(x);\n}\n";
+    harness.write_file(file_name, original).await?;
 
-    let file_name = "hashline-stale.txt";
-    let file_path = test.cwd.path().join(file_name);
-    fs::write(&file_path, "alpha\nbeta\ngamma\n")?;
+    let find_call_id = "hashline-stale-block-find-call";
+    let find_args = json!({
+        "path": file_name,
+        "anchor": format!("2:{}", hashline_line_hash("    let x = 1;")),
+    });
+    mount_sse_once(
+        server,
+        sse(vec![
+            ev_response_created("resp-stale-block-1"),
+            ev_function_call_with_namespace(
+                find_call_id,
+                "hashline",
+                "find_block",
+                &serde_json::to_string(&find_args)?,
+            ),
+            ev_completed("resp-stale-block-1"),
+        ]),
+    )
+    .await;
+    let find_result_mock = mount_sse_once(
+        server,
+        sse(vec![
+            ev_assistant_message("msg-stale-block-1", "hashline block captured"),
+            ev_completed("resp-stale-block-2"),
+        ]),
+    )
+    .await;
 
-    let call_id = "hashline-stale-call";
+    harness.submit("find the block before editing it").await?;
+    let find_output = find_result_mock
+        .single_request()
+        .function_call_output_text(find_call_id)
+        .expect("find_block output should be sent to model");
+    let find_output: Value = serde_json::from_str(&find_output)?;
+    assert_eq!(find_output["start_line"], json!(1));
+    assert_eq!(find_output["end_line"], json!(4));
+
+    harness.write_file(file_name, externally_mutated).await?;
+
+    let patch_call_id = "hashline-stale-block-patch-call";
     let patch_args = json!({
         "path": file_name,
         "patch": format!(
-            "[{file_name}]#{}\nSWAP 2:0000|bravo",
-            hashline_file_hash("alpha\nbeta\ngamma\n")
-        )
+            "[{file_name}]#{}\nSWAP.BLK {}:\n+fn replacement() {{}}",
+            hashline_file_hash(externally_mutated),
+            find_output["block_anchor"]
+                .as_str()
+                .expect("find_block anchor should be a string"),
+        ),
     });
     mount_sse_once(
-        &server,
+        server,
         sse(vec![
-            ev_response_created("resp-1"),
+            ev_response_created("resp-stale-block-3"),
             ev_function_call_with_namespace(
-                call_id,
+                patch_call_id,
                 "hashline",
                 "patch",
                 &serde_json::to_string(&patch_args)?,
+            ),
+            ev_completed("resp-stale-block-3"),
+        ]),
+    )
+    .await;
+    let patch_result_mock = mount_sse_once(
+        server,
+        sse(vec![
+            ev_assistant_message("msg-stale-block-2", "stale block rejected"),
+            ev_completed("resp-stale-block-4"),
+        ]),
+    )
+    .await;
+
+    harness
+        .submit("replace the block using the previously returned block anchor")
+        .await?;
+
+    assert_eq!(harness.read_file_text(file_name).await?, externally_mutated);
+    let patch_output = patch_result_mock
+        .single_request()
+        .function_call_output_text(patch_call_id)
+        .expect("stale SWAP.BLK output should be sent to model");
+    assert!(patch_output.contains("block hash mismatch"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_patch_rejects_file_mutation_after_read_without_writing() -> anyhow::Result<()> {
+    let harness = TestCodexHarness::with_auto_env_builder(test_codex().with_config(|config| {
+        config.hashline.enabled = true;
+    }))
+    .await?;
+    let server = harness.server();
+    let file_name = "hashline-stale.txt";
+    let original = "alpha\nbeta\ngamma\n";
+    let externally_mutated = "alpha\nchanged elsewhere\ngamma\n";
+    harness.write_file(file_name, original).await?;
+
+    let read_call_id = "hashline-stale-read-call";
+    let read_args = json!({
+        "path": file_name,
+        "start_line": 2,
+        "end_line": 2,
+    });
+    mount_sse_once(
+        server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                read_call_id,
+                "hashline",
+                "read",
+                &serde_json::to_string(&read_args)?,
             ),
             ev_completed("resp-1"),
         ]),
     )
     .await;
 
-    let final_mock = mount_sse_once(
-        &server,
+    let read_result_mock = mount_sse_once(
+        server,
         sse(vec![
-            ev_assistant_message("msg-1", "hashline stale patch rejected"),
+            ev_assistant_message("msg-1", "hashline anchors captured"),
             ev_completed("resp-2"),
         ]),
     )
     .await;
 
-    submit_turn(&test, "patch with a stale hashline anchor").await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
+    harness.submit("read the file before editing it").await?;
+    let read_output = read_result_mock
+        .single_request()
+        .function_call_output_text(read_call_id)
+        .expect("read output should be sent to model");
+    let read_output: Value = serde_json::from_str(&read_output)?;
+    assert_eq!(read_output["hash"], json!(hashline_file_hash(original)));
+    assert_eq!(
+        read_output["lines"],
+        json!([{"n": 2, "hash": hashline_line_hash("beta")}])
+    );
+
+    harness.write_file(file_name, externally_mutated).await?;
+
+    let patch_call_id = "hashline-stale-patch-call";
+    let patch_args = json!({
+        "path": file_name,
+        "patch": format!(
+            "{}\nSWAP {}:{}|bravo",
+            read_output["header"].as_str().expect("read header should be a string"),
+            read_output["lines"][0]["n"]
+                .as_u64()
+                .expect("read line number should be an integer"),
+            read_output["lines"][0]["hash"]
+                .as_str()
+                .expect("read line hash should be a string"),
+        ),
+    });
+    mount_sse_once(
+        server,
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_function_call_with_namespace(
+                patch_call_id,
+                "hashline",
+                "patch",
+                &serde_json::to_string(&patch_args)?,
+            ),
+            ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+    let patch_result_mock = mount_sse_once(
+        server,
+        sse(vec![
+            ev_assistant_message("msg-2", "hashline stale patch rejected"),
+            ev_completed("resp-4"),
+        ]),
+    )
     .await;
 
-    assert_eq!(fs::read_to_string(file_path)?, "alpha\nbeta\ngamma\n");
-    let request = final_mock.single_request();
-    let patch_output = request
-        .function_call_output_text(call_id)
+    harness
+        .submit("apply the edit using the previously returned anchors")
+        .await?;
+
+    assert_eq!(harness.read_file_text(file_name).await?, externally_mutated);
+    let patch_output = patch_result_mock
+        .single_request()
+        .function_call_output_text(patch_call_id)
         .expect("patch output should be sent to model");
-    assert!(patch_output.contains("line 2 hash mismatch"));
-    assert!(patch_output.contains("expected 0000"));
+    assert!(patch_output.contains("file hash mismatch"));
+    assert!(
+        patch_output.contains(
+            read_output["hash"]
+                .as_str()
+                .expect("read hash should be a string")
+        )
+    );
     Ok(())
 }
 
@@ -1648,6 +1922,96 @@ async fn hashline_remove_file_deletes_through_apply_patch() -> anyhow::Result<()
     assert!(remove_output.contains("\"operation\":\"remove_file\""));
     assert!(remove_output.contains(&format!("\"path\":\"{file_name}\"")));
     assert!(remove_output.contains("\"old_hash\""));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_remove_file_rejects_stale_read_hash_without_deleting() -> anyhow::Result<()> {
+    let harness = TestCodexHarness::with_auto_env_builder(test_codex().with_config(|config| {
+        config.hashline.enabled = true;
+    }))
+    .await?;
+    let server = harness.server();
+    let file_name = "hashline-stale-remove.txt";
+    let original = "remove me\n";
+    let externally_mutated = "keep the newer contents\n";
+    harness.write_file(file_name, original).await?;
+
+    let read_call_id = "hashline-stale-remove-read-call";
+    let read_args = json!({"path": file_name});
+    mount_sse_once(
+        server,
+        sse(vec![
+            ev_response_created("resp-stale-remove-1"),
+            ev_function_call_with_namespace(
+                read_call_id,
+                "hashline",
+                "read",
+                &serde_json::to_string(&read_args)?,
+            ),
+            ev_completed("resp-stale-remove-1"),
+        ]),
+    )
+    .await;
+    let read_result_mock = mount_sse_once(
+        server,
+        sse(vec![
+            ev_assistant_message("msg-stale-remove-1", "hashline remove guard captured"),
+            ev_completed("resp-stale-remove-2"),
+        ]),
+    )
+    .await;
+
+    harness.submit("read the file before removing it").await?;
+    let read_output = read_result_mock
+        .single_request()
+        .function_call_output_text(read_call_id)
+        .expect("read output should be sent to model");
+    let read_output: Value = serde_json::from_str(&read_output)?;
+    assert_eq!(read_output["hash"], json!(hashline_file_hash(original)));
+
+    harness.write_file(file_name, externally_mutated).await?;
+
+    let remove_call_id = "hashline-stale-remove-call";
+    let remove_args = json!({
+        "path": file_name,
+        "expected_hash": read_output["hash"],
+    });
+    mount_sse_once(
+        server,
+        sse(vec![
+            ev_response_created("resp-stale-remove-3"),
+            ev_function_call_with_namespace(
+                remove_call_id,
+                "hashline",
+                "remove_file",
+                &serde_json::to_string(&remove_args)?,
+            ),
+            ev_completed("resp-stale-remove-3"),
+        ]),
+    )
+    .await;
+    let remove_result_mock = mount_sse_once(
+        server,
+        sse(vec![
+            ev_assistant_message("msg-stale-remove-2", "stale remove rejected"),
+            ev_completed("resp-stale-remove-4"),
+        ]),
+    )
+    .await;
+
+    harness
+        .submit("remove the file using the previously returned hash")
+        .await?;
+
+    assert!(harness.path_exists(file_name).await?);
+    assert_eq!(harness.read_file_text(file_name).await?, externally_mutated);
+    let remove_output = remove_result_mock
+        .single_request()
+        .function_call_output_text(remove_call_id)
+        .expect("remove output should be sent to model");
+    assert!(remove_output.contains("file hash mismatch"));
+
     Ok(())
 }
 
