@@ -1,10 +1,10 @@
 # Harden Hashline Integrity and Prompt-Cache Efficiency
 
 - Branch: feat/hashline-audit-hardening
-- Status: Complete
+- Status: In Progress
 - Owner(s): Codex
 - Created: 2026-07-12
-- Last Updated: 2026-07-12 17:30Z
+- Last Updated: 2026-07-12 20:10Z
 
 - Links: [Hashline tool integration spec](../codex-rs/docs/hashline_tool_integration_spec.md) | [Prompt caching observability spec](../codex-rs/docs/prompt_caching_observability_spec.md) | [Audit proposal](https://chatgpt.com/s/t_6a53aa9fd5c48191937e16ee580984cb)
 
@@ -21,15 +21,15 @@ against those anchors. The audit found that short hashes, partial range checks,
 heuristic block selection, duplicated output, newline normalization, and
 apply-patch handoff details can make a stale or ambiguous edit appear valid. The
 same audit found that repeated structured and flat line content wastes model
-context and that unstable tool-spec ordering can reduce provider prompt-cache
-reuse.
+context. Prompt-cache changes remain telemetry-gated by the existing observability
+plan.
 
 After this work, a stale Hashline edit should fail with actionable evidence,
 multi-line and block operations should carry a file/block guard, block selection
 should be visible and reproducible, output should remain byte-bounded without
 duplicating line content, and normal line-ending/path edge cases should preserve
-the intended file. The model-visible tool list should be deterministically ordered
-so equivalent turns have a stable serialized tool prefix.
+the intended file. Global model-visible tool ordering remains unchanged until
+provider telemetry demonstrates material order-only misses.
 
 Success means:
 
@@ -38,8 +38,8 @@ Success means:
   behavior;
 - serialized Hashline responses remain within their byte budgets while removing
   duplicate line payloads and avoiding an unconditional 200-line write reread;
-- prompt-cache observation records a stable final tool-schema digest and tests show
-  deterministic model-visible tool ordering;
+- prompt-cache observation retains its stable ordered/set digests and provider
+  telemetry without speculative prompt-assembly changes;
 - no default prompt-cache key, user intent, strategy behavior, or unrelated dirty
   work is changed;
 - the spec, implementation commits, final diff, and validation results describe
@@ -52,8 +52,8 @@ Success means:
 - [x] (2026-07-12 16:10Z) Implement stronger fixed-width line/file/range/block integrity guards.
 - [x] (2026-07-12 16:18Z) Implement normalization, mixed-newline preservation, and parser/path safety fixes.
 - [x] (2026-07-12 16:22Z) Remove redundant structured line content, compact JSON, and target write-success excerpts.
-- [x] (2026-07-12 16:24Z) Canonicalize final model-visible tool ordering without changing cache keys.
-- [x] (2026-07-12 17:30Z) Run final lint/diff validation and record outcomes and residual risks.
+- [x] (2026-07-12 19:52Z) Preserve existing model-visible tool ordering after repository review confirmed canonicalization is telemetry-gated.
+- [ ] Run final format/lint, independent branch review, full scoped validation, and diff/status verification; record final outcomes.
 
 ## Surprises & Discoveries
 
@@ -65,8 +65,8 @@ Success means:
   Evidence: codex-rs/core/src/prompt_cache_observation.rs and codex-rs/docs/prompt_caching_observability_spec.md.
 - Observation: The initial patch grammar accepted optional file headers and validated only line-range boundaries.
   Evidence: codex-rs/core/src/tools/handlers/hashline_patch.rs.
-- Observation: The top-level model-visible tool list preserved source order even though namespace members were sorted, so equivalent tool sources could produce different serialized prefixes.
-  Evidence: codex-rs/core/src/tools/spec_plan.rs; the new permutation test covers the canonical result.
+- Observation: Global tool-order canonicalization changed every request prefix without provider evidence and contradicted the staged prompt-cache observability plan.
+  Evidence: repository code review; the ordering implementation and expectation churn were removed while existing digest telemetry remains.
 - Observation: Write success used the generic first-200-line read envelope, while patch success already had changed-region preview bounds.
   Evidence: build_hashline_write_output and build_hashline_patch_success_body in codex-rs/core/src/tools/handlers/hashline.rs; write integration coverage now targets lines 201-202.
 - Observation: The follow-up audit found pasted read-output parsing still hard-coded to two hex digits.
@@ -75,6 +75,8 @@ Success means:
   Evidence: the resolver now parses and validates both the line hash and recomputed block hash; round-trip and stale-block tests cover it.
 - Observation: Reattaching newline separators by output index changed untouched mixed-EOL boundaries after inserts or deletes.
   Evidence: mutation now carries terminators on source-line records, with cardinality-changing, BOM, and final-newline tests.
+- Observation: Deleting the final unterminated logical line could transfer the predecessor's terminator to EOF, turning a no-final-newline file into a newline-terminated file and losing the original local EOL fallback for later tail insertion.
+  Evidence: `SourceLine` mutation now transfers the `None` terminator to the new final record and carries the original fallback ending through all operations; regression coverage exercises deletion followed by `INS.TAIL`.
 
 
 ## Decision Log
@@ -91,20 +93,20 @@ Success means:
 - Decision: Preserve newline semantics deliberately with source-line records instead of reattaching separators by output index.
   Rationale: Canonical BOM/EOL normalization is useful for hashing, while untouched line records must retain their exact terminators through cardinality-changing edits.
   Date/Author: 2026-07-12 / Codex
-- Decision: Do not change the default prompt-cache key or move volatile context.
-  Rationale: The prompt-cache handoff requires evidence before cache-key or context-boundary changes; deterministic tool ordering is a smaller, behavior-neutral intervention.
+- Decision: Do not change the default prompt-cache key, context boundaries, or model-visible tool ordering.
+  Rationale: The prompt-cache handoff requires provider evidence before prompt-assembly changes; compact bounded Hashline outputs reduce context pressure independently.
   Date/Author: 2026-07-12 / Codex
 - Decision: Land implementation in focused commits and run project-scoped validation before considering a broader suite.
   Rationale: Hashline spans core files with existing dirty-tree risk and prompt-cache changes need independently reviewable proof.
-  Date/Author: 2026-07-12 / Codex
-- Decision: Sort final model-visible tool specs by stable (name, variant) identity after filtering and namespace merging.
-  Rationale: This stabilizes the serialized tool prefix for prompt-cache reuse without changing the default cache key, context boundaries, or tool membership.
   Date/Author: 2026-07-12 / Codex
 - Decision: Keep formatter and parser widths coupled through `LINE_HASH_WIDTH` and test the emitted row format as a round trip.
   Rationale: A fixed-width greenfield grammar should not drift between model-visible output and pasted patch input.
   Date/Author: 2026-07-12 / Codex
 - Decision: Parse and validate the complete `find_block` block anchor rather than advertising an output-only token.
   Rationale: A returned block selection must be replayable and must fail when either the anchor line or selected block is stale.
+  Date/Author: 2026-07-12 / Codex
+- Decision: Treat final-newline state as part of source-line record semantics, including cardinality-changing deletions.
+  Rationale: An EOF terminator is not an interchangeable separator; preserving it prevents unrelated representation changes while retaining a stable fallback for newly inserted lines.
   Date/Author: 2026-07-12 / Codex
 
 
@@ -142,10 +144,9 @@ Success means:
    an unconditional first-200-line reread.
 3. Prefer compact JSON serialization for model-facing Hashline responses where
    whitespace has no semantic value.
-4. Canonicalize final model-visible tool-spec ordering by stable identity and add
-   tests around equivalent tool-source orderings.
-5. Use the existing prompt-cache observation ledger and provider cached-token fields
-   for evidence; do not log raw prompts or alter cache-key semantics.
+4. Retain the existing prompt-cache observation ledger, ordered/set digests, and
+   provider cached-token fields for evidence; do not log raw prompts, reorder global
+   tool specs, or alter cache-key semantics without measured order-only misses.
 
 ## Context and Orientation
 
@@ -157,6 +158,7 @@ Hashline code lives under `codex-rs/core/src/tools`:
 - `handlers/hashline_format.rs` owns bounded excerpts and structured response rows.
 - `handlers/hashline_block.rs` finds heuristic syntactic/indentation blocks.
 - `handlers/hashline_patch.rs` parses and applies anchored operations.
+- `handlers/hashline_patch_lines.rs` owns exact source-line terminators and EOL-preserving mutation helpers.
 - `hashline_tests.rs` and `core/tests/suite/hashline.rs` cover unit and integration
   behavior.
 
@@ -186,9 +188,9 @@ separate user approval under that policy.
 Run after each coherent Rust milestone:
 
 - just fmt from codex-rs;
-- just test -p codex-core spec_plan hashline --no-capture;
+- just test -p codex-core hashline --no-capture;
 - git diff --check;
-- targeted unit/integration tests for changed Hashline and tool-order behavior;
+- targeted unit/integration tests for Hashline protocol round trips and unchanged tool-order behavior;
 - read the resulting spec and changed source back through bounded Hashline reads;
 - inspect git diff --stat, git diff, and git status --short --branch.
 
@@ -199,13 +201,13 @@ record it as skipped rather than weakening the acceptance criteria.
 
 ## Outcomes & Retrospective
 
-- Outcome: Integrity, normalization, parser, bounded-output, and deterministic tool-order changes are implemented in the scoped Hashline/core surfaces.
-  Evidence: hashline.rs, hashline_hash.rs, hashline_format.rs, hashline_patch.rs, spec_plan.rs, and their focused tests.
-- Outcome: The focused Hashline target selected 131 tests and passed; 2 remote-environment tests were skipped by the harness and 2,988 unrelated tests were filtered.
-  Evidence: `just test -p codex-core hashline --no-capture` completed on 2026-07-12.
-- Outcome: Follow-up review remained scoped to 5 files (452 insertions, 119 deletions); the original implementation commit was 9 files (754 insertions, 549 deletions).
-- Residual: The complete workspace suite was not run because root policy requires explicit user approval; the two remote-environment tests were skipped by their harness.
-- Residual: Prompt-cache hit-rate/cost telemetry was not changed or remeasured in this implementation; only deterministic final tool-spec ordering was added, leaving cache-key and context-boundary behavior unchanged.
+- Outcome: Integrity, normalization, parser, and bounded-output changes are implemented in scoped Hashline/core surfaces; speculative global tool ordering was removed after review.
+  Evidence: hashline.rs, hashline_hash.rs, hashline_format.rs, hashline_patch.rs, hashline_patch_lines.rs, and focused tests.
+- Outcome: The focused Hashline target selected 143 tests and passed; 2 remote-environment tests were skipped by the harness and 2,987 unrelated tests were filtered.
+  Evidence: `just test -p codex-core hashline --no-capture` completed on 2026-07-12 after protocol round-trip and stale no-write integration coverage was added.
+- Outcome: Independent RoboRev converged to no issues; repository code review then drove removal of global tool sorting, structural extraction, and stronger integration coverage.
+- Outcome: The branch is split into focused implementation, audit-follow-up, parser/EOF, review-fix, structural, and protocol-test commits.
+- Residual: Prompt-cache hit-rate/cost telemetry was not remeasured; existing ordered/set digest and provider cache telemetry remain the gate for any future canonicalization.
 - Residual: The apply-patch handoff is still not an atomic filesystem transaction; a concurrent external writer can race after validation, so the file guard remains the detection boundary.
 - Residual: The 8-hex file/block guards and 4-hex line anchors are compact non-cryptographic checksums, not an adversarial security boundary.
 - Residual: File guards cover canonical logical text and intentionally ignore BOM/EOL representation changes; raw-byte identity is not guarded.
