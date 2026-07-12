@@ -432,7 +432,6 @@ fn apply_patch_accepts_environment_id(spec: &ToolSpec) -> bool {
     }
 }
 
-
 #[tokio::test]
 async fn request_user_input_tool_respects_experimental_config_gate() {
     let enabled = probe(|_| {}).await;

@@ -27,6 +27,8 @@ mod hashline_format;
 mod hashline_hash;
 #[path = "hashline_patch.rs"]
 mod hashline_patch;
+#[path = "hashline_patch_lines.rs"]
+mod hashline_patch_lines;
 
 use self::hashline_block::find_normalized_block_span;
 use self::hashline_block::language_for_path;

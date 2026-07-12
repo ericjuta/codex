@@ -10,6 +10,13 @@ use super::hashline_hash::LINE_HASH_WIDTH;
 use super::hashline_hash::hash_hex;
 use super::hashline_hash::line_hash;
 use super::hashline_hash::normalize_file_text;
+use super::hashline_patch_lines::LineEnding;
+use super::hashline_patch_lines::SourceLine;
+use super::hashline_patch_lines::default_line_ending;
+use super::hashline_patch_lines::insert_current_lines;
+use super::hashline_patch_lines::reassemble_file_contents;
+use super::hashline_patch_lines::replace_current_range;
+use super::hashline_patch_lines::source_lines;
 
 const APPLY_PATCH_CONTEXT_LINES: usize = 3;
 const PATCH_PREVIEW_MAX_LINES: usize = 40;
@@ -134,37 +141,6 @@ enum HashlineOperation {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LineEnding {
-    CrLf,
-    Lf,
-    Cr,
-    None,
-}
-
-impl LineEnding {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::CrLf => "\r\n",
-            Self::Lf => "\n",
-            Self::Cr => "\r",
-            Self::None => "",
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct SourceLine {
-    text: String,
-    ending: LineEnding,
-}
-
-impl AsRef<str> for SourceLine {
-    fn as_ref(&self) -> &str {
-        &self.text
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum HashlinePatchFileOperation {
     Remove,
@@ -215,50 +191,6 @@ pub(super) fn apply_hashline_patch(
 
     let output = reassemble_file_contents(&lines, contents);
     Ok(output)
-}
-
-fn source_lines(contents: &str, normalized_contents: &str) -> Vec<SourceLine> {
-    let line_endings = original_line_endings(contents);
-    split_lines_preserve(normalized_contents)
-        .into_iter()
-        .enumerate()
-        .map(|(index, line)| SourceLine {
-            text: line.to_string(),
-            ending: line_endings.get(index).copied().unwrap_or(LineEnding::None),
-        })
-        .collect()
-}
-
-fn reassemble_file_contents(lines: &[SourceLine], original_contents: &str) -> String {
-    let mut output = String::new();
-    if original_contents.starts_with('\u{feff}') {
-        output.push('\u{feff}');
-    }
-    for line in lines {
-        output.push_str(&line.text);
-        output.push_str(line.ending.as_str());
-    }
-    output
-}
-
-fn original_line_endings(contents: &str) -> Vec<LineEnding> {
-    let mut line_endings = Vec::new();
-    let mut chars = contents.char_indices().peekable();
-    while let Some((_, ch)) = chars.next() {
-        let ending = match ch {
-            '\r' => match chars.peek().copied() {
-                Some((_, '\n')) => {
-                    chars.next();
-                    LineEnding::CrLf
-                }
-                _ => LineEnding::Cr,
-            },
-            '\n' => LineEnding::Lf,
-            _ => continue,
-        };
-        line_endings.push(ending);
-    }
-    line_endings
 }
 
 pub(super) fn parse_hashline_patch_file_operation(
@@ -1409,125 +1341,6 @@ fn adjusted_index(line_number: usize, shifts: &[isize]) -> Result<usize, Functio
             "line {line_number} has shifted before the start of the file"
         ))
     })
-}
-
-fn default_line_ending(lines: &[SourceLine]) -> LineEnding {
-    lines
-        .iter()
-        .map(|line| line.ending)
-        .find(|ending| *ending != LineEnding::None)
-        .unwrap_or(LineEnding::Lf)
-}
-
-fn preferred_insertion_ending(
-    lines: &[SourceLine],
-    index: usize,
-    fallback_line_ending: LineEnding,
-) -> LineEnding {
-    lines
-        .get(index)
-        .map(|line| line.ending)
-        .filter(|ending| *ending != LineEnding::None)
-        .or_else(|| {
-            index
-                .checked_sub(1)
-                .and_then(|previous| lines.get(previous))
-                .map(|line| line.ending)
-                .filter(|ending| *ending != LineEnding::None)
-        })
-        .unwrap_or(fallback_line_ending)
-}
-
-fn insert_current_lines(
-    lines: &mut Vec<SourceLine>,
-    index: usize,
-    inserted: &[String],
-    original_has_final_newline: bool,
-    fallback_line_ending: LineEnding,
-) {
-    if inserted.is_empty() {
-        return;
-    }
-    let ending = preferred_insertion_ending(lines, index, fallback_line_ending);
-    let preserve_no_final_newline = index == lines.len()
-        && (lines
-            .last()
-            .is_some_and(|line| line.ending == LineEnding::None)
-            || (lines.is_empty() && !original_has_final_newline));
-    if preserve_no_final_newline && let Some(last) = lines.last_mut() {
-        last.ending = ending;
-    }
-    let inserted_lines = inserted
-        .iter()
-        .enumerate()
-        .map(|(index, text)| SourceLine {
-            text: text.clone(),
-            ending: if preserve_no_final_newline && index + 1 == inserted.len() {
-                LineEnding::None
-            } else {
-                ending
-            },
-        })
-        .collect::<Vec<_>>();
-    lines.splice(index..index, inserted_lines);
-}
-
-fn replace_current_range(
-    lines: &mut Vec<SourceLine>,
-    start_index: usize,
-    removed_count: usize,
-    inserted: &[String],
-    fallback_line_ending: LineEnding,
-) -> Result<(), FunctionCallError> {
-    if start_index.saturating_add(removed_count) > lines.len() {
-        return Err(FunctionCallError::RespondToModel(
-            "Hashline operation no longer maps to the current file contents".to_string(),
-        ));
-    }
-    let end_index = start_index + removed_count;
-    let replacement_ending = lines[start_index..end_index]
-        .iter()
-        .map(|line| line.ending)
-        .find(|ending| *ending != LineEnding::None)
-        .or_else(|| {
-            lines
-                .get(end_index)
-                .map(|line| line.ending)
-                .filter(|ending| *ending != LineEnding::None)
-        })
-        .or_else(|| {
-            start_index
-                .checked_sub(1)
-                .and_then(|previous| lines.get(previous))
-                .map(|line| line.ending)
-                .filter(|ending| *ending != LineEnding::None)
-        })
-        .unwrap_or(fallback_line_ending);
-    let final_ending = lines
-        .get(end_index.saturating_sub(1))
-        .map(|line| line.ending)
-        .unwrap_or(replacement_ending);
-    let removed_final_no_newline = end_index == lines.len() && final_ending == LineEnding::None;
-    let replacement = inserted
-        .iter()
-        .enumerate()
-        .map(|(index, text)| SourceLine {
-            text: text.clone(),
-            ending: if index + 1 == inserted.len() {
-                final_ending
-            } else {
-                replacement_ending
-            },
-        })
-        .collect::<Vec<_>>();
-    lines.splice(start_index..end_index, replacement);
-    if inserted.is_empty()
-        && removed_final_no_newline
-        && let Some(last) = lines.last_mut()
-    {
-        last.ending = LineEnding::None;
-    }
-    Ok(())
 }
 
 fn mark_deleted(deleted: &mut [bool], start_line: usize, end_line: usize) {
