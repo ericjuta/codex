@@ -1,9 +1,136 @@
+use super::hashline_hash::FILE_HASH_WIDTH;
+use super::hashline_hash::LINE_HASH_WIDTH;
+use super::hashline_hash::hash_hex;
+use super::hashline_hash::line_hash;
+use super::hashline_patch::parse_anchor_hash;
+use super::hashline_patch::parse_anchor_line;
+use crate::function_tool::FunctionCallError;
 use std::path::Path;
 
 const RUBY_OPENERS: &[&str] = &[
     "def ", "class ", "module ", "do ", "do|", "if ", "unless ", "while ", "until ", "for ",
     "begin ", "case ",
 ];
+
+pub(super) fn resolve_find_block_anchor(
+    path: &str,
+    anchor: &str,
+    lines: &[&str],
+) -> Result<usize, FunctionCallError> {
+    let trimmed = anchor.trim();
+    if let Some((line_anchor, block_hash)) = trimmed.rsplit_once('@') {
+        let line_anchor = line_anchor.trim();
+        let block_hash = block_hash.trim().to_ascii_lowercase();
+        let anchor_line = parse_anchor_line(line_anchor)?;
+        validate_find_block_line(anchor_line, lines)?;
+        let Some(expected_line_hash) = parse_anchor_hash(line_anchor) else {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "invalid Hashline block anchor {anchor}: expected line:4-hex@{FILE_HASH_WIDTH}-hex"
+            )));
+        };
+        if !is_line_hash(expected_line_hash) {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "invalid Hashline block anchor {anchor}: expected a {LINE_HASH_WIDTH}-hex line hash"
+            )));
+        }
+        let actual_line_hash = line_hash(lines[anchor_line - 1]);
+        if expected_line_hash.to_ascii_lowercase() != actual_line_hash {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "anchor hash mismatch at line {anchor_line}: expected {expected_line_hash}, found {actual_line_hash}"
+            )));
+        }
+        if block_hash.len() != FILE_HASH_WIDTH
+            || !block_hash.chars().all(|ch| ch.is_ascii_hexdigit())
+        {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "invalid Hashline block anchor {anchor}: expected a {FILE_HASH_WIDTH}-hex block hash"
+            )));
+        }
+        let (block_start, block_end) = find_normalized_block_span(path, lines, anchor_line);
+        let actual_block_hash = hash_hex(&lines[block_start - 1..block_end].join("\n"));
+        if actual_block_hash != block_hash {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "block hash mismatch: expected {block_hash}, found {actual_block_hash}"
+            )));
+        }
+        return Ok(anchor_line);
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if let Some(line_text) = lower
+        .strip_prefix("block ")
+        .and_then(|rest| rest.strip_suffix(':'))
+    {
+        let anchor_line = parse_anchor_line(line_text)?;
+        validate_find_block_line(anchor_line, lines)?;
+        return Ok(anchor_line);
+    }
+
+    if is_line_hash(trimmed) {
+        return resolve_unique_line_hash(trimmed, lines);
+    }
+    if trimmed.parse::<usize>().is_ok() {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "invalid Hashline block anchor {anchor}: bare line numbers are not accepted; use line:4-hex, block N:, a unique 4-hex line hash, or line:4-hex@8-hex-block-hash"
+        )));
+    }
+    let anchor_line = parse_anchor_line(trimmed)?;
+    validate_find_block_line(anchor_line, lines)?;
+    let Some(expected_hash) = parse_anchor_hash(trimmed) else {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "invalid Hashline anchor {anchor}: expected a {LINE_HASH_WIDTH}-hex hash"
+        )));
+    };
+    if !is_line_hash(expected_hash) {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "invalid Hashline anchor {anchor}: expected a {LINE_HASH_WIDTH}-hex hash"
+        )));
+    }
+    let actual_hash = line_hash(lines[anchor_line - 1]);
+    if expected_hash.to_ascii_lowercase() != actual_hash {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "anchor hash mismatch at line {anchor_line}: expected {expected_hash}, found {actual_hash}"
+        )));
+    }
+    Ok(anchor_line)
+}
+
+fn validate_find_block_line(anchor_line: usize, lines: &[&str]) -> Result<(), FunctionCallError> {
+    if anchor_line == 0 || anchor_line > lines.len() {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "anchor line {anchor_line} is outside file range 1..={}",
+            lines.len()
+        )));
+    }
+    Ok(())
+}
+
+fn resolve_unique_line_hash(hash: &str, lines: &[&str]) -> Result<usize, FunctionCallError> {
+    let hash = hash.to_ascii_lowercase();
+    let matching_lines = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| (line_hash(line) == hash).then_some(index + 1))
+        .collect::<Vec<_>>();
+    match matching_lines.as_slice() {
+        [] => Err(FunctionCallError::RespondToModel(format!(
+            "anchor hash {hash} was not found"
+        ))),
+        [line] => Ok(*line),
+        matches => Err(FunctionCallError::RespondToModel(format!(
+            "anchor hash {hash} is ambiguous; matching lines: {}",
+            matches
+                .iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
+fn is_line_hash(value: &str) -> bool {
+    value.len() == LINE_HASH_WIDTH && value.chars().all(|ch| ch.is_ascii_hexdigit())
+}
 
 pub(super) fn find_block_span(path: &str, lines: &[&str], anchor_line: usize) -> (usize, usize) {
     if lines.is_empty() {
