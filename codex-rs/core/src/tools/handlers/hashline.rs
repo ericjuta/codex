@@ -884,18 +884,21 @@ fn resolve_find_block_anchor(
     }
     let anchor_line = parse_anchor_line(trimmed)?;
     validate_find_block_line(anchor_line, lines)?;
-    if let Some(expected_hash) = parse_anchor_hash(trimmed) {
-        if !is_line_hash(expected_hash) {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "invalid Hashline anchor {anchor}: expected a {LINE_HASH_WIDTH}-hex hash"
-            )));
-        }
-        let actual_hash = line_hash(lines[anchor_line - 1]);
-        if expected_hash.to_ascii_lowercase() != actual_hash {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "anchor hash mismatch at line {anchor_line}: expected {expected_hash}, found {actual_hash}"
-            )));
-        }
+    let Some(expected_hash) = parse_anchor_hash(trimmed) else {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "invalid Hashline anchor {anchor}: expected a {LINE_HASH_WIDTH}-hex hash"
+        )));
+    };
+    if !is_line_hash(expected_hash) {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "invalid Hashline anchor {anchor}: expected a {LINE_HASH_WIDTH}-hex hash"
+        )));
+    }
+    let actual_hash = line_hash(lines[anchor_line - 1]);
+    if expected_hash.to_ascii_lowercase() != actual_hash {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "anchor hash mismatch at line {anchor_line}: expected {expected_hash}, found {actual_hash}"
+        )));
     }
     Ok(anchor_line)
 }

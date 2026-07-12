@@ -1789,6 +1789,14 @@ fn find_block_anchor_rejects_bare_numeric_line_numbers() {
 }
 
 #[test]
+fn find_block_anchor_rejects_missing_line_hash() {
+    let lines = vec!["alpha", "beta", "gamma"];
+    let error = resolve_find_block_anchor("src/main.rs", "2:", &lines)
+        .expect_err("line anchors without a hash should be rejected");
+    assert!(error.to_string().contains("expected a 4-hex hash"));
+}
+
+#[test]
 fn find_block_anchor_resolves_numeric_only_line_hashes() {
     let (line, hash) = (0..1000)
         .map(|index| format!("numeric-hash-candidate-{index}"))
