@@ -205,10 +205,10 @@ record it as skipped rather than weakening the acceptance criteria.
 
 - Outcome: Integrity, normalization, parser, and bounded-output changes are implemented in scoped Hashline/core surfaces; speculative global tool ordering was removed after review.
   Evidence: hashline.rs, hashline_hash.rs, hashline_format.rs, hashline_patch.rs, hashline_patch_lines.rs, and focused tests.
-- Outcome: The final focused Hashline target selected 152 tests and all 152 passed; 2 remote-environment tests self-skipped while 2,987 unrelated tests were filtered.
+- Outcome: The final focused Hashline target selected 153 tests and all 153 passed; 2 remote-environment tests self-skipped while 2,987 unrelated tests were filtered.
   Evidence: `just test -p codex-core hashline --no-capture` completed after protocol round-trip, atomicity, output-budget, exact-byte, and no-op-write regression coverage was added.
-- Outcome: The final full `codex-core` suite ran 3,124 tests: all 3,124 passed, 15 skipped, and 2 unrelated flaky tests passed on retry.
-- Outcome: Independent repository review drove removal of global tool sorting, structural extraction, stronger integration coverage, and a final no-op/representation-only write-response fix; the final finding has dedicated passing regression coverage.
+- Outcome: The final full `codex-core` suite ran 3,125 tests: all 3,125 passed, 15 skipped, and 3 unrelated flaky tests passed on retry.
+- Outcome: Independent repository review drove removal of global tool sorting, structural extraction, stronger integration coverage, and final no-op/representation-only write-response fixes; dedicated unit and handler-level regressions prove successful compact output for applied and dry-run paths.
 - Outcome: The branch is split into focused implementation, audit-follow-up, parser/EOF, review-fix, structural, protocol-test, and final-response-fix commits.
 - Residual: Prompt-cache hit-rate/cost telemetry was not remeasured; existing ordered/set digest and provider cache telemetry remain the gate for any future canonicalization.
 - Residual: The apply-patch handoff is still not an atomic filesystem transaction; a concurrent external writer can race after validation, so the file guard remains the detection boundary.
