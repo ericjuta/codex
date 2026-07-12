@@ -12,11 +12,10 @@ use super::hashline_hash::line_hash;
 use super::hashline_hash::normalize_file_text;
 use super::hashline_patch_lines::LineEnding;
 use super::hashline_patch_lines::SourceLine;
-use super::hashline_patch_lines::default_line_ending;
 use super::hashline_patch_lines::insert_current_lines;
 use super::hashline_patch_lines::reassemble_file_contents;
 use super::hashline_patch_lines::replace_current_range;
-use super::hashline_patch_lines::source_lines;
+use super::hashline_patch_lines::source_document;
 use super::hashline_patch_parser::HashlineOperation;
 use super::hashline_patch_parser::LineAnchor;
 use super::hashline_patch_parser::LineRange;
@@ -102,8 +101,8 @@ pub(super) fn apply_hashline_patch(
         .filter(|operation| !operation.is_file_operation())
         .collect::<Vec<_>>();
     let normalized_contents = normalize_file_text(contents);
-    let mut lines = source_lines(contents, &normalized_contents);
-    let fallback_line_ending = default_line_ending(&lines);
+    let mut document = source_document(contents, &normalized_contents);
+    let fallback_line_ending = document.fallback_line_ending;
 
     if operations.is_empty() {
         return Err(FunctionCallError::RespondToModel(
@@ -113,14 +112,14 @@ pub(super) fn apply_hashline_patch(
 
     apply_operations(
         path,
-        &mut lines,
+        &mut document.lines,
         &operations,
         &normalized_contents,
         normalized_contents.ends_with('\n'),
         fallback_line_ending,
     )?;
 
-    let output = reassemble_file_contents(&lines, contents);
+    let output = reassemble_file_contents(&document);
     Ok(output)
 }
 
@@ -223,10 +222,23 @@ fn apply_operations(
         .into_iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>();
+    let block_spans = operations
+        .iter()
+        .map(|operation| match operation {
+            HashlineOperation::SwapBlock { anchor, .. }
+            | HashlineOperation::DeleteBlock { anchor }
+            | HashlineOperation::InsertBlockBefore { anchor, .. }
+            | HashlineOperation::InsertBlockAfter { anchor, .. } => {
+                block_span(path, &original_lines, anchor.line.line).map(Some)
+            }
+            _ => Ok(None),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    validate_block_operation_order(operations, &block_spans)?;
     let mut shifts = vec![0_isize; original_lines.len()];
     let mut deleted = vec![false; original_lines.len()];
 
-    for operation in operations {
+    for (operation_index, operation) in operations.iter().enumerate() {
         match operation {
             HashlineOperation::Swap { range, replacement } => {
                 validate_range(&original_lines, &deleted, range)?;
@@ -309,14 +321,13 @@ fn apply_operations(
                 replacement,
             } => {
                 validate_anchor(&original_lines, &deleted, &anchor.line)?;
-                let original_span = block_span(path, &original_lines, anchor.line.line)?;
+                let original_span = required_block_span(&block_spans, operation_index)?;
                 validate_block_hash(&original_lines, original_span, &anchor.expected_hash)?;
                 validate_not_deleted(&deleted, original_span.0, original_span.1)?;
-                let current_line = adjusted_index(anchor.line.line, &shifts)?.saturating_add(1);
-                let current_span = block_span(path, lines, current_line)?;
+                let current_span = adjusted_block_span(original_span, &shifts, lines.len())?;
                 replace_current_range(
                     lines,
-                    current_span.0 - 1,
+                    current_span.0,
                     current_span.1 - current_span.0 + 1,
                     replacement,
                     fallback_line_ending,
@@ -330,14 +341,13 @@ fn apply_operations(
             }
             HashlineOperation::DeleteBlock { anchor } => {
                 validate_anchor(&original_lines, &deleted, &anchor.line)?;
-                let original_span = block_span(path, &original_lines, anchor.line.line)?;
+                let original_span = required_block_span(&block_spans, operation_index)?;
                 validate_block_hash(&original_lines, original_span, &anchor.expected_hash)?;
                 validate_not_deleted(&deleted, original_span.0, original_span.1)?;
-                let current_line = adjusted_index(anchor.line.line, &shifts)?.saturating_add(1);
-                let current_span = block_span(path, lines, current_line)?;
+                let current_span = adjusted_block_span(original_span, &shifts, lines.len())?;
                 replace_current_range(
                     lines,
-                    current_span.0 - 1,
+                    current_span.0,
                     current_span.1 - current_span.0 + 1,
                     &[],
                     fallback_line_ending,
@@ -351,15 +361,13 @@ fn apply_operations(
             }
             HashlineOperation::InsertBlockBefore { anchor, inserted } => {
                 validate_anchor(&original_lines, &deleted, &anchor.line)?;
-                let original_span = block_span(path, &original_lines, anchor.line.line)?;
+                let original_span = required_block_span(&block_spans, operation_index)?;
                 validate_block_hash(&original_lines, original_span, &anchor.expected_hash)?;
                 validate_not_deleted(&deleted, original_span.0, original_span.1)?;
-                let current_line = adjusted_index(anchor.line.line, &shifts)?.saturating_add(1);
-                let current_span = block_span(path, lines, current_line)?;
-                let index = current_span.0 - 1;
+                let current_span = adjusted_block_span(original_span, &shifts, lines.len())?;
                 insert_current_lines(
                     lines,
-                    index,
+                    current_span.0,
                     inserted,
                     original_has_final_newline,
                     fallback_line_ending,
@@ -368,15 +376,13 @@ fn apply_operations(
             }
             HashlineOperation::InsertBlockAfter { anchor, inserted } => {
                 validate_anchor(&original_lines, &deleted, &anchor.line)?;
-                let original_span = block_span(path, &original_lines, anchor.line.line)?;
+                let original_span = required_block_span(&block_spans, operation_index)?;
                 validate_block_hash(&original_lines, original_span, &anchor.expected_hash)?;
                 validate_not_deleted(&deleted, original_span.0, original_span.1)?;
-                let current_line = adjusted_index(anchor.line.line, &shifts)?.saturating_add(1);
-                let current_span = block_span(path, lines, current_line)?;
-                let index = current_span.1;
+                let current_span = adjusted_block_span(original_span, &shifts, lines.len())?;
                 insert_current_lines(
                     lines,
-                    index,
+                    current_span.1.saturating_add(1),
                     inserted,
                     original_has_final_newline,
                     fallback_line_ending,
@@ -391,6 +397,76 @@ fn apply_operations(
         }
     }
     Ok(())
+}
+
+fn validate_block_operation_order(
+    operations: &[HashlineOperation],
+    block_spans: &[Option<(usize, usize)>],
+) -> Result<(), FunctionCallError> {
+    for (operation_index, span) in block_spans.iter().enumerate() {
+        let Some(span) = span else {
+            continue;
+        };
+        for (previous_index, previous) in operations[..operation_index].iter().enumerate() {
+            let changes_target = match previous {
+                HashlineOperation::Swap { range, .. } | HashlineOperation::Delete { range } => {
+                    range.start.line <= span.1 && span.0 <= range.end.line
+                }
+                HashlineOperation::InsertBefore { anchor, .. }
+                | HashlineOperation::InsertAfter { anchor, .. } => {
+                    (span.0..=span.1).contains(&anchor.line)
+                }
+                HashlineOperation::SwapBlock { .. }
+                | HashlineOperation::DeleteBlock { .. }
+                | HashlineOperation::InsertBlockBefore { .. }
+                | HashlineOperation::InsertBlockAfter { .. } => block_spans[previous_index]
+                    .is_some_and(|previous_span| {
+                        previous_span.0 <= span.1 && span.0 <= previous_span.1
+                    }),
+                HashlineOperation::InsertHead { .. }
+                | HashlineOperation::InsertTail { .. }
+                | HashlineOperation::RemoveFile
+                | HashlineOperation::RenameFile { .. } => false,
+            };
+            if changes_target {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "Hashline block operation {} cannot follow an earlier operation that changes its original block; apply the block operation in a separate patch",
+                    operation_index + 1
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn required_block_span(
+    block_spans: &[Option<(usize, usize)>],
+    operation_index: usize,
+) -> Result<(usize, usize), FunctionCallError> {
+    block_spans
+        .get(operation_index)
+        .copied()
+        .flatten()
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "Hashline block operation is missing its original span".to_string(),
+            )
+        })
+}
+
+fn adjusted_block_span(
+    original_span: (usize, usize),
+    shifts: &[isize],
+    current_len: usize,
+) -> Result<(usize, usize), FunctionCallError> {
+    let start = adjusted_index(original_span.0, shifts)?;
+    let end = adjusted_index(original_span.1, shifts)?;
+    if start > end || end >= current_len {
+        return Err(FunctionCallError::RespondToModel(
+            "Hashline block operation no longer maps to the current file contents".to_string(),
+        ));
+    }
+    Ok((start, end))
 }
 
 fn block_span(

@@ -26,6 +26,12 @@ pub(super) struct SourceLine {
     text: String,
     ending: LineEnding,
 }
+#[derive(Clone, Debug)]
+pub(super) struct SourceDocument {
+    pub(super) bom: bool,
+    pub(super) lines: Vec<SourceLine>,
+    pub(super) fallback_line_ending: LineEnding,
+}
 
 impl AsRef<str> for SourceLine {
     fn as_ref(&self) -> &str {
@@ -33,24 +39,29 @@ impl AsRef<str> for SourceLine {
     }
 }
 
-pub(super) fn source_lines(contents: &str, normalized_contents: &str) -> Vec<SourceLine> {
+pub(super) fn source_document(contents: &str, normalized_contents: &str) -> SourceDocument {
     let line_endings = original_line_endings(contents);
-    split_lines_preserve(normalized_contents)
+    let lines = split_lines_preserve(normalized_contents)
         .into_iter()
         .enumerate()
         .map(|(index, line)| SourceLine {
             text: line.to_string(),
             ending: line_endings.get(index).copied().unwrap_or(LineEnding::None),
         })
-        .collect()
+        .collect();
+    SourceDocument {
+        bom: contents.starts_with('\u{feff}'),
+        lines,
+        fallback_line_ending: line_endings.first().copied().unwrap_or(LineEnding::Lf),
+    }
 }
 
-pub(super) fn reassemble_file_contents(lines: &[SourceLine], original_contents: &str) -> String {
+pub(super) fn reassemble_file_contents(document: &SourceDocument) -> String {
     let mut output = String::new();
-    if original_contents.starts_with('\u{feff}') {
+    if document.bom {
         output.push('\u{feff}');
     }
-    for line in lines {
+    for line in &document.lines {
         output.push_str(&line.text);
         output.push_str(line.ending.as_str());
     }
@@ -75,14 +86,6 @@ fn original_line_endings(contents: &str) -> Vec<LineEnding> {
         line_endings.push(ending);
     }
     line_endings
-}
-
-pub(super) fn default_line_ending(lines: &[SourceLine]) -> LineEnding {
-    lines
-        .iter()
-        .map(|line| line.ending)
-        .find(|ending| *ending != LineEnding::None)
-        .unwrap_or(LineEnding::Lf)
 }
 
 fn preferred_insertion_ending(

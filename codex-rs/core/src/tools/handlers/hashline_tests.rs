@@ -162,6 +162,18 @@ fn preserves_no_final_newline_when_deleting_final_line() {
     .expect("subsequent tail insertion should preserve no final newline");
     assert_eq!(updated, "alpha\r\ntail");
 }
+#[test]
+fn preserves_line_ending_for_newline_only_files() {
+    let apply = |original: &str, patch: &str| {
+        apply_hashline_patch("notes.txt", original, patch)
+            .expect("newline-only insertion should preserve the source line ending")
+    };
+
+    assert_eq!(apply("\r\n", "INS.HEAD|value"), "value\r\n");
+    assert_eq!(apply("\r\n", "INS.TAIL|value"), "value\r\n");
+    assert_eq!(apply("\u{feff}\r\n", "INS.HEAD|value"), "\u{feff}value\r\n");
+    assert_eq!(apply("\r", "INS.HEAD|value"), "value\r");
+}
 
 #[test]
 fn rejects_stale_line_hash() {
@@ -1017,26 +1029,36 @@ fn formatter_output_round_trips_as_pasted_payload() {
 }
 
 #[test]
-fn keeps_uniform_read_output_payload_prefixes_for_scalar_literals() {
-    let updated = apply_hashline_patch(
-        "notes.txt",
-        "alpha\nbeta\ngamma\n",
-        &format!(
-            "SWAP 2:{}\n1:{}|123\n2:{}|\"name\"",
-            line_hash("beta"),
-            line_hash("123"),
-            line_hash("\"name\"")
-        ),
-    )
-    .expect("scalar-looking read output rows should stay literal");
+fn strips_numeric_and_quoted_read_output_payload_prefixes() {
+    let apply = |payload: &str| {
+        let patch = format!("SWAP 2:{}\n{payload}", line_hash("beta"));
+        apply_hashline_patch("notes.txt", "alpha\nbeta\ngamma\n", &patch)
+            .expect("uniform pasted scalar rows should apply")
+    };
 
     assert_eq!(
-        updated,
-        format!(
-            "alpha\n1:{}|123\n2:{}|\"name\"\ngamma\n",
+        apply(&format!(
+            "1:{}|123\n2:{}|456",
             line_hash("123"),
-            line_hash("\"name\"")
-        )
+            line_hash("456")
+        )),
+        "alpha\n123\n456\ngamma\n"
+    );
+    assert_eq!(
+        apply(&format!(
+            "1:{}|\"alpha\"\n2:{}|\"beta\"",
+            line_hash("\"alpha\""),
+            line_hash("\"beta\"")
+        )),
+        "alpha\n\"alpha\"\n\"beta\"\ngamma\n"
+    );
+    assert_eq!(
+        apply(&format!(
+            "1:{}|123,\n2:{}|1.5e3",
+            line_hash("123,"),
+            line_hash("1.5e3")
+        )),
+        "alpha\n123,\n1.5e3\ngamma\n"
     );
 }
 
@@ -1059,21 +1081,22 @@ fn strips_decorated_read_output_payload_prefixes() {
 }
 
 #[test]
-fn keeps_mixed_read_output_payload_prefixes_literal() {
-    let updated = apply_hashline_patch(
+fn rejects_mixed_read_output_and_literal_payload_rows() {
+    let error = apply_hashline_patch(
         "notes.txt",
         "alpha\nbeta\ngamma\n",
         &format!(
-            "SWAP 2:{}\n1:{}|bravo\ncharlie",
+            "SWAP 2:{}\n1:{}|bravo\n+charlie",
             line_hash("beta"),
             line_hash("bravo")
         ),
     )
-    .expect("mixed bare payload rows should stay literal");
+    .expect_err("mixed pasted and literal rows should reject");
 
-    assert_eq!(
-        updated,
-        format!("alpha\n1:{}|bravo\ncharlie\ngamma\n", line_hash("bravo"))
+    assert!(
+        error
+            .to_string()
+            .contains("mixes pasted read-output rows with literal rows")
     );
 }
 
@@ -1257,6 +1280,68 @@ fn subsequent_operations_use_original_line_anchors() {
         .expect("later operation should target original line after earlier insert");
 
     assert_eq!(updated, "AAA\nXXX\nBBB\nCCC\nZZZ\n");
+}
+#[test]
+fn maps_block_span_after_preceding_insert() {
+    let path = "src/main.rs";
+    let original = "preamble();\nfn hello() {\n    work();\n}\nnext_statement();\n";
+    let anchor = block_anchor(path, original, 2);
+    let patch = format!(
+        "INS.PRE {}|inserted();\nSWAP.BLK {anchor}:\n+fn replaced() {{\n+    done();\n+}}",
+        line_anchor(1, "preamble();")
+    );
+
+    let updated = apply_hashline_patch(path, original, &patch)
+        .expect("block span should follow a prefix insert");
+
+    assert_eq!(
+        updated,
+        "inserted();\npreamble();\nfn replaced() {\n    done();\n}\nnext_statement();\n"
+    );
+}
+
+#[test]
+fn rejects_insertions_inside_block_before_block_operation() {
+    let path = "src/main.rs";
+    let original = "fn hello() {\n    work();\n}\nnext_statement();\n";
+    let anchor = block_anchor(path, original, 1);
+
+    for inserted in ["    added();", "    if true {"] {
+        let patch = format!(
+            "INS.POST {}|{inserted}\nSWAP.BLK {anchor}:\n+fn replaced() {{\n+}}",
+            line_anchor(2, "    work();")
+        );
+        let error = apply_hashline_patch(path, original, &patch)
+            .expect_err("an earlier insertion inside a block should reject the block operation");
+        assert!(error.to_string().contains("cannot follow"));
+    }
+}
+
+#[test]
+fn rejects_line_replacement_inside_block_before_block_operation() {
+    let path = "src/main.rs";
+    let original = "fn hello() {\n    work();\n}\nnext_statement();\n";
+    let anchor = block_anchor(path, original, 1);
+    let patch = format!(
+        "SWAP {}|work();\nSWAP.BLK {anchor}:\n+fn replaced() {{\n+}}",
+        line_anchor(2, "    work();")
+    );
+
+    let error = apply_hashline_patch(path, original, &patch)
+        .expect_err("a line replacement inside a block should reject the block operation");
+    assert!(error.to_string().contains("cannot follow"));
+}
+
+#[test]
+fn rejects_overlapping_block_operations_in_one_patch() {
+    let path = "src/main.rs";
+    let original = "fn hello() {\n    work();\n}\nnext_statement();\n";
+    let anchor = block_anchor(path, original, 1);
+    let patch = format!("INS.BLK.PRE {anchor}:\n+preamble\nINS.BLK.POST {anchor}:\n+postamble");
+
+    let error = apply_hashline_patch(path, original, &patch)
+        .expect_err("overlapping block operations should reject");
+    assert!(error.to_string().contains("cannot follow"));
 }
 
 #[test]

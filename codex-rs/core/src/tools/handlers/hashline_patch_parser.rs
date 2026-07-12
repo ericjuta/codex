@@ -277,53 +277,47 @@ fn collect_payload_lines(
         });
         *index += 1;
     }
-    strip_uniform_read_output_payload_prefixes(&mut payload);
+    strip_uniform_read_output_payload_prefixes(&mut payload)?;
     Ok(payload.into_iter().map(|line| line.text).collect())
 }
 
-fn strip_uniform_read_output_payload_prefixes(payload: &mut [PayloadLine]) {
-    let is_bare_literal_value = |line: &str| {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return false;
-        }
-        if ((trimmed.starts_with('"') && trimmed.ends_with('"'))
-            || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
-            && trimmed.len() > 2
-        {
-            return true;
-        }
-        if let Some(stripped) = trimmed.strip_suffix(',') {
-            return stripped.parse::<f64>().is_ok();
-        }
-        trimmed.parse::<f64>().is_ok()
-    };
-
-    let mut saw_bare_payload = false;
-    let mut all_literal_values = true;
-    for line in payload.iter() {
-        if line.kind != PayloadLineKind::Bare || line.text.trim().is_empty() {
-            continue;
-        }
-        saw_bare_payload = true;
-        let Some(stripped) = strip_read_output_payload_prefix(&line.text) else {
-            return;
-        };
-        if !is_bare_literal_value(stripped) {
-            all_literal_values = false;
+fn strip_uniform_read_output_payload_prefixes(
+    payload: &mut [PayloadLine],
+) -> Result<(), FunctionCallError> {
+    let mut saw_prefixed = false;
+    let mut saw_unprefixed = false;
+    for line in payload
+        .iter()
+        .filter(|line| line.kind == PayloadLineKind::Bare)
+    {
+        if strip_read_output_payload_prefix(&line.text).is_some() {
+            saw_prefixed = true;
+        } else {
+            saw_unprefixed = true;
         }
     }
-    if !saw_bare_payload || all_literal_values {
-        return;
+    if !saw_prefixed {
+        return Ok(());
     }
-    for line in payload.iter_mut() {
-        if line.kind == PayloadLineKind::Bare
-            && !line.text.trim().is_empty()
-            && let Some(stripped) = strip_read_output_payload_prefix(&line.text)
-        {
+    if saw_unprefixed
+        || payload
+            .iter()
+            .any(|line| line.kind == PayloadLineKind::Literal)
+    {
+        return Err(FunctionCallError::RespondToModel(
+            "Hashline payload mixes pasted read-output rows with literal rows; prefix literal rows with + or provide uniformly formatted read-output rows"
+                .to_string(),
+        ));
+    }
+    for line in payload
+        .iter_mut()
+        .filter(|line| line.kind == PayloadLineKind::Bare)
+    {
+        if let Some(stripped) = strip_read_output_payload_prefix(&line.text) {
             line.text = stripped.to_string();
         }
     }
+    Ok(())
 }
 
 fn strip_read_output_payload_prefix(line: &str) -> Option<&str> {
