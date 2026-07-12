@@ -196,6 +196,7 @@ pub(super) fn apply_hashline_patch(
         .collect::<Vec<_>>();
     let normalized_contents = normalize_file_text(contents);
     let mut lines = source_lines(contents, &normalized_contents);
+    let fallback_line_ending = default_line_ending(&lines);
 
     if operations.is_empty() {
         return Err(FunctionCallError::RespondToModel(
@@ -209,6 +210,7 @@ pub(super) fn apply_hashline_patch(
         &operations,
         &normalized_contents,
         normalized_contents.ends_with('\n'),
+        fallback_line_ending,
     )?;
 
     let output = reassemble_file_contents(&lines, contents);
@@ -1032,6 +1034,7 @@ fn apply_operations(
     operations: &[HashlineOperation],
     original_contents: &str,
     original_has_final_newline: bool,
+    fallback_line_ending: LineEnding,
 ) -> Result<(), FunctionCallError> {
     let original_lines = split_lines_preserve(original_contents)
         .into_iter()
@@ -1046,7 +1049,13 @@ fn apply_operations(
                 validate_range(&original_lines, &deleted, range)?;
                 let start_index = adjusted_index(range.start.line, &shifts)?;
                 let replaced_count = range.end.line - range.start.line + 1;
-                replace_current_range(lines, start_index, replaced_count, replacement)?;
+                replace_current_range(
+                    lines,
+                    start_index,
+                    replaced_count,
+                    replacement,
+                    fallback_line_ending,
+                )?;
                 mark_deleted(&mut deleted, range.start.line, range.end.line);
                 apply_delta_after(
                     &mut shifts,
@@ -1058,29 +1067,59 @@ fn apply_operations(
                 validate_range(&original_lines, &deleted, range)?;
                 let start_index = adjusted_index(range.start.line, &shifts)?;
                 let deleted_count = range.end.line - range.start.line + 1;
-                replace_current_range(lines, start_index, deleted_count, &[])?;
+                replace_current_range(
+                    lines,
+                    start_index,
+                    deleted_count,
+                    &[],
+                    fallback_line_ending,
+                )?;
                 mark_deleted(&mut deleted, range.start.line, range.end.line);
                 apply_delta_after(&mut shifts, range.end.line, -(deleted_count as isize));
             }
             HashlineOperation::InsertBefore { anchor, inserted } => {
                 validate_anchor(&original_lines, &deleted, anchor)?;
                 let index = adjusted_index(anchor.line, &shifts)?;
-                insert_current_lines(lines, index, inserted, original_has_final_newline);
+                insert_current_lines(
+                    lines,
+                    index,
+                    inserted,
+                    original_has_final_newline,
+                    fallback_line_ending,
+                );
                 apply_delta_from(&mut shifts, anchor.line, inserted.len() as isize);
             }
             HashlineOperation::InsertAfter { anchor, inserted } => {
                 validate_anchor(&original_lines, &deleted, anchor)?;
                 let index = adjusted_index(anchor.line, &shifts)?.saturating_add(1);
-                insert_current_lines(lines, index, inserted, original_has_final_newline);
+                insert_current_lines(
+                    lines,
+                    index,
+                    inserted,
+                    original_has_final_newline,
+                    fallback_line_ending,
+                );
                 apply_delta_after(&mut shifts, anchor.line, inserted.len() as isize);
             }
             HashlineOperation::InsertHead { inserted } => {
-                insert_current_lines(lines, 0, inserted, original_has_final_newline);
+                insert_current_lines(
+                    lines,
+                    0,
+                    inserted,
+                    original_has_final_newline,
+                    fallback_line_ending,
+                );
                 apply_delta_from(&mut shifts, 1, inserted.len() as isize);
             }
             HashlineOperation::InsertTail { inserted } => {
                 let index = lines.len();
-                insert_current_lines(lines, index, inserted, original_has_final_newline);
+                insert_current_lines(
+                    lines,
+                    index,
+                    inserted,
+                    original_has_final_newline,
+                    fallback_line_ending,
+                );
             }
             HashlineOperation::SwapBlock {
                 anchor,
@@ -1097,6 +1136,7 @@ fn apply_operations(
                     current_span.0 - 1,
                     current_span.1 - current_span.0 + 1,
                     replacement,
+                    fallback_line_ending,
                 )?;
                 mark_deleted(&mut deleted, original_span.0, original_span.1);
                 apply_delta_after(
@@ -1117,6 +1157,7 @@ fn apply_operations(
                     current_span.0 - 1,
                     current_span.1 - current_span.0 + 1,
                     &[],
+                    fallback_line_ending,
                 )?;
                 mark_deleted(&mut deleted, original_span.0, original_span.1);
                 apply_delta_after(
@@ -1133,7 +1174,13 @@ fn apply_operations(
                 let current_line = adjusted_index(anchor.line.line, &shifts)?.saturating_add(1);
                 let current_span = block_span(path, lines, current_line)?;
                 let index = current_span.0 - 1;
-                insert_current_lines(lines, index, inserted, original_has_final_newline);
+                insert_current_lines(
+                    lines,
+                    index,
+                    inserted,
+                    original_has_final_newline,
+                    fallback_line_ending,
+                );
                 apply_delta_from(&mut shifts, original_span.0, inserted.len() as isize);
             }
             HashlineOperation::InsertBlockAfter { anchor, inserted } => {
@@ -1144,7 +1191,13 @@ fn apply_operations(
                 let current_line = adjusted_index(anchor.line.line, &shifts)?.saturating_add(1);
                 let current_span = block_span(path, lines, current_line)?;
                 let index = current_span.1;
-                insert_current_lines(lines, index, inserted, original_has_final_newline);
+                insert_current_lines(
+                    lines,
+                    index,
+                    inserted,
+                    original_has_final_newline,
+                    fallback_line_ending,
+                );
                 apply_delta_after(&mut shifts, original_span.1, inserted.len() as isize);
             }
             HashlineOperation::RemoveFile | HashlineOperation::RenameFile { .. } => {
@@ -1265,7 +1318,11 @@ fn default_line_ending(lines: &[SourceLine]) -> LineEnding {
         .unwrap_or(LineEnding::Lf)
 }
 
-fn preferred_insertion_ending(lines: &[SourceLine], index: usize) -> LineEnding {
+fn preferred_insertion_ending(
+    lines: &[SourceLine],
+    index: usize,
+    fallback_line_ending: LineEnding,
+) -> LineEnding {
     lines
         .get(index)
         .map(|line| line.ending)
@@ -1277,7 +1334,7 @@ fn preferred_insertion_ending(lines: &[SourceLine], index: usize) -> LineEnding 
                 .map(|line| line.ending)
                 .filter(|ending| *ending != LineEnding::None)
         })
-        .unwrap_or_else(|| default_line_ending(lines))
+        .unwrap_or(fallback_line_ending)
 }
 
 fn insert_current_lines(
@@ -1285,11 +1342,12 @@ fn insert_current_lines(
     index: usize,
     inserted: &[String],
     original_has_final_newline: bool,
+    fallback_line_ending: LineEnding,
 ) {
     if inserted.is_empty() {
         return;
     }
-    let ending = preferred_insertion_ending(lines, index);
+    let ending = preferred_insertion_ending(lines, index, fallback_line_ending);
     let preserve_no_final_newline = index == lines.len()
         && (lines
             .last()
@@ -1318,6 +1376,7 @@ fn replace_current_range(
     start_index: usize,
     removed_count: usize,
     inserted: &[String],
+    fallback_line_ending: LineEnding,
 ) -> Result<(), FunctionCallError> {
     if start_index.saturating_add(removed_count) > lines.len() {
         return Err(FunctionCallError::RespondToModel(
@@ -1342,11 +1401,12 @@ fn replace_current_range(
                 .map(|line| line.ending)
                 .filter(|ending| *ending != LineEnding::None)
         })
-        .unwrap_or_else(|| default_line_ending(lines));
+        .unwrap_or(fallback_line_ending);
     let final_ending = lines
         .get(end_index.saturating_sub(1))
         .map(|line| line.ending)
         .unwrap_or(replacement_ending);
+    let removed_final_no_newline = end_index == lines.len() && final_ending == LineEnding::None;
     let replacement = inserted
         .iter()
         .enumerate()
@@ -1360,6 +1420,12 @@ fn replace_current_range(
         })
         .collect::<Vec<_>>();
     lines.splice(start_index..end_index, replacement);
+    if inserted.is_empty()
+        && removed_final_no_newline
+        && let Some(last) = lines.last_mut()
+    {
+        last.ending = LineEnding::None;
+    }
     Ok(())
 }
 

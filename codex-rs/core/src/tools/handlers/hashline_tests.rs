@@ -140,6 +140,26 @@ fn preserves_bom_and_final_newline_with_mixed_line_endings() {
 }
 
 #[test]
+fn preserves_no_final_newline_when_deleting_final_line() {
+    let original = "alpha\r\nbeta";
+    let updated = apply_hashline_patch(
+        "notes.txt",
+        original,
+        &format!("DEL {}", line_anchor(2, "beta")),
+    )
+    .expect("deleting the final line should preserve no final newline");
+    assert_eq!(updated, "alpha");
+
+    let updated = apply_hashline_patch(
+        "notes.txt",
+        original,
+        &format!("DEL {}\nINS.TAIL|tail", line_anchor(2, "beta")),
+    )
+    .expect("subsequent tail insertion should preserve no final newline");
+    assert_eq!(updated, "alpha\r\ntail");
+}
+
+#[test]
 fn rejects_stale_line_hash() {
     let error = apply_hashline_patch("notes.txt", "alpha\n", "SWAP 1:0000|omega")
         .expect_err("stale hash should be rejected");
