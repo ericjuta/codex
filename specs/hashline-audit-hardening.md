@@ -1,10 +1,10 @@
 # Harden Hashline Integrity and Prompt-Cache Efficiency
 
 - Branch: feat/hashline-audit-hardening
-- Status: In Progress
+- Status: Complete
 - Owner(s): Codex
 - Created: 2026-07-12
-- Last Updated: 2026-07-12 20:10Z
+- Last Updated: 2026-07-12 21:40Z
 
 - Links: [Hashline tool integration spec](../codex-rs/docs/hashline_tool_integration_spec.md) | [Prompt caching observability spec](../codex-rs/docs/prompt_caching_observability_spec.md) | [Audit proposal](https://chatgpt.com/s/t_6a53aa9fd5c48191937e16ee580984cb)
 
@@ -53,7 +53,7 @@ Success means:
 - [x] (2026-07-12 16:18Z) Implement normalization, mixed-newline preservation, and parser/path safety fixes.
 - [x] (2026-07-12 16:22Z) Remove redundant structured line content, compact JSON, and target write-success excerpts.
 - [x] (2026-07-12 19:52Z) Preserve existing model-visible tool ordering after repository review confirmed canonicalization is telemetry-gated.
-- [ ] Run final format/lint, independent branch review, full scoped validation, and diff/status verification; record final outcomes.
+- [x] (2026-07-12 21:40Z) Run final format/lint, independent branch review, full scoped validation, and diff/status verification; record final outcomes.
 
 ## Surprises & Discoveries
 
@@ -156,8 +156,10 @@ Hashline code lives under `codex-rs/core/src/tools`:
   response shaping, and the bridge to the repository apply-patch engine.
 - `handlers/hashline_hash.rs` owns normalization for hashing and line/file hashes.
 - `handlers/hashline_format.rs` owns bounded excerpts and structured response rows.
-- `handlers/hashline_block.rs` finds heuristic syntactic/indentation blocks.
-- `handlers/hashline_patch.rs` parses and applies anchored operations.
+- `handlers/hashline_block.rs` finds heuristic syntactic/indentation blocks and resolves replayable block anchors.
+- `handlers/hashline_patch.rs` applies anchored operations and builds previews/diffs.
+- `handlers/hashline_patch_parser.rs` owns operation, payload, range, and anchor grammar.
+- `handlers/hashline_patch_sections.rs` owns section/header parsing and validation.
 - `handlers/hashline_patch_lines.rs` owns exact source-line terminators and EOL-preserving mutation helpers.
 - `hashline_tests.rs` and `core/tests/suite/hashline.rs` cover unit and integration
   behavior.
@@ -203,10 +205,11 @@ record it as skipped rather than weakening the acceptance criteria.
 
 - Outcome: Integrity, normalization, parser, and bounded-output changes are implemented in scoped Hashline/core surfaces; speculative global tool ordering was removed after review.
   Evidence: hashline.rs, hashline_hash.rs, hashline_format.rs, hashline_patch.rs, hashline_patch_lines.rs, and focused tests.
-- Outcome: The focused Hashline target selected 143 tests and passed; 2 remote-environment tests were skipped by the harness and 2,987 unrelated tests were filtered.
-  Evidence: `just test -p codex-core hashline --no-capture` completed on 2026-07-12 after protocol round-trip and stale no-write integration coverage was added.
-- Outcome: Independent RoboRev converged to no issues; repository code review then drove removal of global tool sorting, structural extraction, and stronger integration coverage.
-- Outcome: The branch is split into focused implementation, audit-follow-up, parser/EOF, review-fix, structural, and protocol-test commits.
+- Outcome: The final focused Hashline target selected 152 tests and all 152 passed; 2 remote-environment tests self-skipped while 2,987 unrelated tests were filtered.
+  Evidence: `just test -p codex-core hashline --no-capture` completed after protocol round-trip, atomicity, output-budget, exact-byte, and no-op-write regression coverage was added.
+- Outcome: The final full `codex-core` suite ran 3,124 tests: all 3,124 passed, 15 skipped, and 2 unrelated flaky tests passed on retry.
+- Outcome: Independent repository review drove removal of global tool sorting, structural extraction, stronger integration coverage, and a final no-op/representation-only write-response fix; the final finding has dedicated passing regression coverage.
+- Outcome: The branch is split into focused implementation, audit-follow-up, parser/EOF, review-fix, structural, protocol-test, and final-response-fix commits.
 - Residual: Prompt-cache hit-rate/cost telemetry was not remeasured; existing ordered/set digest and provider cache telemetry remain the gate for any future canonicalization.
 - Residual: The apply-patch handoff is still not an atomic filesystem transaction; a concurrent external writer can race after validation, so the file guard remains the detection boundary.
 - Residual: The 8-hex file/block guards and 4-hex line anchors are compact non-cryptographic checksums, not an adversarial security boundary.
