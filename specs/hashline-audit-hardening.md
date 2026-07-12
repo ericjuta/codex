@@ -1,10 +1,10 @@
 # Harden Hashline Integrity and Prompt-Cache Efficiency
 
-- Branch: main
+- Branch: feat/hashline-audit-hardening
 - Status: Complete
 - Owner(s): Codex
 - Created: 2026-07-12
-- Last Updated: 2026-07-12 16:37Z
+- Last Updated: 2026-07-12 17:30Z
 
 - Links: [Hashline tool integration spec](../codex-rs/docs/hashline_tool_integration_spec.md) | [Prompt caching observability spec](../codex-rs/docs/prompt_caching_observability_spec.md) | [Audit proposal](https://chatgpt.com/s/t_6a53aa9fd5c48191937e16ee580984cb)
 
@@ -33,7 +33,7 @@ so equivalent turns have a stable serialized tool prefix.
 
 Success means:
 
-- focused Hashline tests prove collision-resistant anchors, interior range guards,
+- focused Hashline tests prove fixed-width compact version guards (not cryptographic collision resistance), interior range guards,
   block guards, normalization behavior, parser/path handling, and stale handoff
   behavior;
 - serialized Hashline responses remain within their byte budgets while removing
@@ -53,7 +53,7 @@ Success means:
 - [x] (2026-07-12 16:18Z) Implement normalization, mixed-newline preservation, and parser/path safety fixes.
 - [x] (2026-07-12 16:22Z) Remove redundant structured line content, compact JSON, and target write-success excerpts.
 - [x] (2026-07-12 16:24Z) Canonicalize final model-visible tool ordering without changing cache keys.
-- [x] (2026-07-12 16:37Z) Run final lint/diff validation and record outcomes and residual risks.
+- [x] (2026-07-12 17:30Z) Run final lint/diff validation and record outcomes and residual risks.
 
 ## Surprises & Discoveries
 
@@ -69,6 +69,12 @@ Success means:
   Evidence: codex-rs/core/src/tools/spec_plan.rs; the new permutation test covers the canonical result.
 - Observation: Write success used the generic first-200-line read envelope, while patch success already had changed-region preview bounds.
   Evidence: build_hashline_write_output and build_hashline_patch_success_body in codex-rs/core/src/tools/handlers/hashline.rs; write integration coverage now targets lines 201-202.
+- Observation: The follow-up audit found pasted read-output parsing still hard-coded to two hex digits.
+  Evidence: `strip_read_output_payload_prefix` now uses `LINE_HASH_WIDTH`, and a formatter-to-pasted-payload round-trip test covers the protocol boundary.
+- Observation: `find_block` emitted a combined line/block anchor that its resolver did not consume.
+  Evidence: the resolver now parses and validates both the line hash and recomputed block hash; round-trip and stale-block tests cover it.
+- Observation: Reattaching newline separators by output index changed untouched mixed-EOL boundaries after inserts or deletes.
+  Evidence: mutation now carries terminators on source-line records, with cardinality-changing, BOM, and final-newline tests.
 
 
 ## Decision Log
@@ -76,14 +82,14 @@ Success means:
 - Decision: Keep the existing Hashline wire envelope but make structured line rows metadata-only when flat content is present.
   Rationale: This removes duplicated prompt tokens while preserving the human-readable anchored excerpt and bounded response fields.
   Date/Author: 2026-07-12 / Codex
-- Decision: Use fixed-width strong line and file hashes and reject legacy-width anchors.
+- Decision: Use fixed-width compact line and file guards and reject legacy-width anchors.
 - Rationale: This is a greenfield contract; accepting short hashes would preserve the audit's collision risk and create ambiguous stale-write behavior.
 - Date/Author: 2026-07-12 / Codex
 - Decision: Require a file guard for multi-line and block mutations, and expose the selected block span and guard in find-block output.
   Rationale: Endpoint-only validation cannot detect interior edits, and heuristic block selection must be reviewable before mutation.
   Date/Author: 2026-07-12 / Codex
-- Decision: Preserve newline semantics deliberately instead of canonicalizing mixed input based on the first newline.
-  Rationale: BOM and CRLF normalization are useful for hashing, but mutation must not unexpectedly rewrite unrelated line endings.
+- Decision: Preserve newline semantics deliberately with source-line records instead of reattaching separators by output index.
+  Rationale: Canonical BOM/EOL normalization is useful for hashing, while untouched line records must retain their exact terminators through cardinality-changing edits.
   Date/Author: 2026-07-12 / Codex
 - Decision: Do not change the default prompt-cache key or move volatile context.
   Rationale: The prompt-cache handoff requires evidence before cache-key or context-boundary changes; deterministic tool ordering is a smaller, behavior-neutral intervention.
@@ -93,6 +99,12 @@ Success means:
   Date/Author: 2026-07-12 / Codex
 - Decision: Sort final model-visible tool specs by stable (name, variant) identity after filtering and namespace merging.
   Rationale: This stabilizes the serialized tool prefix for prompt-cache reuse without changing the default cache key, context boundaries, or tool membership.
+  Date/Author: 2026-07-12 / Codex
+- Decision: Keep formatter and parser widths coupled through `LINE_HASH_WIDTH` and test the emitted row format as a round trip.
+  Rationale: A fixed-width greenfield grammar should not drift between model-visible output and pasted patch input.
+  Date/Author: 2026-07-12 / Codex
+- Decision: Parse and validate the complete `find_block` block anchor rather than advertising an output-only token.
+  Rationale: A returned block selection must be replayable and must fail when either the anchor line or selected block is stale.
   Date/Author: 2026-07-12 / Codex
 
 
@@ -159,8 +171,8 @@ The Hashline read envelope has both a flat anchored content string and metadata-
 structured lines rows. Existing-file patch headers use the canonical [path]#HASH
 form, line hashes are fixed-width, and multi-line validation checks both endpoints
 plus a file guard. Block selection is heuristic but carries a full file/block guard.
-Hashing canonicalizes BOM and line endings while mutation preserves the original
-line-ending sequence, including mixed input.
+Hashing canonicalizes BOM and line endings while mutation preserves each source-line
+record's terminator, including mixed input; inserted lines inherit a local/default ending.
 
 
 The repository is Rust. The applicable root `AGENTS.md` requires Hashline for
@@ -189,9 +201,12 @@ record it as skipped rather than weakening the acceptance criteria.
 
 - Outcome: Integrity, normalization, parser, bounded-output, and deterministic tool-order changes are implemented in the scoped Hashline/core surfaces.
   Evidence: hashline.rs, hashline_hash.rs, hashline_format.rs, hashline_patch.rs, spec_plan.rs, and their focused tests.
-- Outcome: The focused validation target is green: 157 tests passed, including 155 ordinary tests and 2 remote-environment tests skipped by the harness.
-  Evidence: just test -p codex-core spec_plan hashline --no-capture completed on 2026-07-12.
-- Outcome: Final gates passed: `just fmt`, `just fix -p codex-core`, and `git diff --check`; the final review contains exactly the 9 scoped files (754 insertions, 549 deletions).
+- Outcome: The focused Hashline target selected 131 tests and passed; 2 remote-environment tests were skipped by the harness and 2,988 unrelated tests were filtered.
+  Evidence: `just test -p codex-core hashline --no-capture` completed on 2026-07-12.
+- Outcome: Follow-up review remained scoped to 5 files (452 insertions, 119 deletions); the original implementation commit was 9 files (754 insertions, 549 deletions).
 - Residual: The complete workspace suite was not run because root policy requires explicit user approval; the two remote-environment tests were skipped by their harness.
 - Residual: Prompt-cache hit-rate/cost telemetry was not changed or remeasured in this implementation; only deterministic final tool-spec ordering was added, leaving cache-key and context-boundary behavior unchanged.
 - Residual: The apply-patch handoff is still not an atomic filesystem transaction; a concurrent external writer can race after validation, so the file guard remains the detection boundary.
+- Residual: The 8-hex file/block guards and 4-hex line anchors are compact non-cryptographic checksums, not an adversarial security boundary.
+- Residual: File guards cover canonical logical text and intentionally ignore BOM/EOL representation changes; raw-byte identity is not guarded.
+- Residual: Block selection remains heuristic; span, excerpt, file guard, and block anchor evidence are returned, but semantic selection still needs caller/model review.

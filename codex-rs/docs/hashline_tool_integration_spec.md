@@ -5,14 +5,14 @@
 Evaluate `/tmp/hashline` as the reference implementation for hash-anchored file
 reading and patching, then define how Codex should integrate it into the
 existing toolset without regressing sandboxing, approvals, remote filesystem
-support, code-mode tool planning, or `apply_patch` compatibility.
+support, code-mode tool planning, or the host's approval and sandbox guarantees.
 
 Live proof used for this spec:
 
 | Surface | Live state | Implication |
 | --- | --- | --- |
 | Reference checkout | `/tmp/hashline`, `main...origin/main`, clean at inspection time | Treat it as reference code, not vendored runtime truth. |
-| Codex checkout | `/home/ericjuta/.openclaw/workspace/repos/codex`, branch `main` | Spec is written against the active branch. |
+| Codex checkout | `/home/ericjuta/.openclaw/workspace/repos/codex`, branch `feat/hashline-audit-hardening` | Spec is written against the active hardening branch. |
 | Existing Codex tool path | `codex-rs/tools` plus `codex-rs/core/src/tools` | Add model-visible definitions in the normal tool planning path. |
 | Existing patch path | `codex-rs/apply-patch` plus `core/src/tools/handlers/apply_patch.rs` and `core/src/tools/runtimes/apply_patch.rs` | Any replacement must preserve approval, sandbox, remote FS, telemetry, and event behavior. |
 | MCP path | `codex-rs/codex-mcp/src/connection_manager.rs` and `core/src/tools/handlers/mcp.rs` | Hashline can be tried as MCP, but MCP is not the best default integration boundary. |
@@ -54,8 +54,8 @@ Hashline provides:
 
 | Capability | Reference files | Notes |
 | --- | --- | --- |
-| Snapshot read format | `/tmp/hashline/crates/core/src/commands/read.rs`, `/tmp/hashline/crates/core/src/document.rs`, `/tmp/hashline/crates/core/src/hash.rs` | Emits `[path#HASH]` plus `line:hash|content`; file hash is 4 hex chars from xxh3 top 16 bits; line hash is 2 hex chars from xxh32 low 8 bits. |
-| Patch grammar | `/tmp/hashline/crates/core/src/tokenizer.rs`, `/tmp/hashline/crates/core/src/parser.rs` | Supports `SWAP`, `DEL`, `INS.PRE`, `INS.POST`, `INS.HEAD`, `INS.TAIL`, one- or two-hex line-hash suffixes, hashed range endpoints such as `SWAP 12:ab..14:cd`, `..=`, and `-` range separators, escaped payload prefixes (`++` for literal `+`, `+-` for literal `-`), block operations (`SWAP.BLK`, `DEL.BLK`, `INS.BLK.POST`, `INS.BLK.PRE`, `INS.BLK`), sectioned `REM`/`MV`, envelope markers, and `*** Abort`. |
+| Snapshot read format | `/tmp/hashline/crates/core/src/commands/read.rs`, `/tmp/hashline/crates/core/src/document.rs`, `/tmp/hashline/crates/core/src/hash.rs` | Reference emits `[path#HASH]` plus `line:hash|content`; the native Codex contract emits `[path]#HASH` plus fixed-width 4-hex line anchors and 8-hex file guards. |
+| Patch grammar | `/tmp/hashline/crates/core/src/tokenizer.rs`, `/tmp/hashline/crates/core/src/parser.rs` | Supports the Hashline operations and sectioned file operations; the native Codex contract requires fixed-width 4-hex line anchors and 8-hex file/block guards. |
 | Patch application | `/tmp/hashline/crates/core/src/commands/patch.rs` | Applies parsed edits against current lines and optional per-line expected hashes. |
 | Block finding | `/tmp/hashline/crates/core/src/commands/find_block.rs`, `/tmp/hashline/crates/core/src/block.rs` | Uses extension-driven brace, Markdown section, Python/Verse indentation, and Ruby `end`-pair block rules. |
 | CLI/MCP | `/tmp/hashline/crates/core/src/cli.rs`, `/tmp/hashline/crates/core/src/mcp.rs` | Exposes `read`, `patch`, `write`, `find_block`, `remove_file`, and `rename_file`. |
@@ -90,12 +90,12 @@ Expose a namespace named `hashline` with these first-stage tools:
 
 | Tool | Purpose | Model-visible output |
 | --- | --- | --- |
-| `hashline.read` | Read a bounded file range with Hashline anchors | `[path#HASH]` plus LF-normalized `line:hash|content`, reference-style `hash`/`lines` metadata, and explicit truncation metadata when capped. |
-| `hashline.write` | Write normalized content, including empty content, to a new file or overwrite with `force=true` | Success/failure status plus a refreshed bounded `[path#HASH]` read view after writing. |
-| `hashline.patch` | Apply a Hashline patch string to one file, to multiple existing files with `[path#HASH]` sections, or to multiple missing files with `create=true` and `[path]` sections | Success/failure status; warnings for bare line anchors; dry runs include old/new hashes, file operations, and compact changed-line previews; successful updates include bounded structured rows for the changed region. |
-| `hashline.find_block` | Resolve a block around an anchored line | Block span, language guess, reference-style `file`/`line_count`/`block_lines` metadata, and a small LF-normalized anchored excerpt. |
-| `hashline.remove_file` | Delete one text file after optional file-hash validation | Hashline success/failure status with old file hash after `apply_patch` verifies and applies the delete. |
-| `hashline.rename_file` | Move one text file after optional file-hash validation | Hashline success/failure status with old/new paths, reference-style `src`/`dst` aliases, and refreshed destination header after `apply_patch` verifies and applies the move. |
+| `hashline.read` | Read a bounded file range with Hashline anchors | `[path]#HASH` plus LF-normalized `line:4-hex|content`, reference-style `hash`/`lines` metadata, and explicit truncation metadata when capped. |
+| `hashline.write` | Write normalized content, including empty content, to a new file or overwrite with `force=true` | Success/failure status plus a bounded changed-region `[path]#HASH` excerpt after writing. |
+| `hashline.patch` | Apply a Hashline patch to one file, to multiple existing files with `[path]#HASH` sections, or to multiple missing files with `create=true` and `[path]` sections | Success/failure status; existing-file patches require a file guard, create patches do not; dry runs include old/new hashes, file operations, and compact changed-line previews; successful updates include bounded structured rows for the changed region. |
+| `hashline.find_block` | Resolve a block around an anchored line | Block span, language guess, `[path]#HASH` file evidence, a `line:4-hex@8-hex` block anchor, reference-style `file`/`line_count`/`block_lines` metadata, and a small LF-normalized anchored excerpt. |
+| `hashline.remove_file` | Delete one text file after required file-hash validation | Hashline success/failure status with old file hash after `apply_patch` verifies and applies the delete. |
+| `hashline.rename_file` | Move one text file after required file-hash validation | Hashline success/failure status with old/new paths, reference-style `src`/`dst` aliases, and refreshed destination header after `apply_patch` verifies and applies the move. |
 
 Use structured function tools for stage 1. A freeform `hashline_patch` tool can
 be added later if model behavior proves better with grammar-constrained patch
@@ -117,9 +117,9 @@ Empty-file reads and refreshed empty write/create outputs return no line range:
 
 ### Arguments
 
-The advertised Codex argument names remain `path` and `new_path`, but handlers
-also accept the reference MCP aliases: `file` for single-path tools and
-`src`/`dst` for rename.
+The canonical Codex argument names are `path` and `new_path`.
+Handlers also accept the reference MCP aliases: `file` for single-path tools and
+`src`/`dst` for rename; those aliases are not part of the greenfield contract.
 
 `hashline.read`:
 
@@ -145,8 +145,8 @@ also accept the reference MCP aliases: `file` for single-path tools and
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `path` | string | yes | Default target path when `patch` has no file sections. |
-| `patch` | string | yes | Hashline ops such as `SWAP 12:ab:`, `SWAP 12:ab..14:cd:`, a `[path#HASH]` section plus ops, multiple `[path#HASH]` sections for existing-file multi-file edits, or `[path]` sections with `create=true` for missing-file creation. Bracketed section headers recover common apply-patch-style path noise such as `[*** Update File: path#HASH]`. Payload rows may use README-style `+` prefixes, bare replacement lines, or uniform pasted read-output rows like `1:ab\|content`, `>>> 1:ab\|content`, or `* 1:ab\|content`; `++` emits a literal `+`, `+-` emits a literal `-`, and `+1:ab\|content` emits the read-output prefix literally. Sectioned patches also accept reference-style `REM` and `MV <path>` file ops; `MV` may be combined with line ops to rename and edit one file section, while `REM` must stand alone. `*** Abort` suppresses an embedded patch without writing. |
+| `path` | string | yes | Default path/context for the patch request; existing-file edits still require a `[path]#HASH` section. |
+| `patch` | string | yes | Hashline ops such as `SWAP 12:1a2b:`, `SWAP 12:1a2b..14:2b3c:`, a required `[path]#HASH` section for existing-file edits, or `[path]` sections with `create=true` for missing-file creation. Payload rows may use README-style `+` prefixes, bare replacement lines, or pasted read-output rows like `1:1a2b\|content`, `>>> 1:1a2b\|content`, or `* 1:1a2b\|content`; `++` emits a literal `+`, `+-` emits a literal `-`, and `+1:1a2b\|content` emits the read-output prefix literally. Sectioned patches also accept `REM` and `MV <path>` file ops; `MV` may be combined with line ops to rename and edit one file section, while `REM` must stand alone. `*** Abort` suppresses an embedded patch without writing. |
 | `dry_run` | boolean | no | Defaults to false. Validates without writing and returns old/new hashes plus a byte-bounded changed-line preview. Multi-file details are also byte-bounded. |
 | `create` | boolean | no | Defaults to false. When true, every target must be missing and the patch is applied to empty file contents before routing through `apply_patch` add-file handling. Empty patches create zero-byte files. Use `[path]` sections for multi-file creation. |
 | `environment_id` | string | only when multiple environments exist | Match `apply_patch` environment selection behavior. |
@@ -156,7 +156,7 @@ also accept the reference MCP aliases: `file` for single-path tools and
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `path` | string | yes | File to delete, resolved relative to selected environment cwd. |
-| `expected_hash` | string | no | Optional 4-hex file hash from a Hashline read header. |
+| `expected_hash` | string | yes | Required 8-hex logical-text file hash from a Hashline read header. |
 | `dry_run` | boolean | no | Validate without deleting. |
 | `environment_id` | string | only when multiple environments exist | Match other file tools. |
 
@@ -166,19 +166,19 @@ also accept the reference MCP aliases: `file` for single-path tools and
 | --- | --- | --- | --- |
 | `path` | string | yes | Source file, resolved relative to selected environment cwd. |
 | `new_path` | string | yes | Destination path, which must be missing. |
-| `expected_hash` | string | no | Optional 4-hex file hash from a Hashline read header. |
+| `expected_hash` | string | yes | Required 8-hex logical-text file hash from a Hashline read header. |
 | `dry_run` | boolean | no | Validate without renaming. |
 | `environment_id` | string | only when multiple environments exist | Match other file tools. |
 
-Rename outputs retain Codex's `path`/`new_path` fields and also include
-reference-compatible `src`/`dst` aliases.
+Rename outputs retain the canonical Codex `path`/`new_path` fields.
+Reference-style `src`/`dst` fields may be present but are not part of the greenfield contract.
 
 `hashline.find_block`:
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `path` | string | yes | Same path resolution as `read`. |
-| `anchor` | string | yes | Prefer `line:hash`; also accepts `block N:`, a unique short line hash, and a bare line when no hash is available. |
+| `anchor` | string | yes | Use `line:4-hex`, `block N:`, a unique 4-hex line hash, or a `line:4-hex@8-hex` block anchor returned by `find_block`; bare line numbers are not accepted. |
 | `environment_id` | string | only when multiple environments exist | Match other file tools. |
 
 ### Output Bounds
@@ -190,7 +190,7 @@ Required caps:
 | Output | Default cap | Hard cap | Behavior on overflow |
 | --- | --- | --- | --- |
 | `read` lines | 200 lines | 1000 lines and 24 KiB serialized excerpt | Return selected range plus `truncated=true`, `next_start_line`, and file total when available. |
-| `write` refreshed lines | 200 lines | 1000 lines and 24 KiB serialized excerpt | Return bounded post-write hashline output using the same cap shape as `read`. |
+| `write` changed-region excerpt | 40 lines | 40 lines and 4 KiB serialized excerpt | Return the changed region with refreshed anchors rather than an unconditional first-200-line reread. |
 | `patch` preview/excerpt | 40 lines | 40 lines and 4 KiB per preview/excerpt | Return a compact preview, then refreshed anchors for the changed region only. |
 | Multi-file patch details | all files | 24 KiB serialized detail array | Return `total_files` and `files_truncated` when not every detail fits. |
 | `find_block` excerpt | 80 lines | 300 lines and 24 KiB serialized excerpt | Return span metadata even when excerpt is capped. |
@@ -240,8 +240,8 @@ flow in the same change.
 2. Resolve `path` against that environment's cwd.
 3. Read bytes through `turn_environment.environment.get_filesystem()`.
 4. Reject binary and invalid UTF-8 with a model-facing error.
-5. Normalize line endings for hashing, but preserve original line-ending facts
-   in metadata.
+5. Normalize line endings for hashing while preserving each source line's exact terminator for mutation.
+   New lines inherit a local/default terminator; previews remain LF-normalized.
 6. Format bounded anchored lines.
 
 ### Patch Runtime
@@ -254,15 +254,15 @@ Required behavior:
 2. Read current file through `ExecutorFileSystem`.
 3. Parse patch text using `codex-hashline`.
 4. Validate expected anchors:
-   - If the patch contains `[path#HASH]`, compare it to the current normalized
+   - If the patch contains `[path]#HASH`, compare it to the current normalized logical-text
      file hash and fail closed on mismatch.
-   - If operations include `line:hash`, validate the per-line hash before
+   - If operations include `line:4-hex`, validate the per-line hash before
      applying the operation.
-   - If only bare line numbers are supplied, allow them in stage 1 but return a
-     warning that hash-qualified anchors are preferred.
+   - Reject bare line numbers and malformed line anchors; there is no warning fallback.
+     Hash-qualified anchors are required for line-addressed mutation.
 5. Produce a before/after preview and file-change summary before writing.
-6. Preserve the original CRLF line-ending shape when patching existing CRLF
-   files, while keeping model-visible previews LF-normalized.
+6. Preserve each untouched logical line's original CRLF, LF, or CR terminator through
+   insertions, deletions, and replacements, including BOM and final-newline variants.
 7. Reuse Codex approval and sandbox policy:
    - build approval keys by environment and path;
    - use `FileSystemSandboxContext` derived from the selected attempt;
@@ -284,7 +284,7 @@ The tool guidance should be short and operational:
 
 1. Use `hashline.read` before `hashline.patch` when editing a file not already
    read with Hashline anchors.
-2. Prefer `line:hash` anchors in patch operations.
+2. Use fixed-width `line:4-hex` anchors in patch operations.
 3. Re-read when a stale file or line hash is reported.
 4. Use `hashline.write` for direct single-file creation or force overwrites,
    `hashline.patch create=true` when creating via line operations, including
@@ -349,10 +349,10 @@ Add focused unit tests in sibling `*_tests.rs` files:
 
 | Area | Tests |
 | --- | --- |
-| Hashing | LF/CRLF normalization, trailing whitespace behavior, empty files, line hash formatting. |
+| Hashing | LF/CRLF/CR normalization, trailing whitespace behavior, empty files, fixed-width line/file hash formatting, and logical-text guard semantics. |
 | Read formatting | bounded ranges, truncation metadata, file hash formatting. |
-| Parser | all supported ops, malformed ops, conflicting section hashes, contamination from `apply_patch` syntax. |
-| Apply | swaps, deletes, inserts, multi-op shifting, stale line hash, stale file hash, block ops. |
+| Parser | all supported ops, malformed ops, fixed-width anchors, conflicting section hashes, formatter-to-pasted-payload round trips, and contamination from `apply_patch` syntax. |
+| Apply | swaps, deletes, inserts, mixed-EOL cardinality changes, final-newline/BOM variants, multi-op shifting, stale line/file hashes, block-anchor round trips, and block ops. |
 
 ### `codex-core` integration
 
@@ -360,9 +360,9 @@ Prefer integration tests under `core/suite`:
 
 | Scenario | Expected proof |
 | --- | --- |
-| `hashline.read` on text file | Model receives bounded `[path#HASH]` output. |
-| `hashline.write` create/overwrite | File changes through the native tool and response includes refreshed hashline output. |
-| `hashline.patch` after read | File changes and response includes refreshed hash. |
+| `hashline.read` on text file | Model receives bounded `[path]#HASH` output with fixed-width anchors. |
+| `hashline.write` create/overwrite | File changes through the native tool and response includes a bounded changed-region excerpt with refreshed anchors. |
+| `hashline.patch` after read | File changes and response includes a bounded changed-region excerpt with a refreshed hash. |
 | Sectioned multi-file `hashline.patch` | Multiple existing files change through one Hashline tool call and response includes per-file refreshed hashes or file-op status. |
 | Sectioned multi-file create | Multiple missing files are created through one Hashline tool call and response includes per-file refreshed hashes. |
 | Stale file hash | File operations are rejected without writing. |
@@ -387,20 +387,20 @@ If TUI-rendered text changes, add or update `insta` snapshots in `codex-tui`.
 | 7 | Decide visibility gate | feature/config/model capability plus schema update if config changes |
 | 8 | Evaluate replacement | compare Hashline vs `apply_patch` usage, failure recovery, and test parity |
 
-## Open Questions
+## Decisions and Residual Risks
 
-1. Should the first native patch tool be structured (`hashline.patch`) or
-   freeform (`hashline_patch`)? Structured is safer for stage 1; freeform may
-   be better once grammar coverage is mature.
-2. Should Hashline's file hash remain 4 hex chars? It is ergonomic but collision
-   risk is non-zero. Codex can keep the model-visible short tag while storing a
-   longer hidden/checkable hash in structured outputs.
-3. Should block operations ship in stage 1? They are useful, but explicit ranges
-   plus line hashes may be enough for the first landing stage.
-4. Should `hashline.read` include search/grep? The reference project has
-   benchmark history around line navigation, but the inspected CLI exposes
-   `read` and `find_block`, not a complete search replacement. Keep search out
-   of stage 1 unless a concrete model workflow needs it.
+1. Line anchors are fixed-width 4-hex values; file and block guards are fixed-width 8-hex
+   XXH3-derived compact version guards. They are not cryptographic or adversarial
+   collision-resistant boundaries; callers must treat stale-write rejection as best-effort
+   protection for trusted workspaces.
+2. File guards hash canonical logical text: BOM and CRLF/LF/CR spelling are normalized.
+   This protects logical content, not raw-byte representation; exact line terminators
+   are still preserved through mutation and new lines inherit a local/default ending.
+3. Block selection is heuristic. `find_block` returns the span, excerpt, file guard, and
+   block anchor; callers must review that evidence before destructive block edits.
+4. Hashline validation and apply_patch handoff remain non-atomic. Post-write verification
+   is mandatory, and a failure reports that a mutation may already have occurred.
+5. Full-workspace testing and cache hit-rate/cost telemetry are not claims of this change.
 
 ## Non-Goals
 

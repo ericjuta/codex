@@ -77,6 +77,67 @@ fn applies_patch_preserving_mixed_line_endings() {
 
     assert_eq!(updated, "alpha\r\nbravo\ngamma\rdelta");
 }
+#[test]
+fn preserves_mixed_line_endings_across_cardinality_changes() {
+    let original = "alpha\r\nbeta\ngamma\rdelta";
+    let apply = |patch: String| {
+        apply_hashline_patch("notes.txt", original, &patch).expect("mixed-EOL patch should apply")
+    };
+
+    assert_eq!(
+        apply(format!("INS.PRE {}|inserted", line_anchor(2, "beta"))),
+        "alpha\r\ninserted\nbeta\ngamma\rdelta"
+    );
+    assert_eq!(
+        apply(format!("INS.POST {}|inserted", line_anchor(1, "alpha"))),
+        "alpha\r\ninserted\nbeta\ngamma\rdelta"
+    );
+    assert_eq!(
+        apply(format!("DEL {}", line_anchor(2, "beta"))),
+        "alpha\r\ngamma\rdelta"
+    );
+    assert_eq!(
+        apply(format!("SWAP {}\nbravo\ncharlie", line_anchor(2, "beta"))),
+        "alpha\r\nbravo\ncharlie\ngamma\rdelta"
+    );
+    assert_eq!(
+        apply(format!(
+            "SWAP {}..={}\n+bravo",
+            line_anchor(2, "beta"),
+            line_anchor(3, "gamma")
+        )),
+        "alpha\r\nbravo\rdelta"
+    );
+    assert_eq!(
+        apply("INS.HEAD|head".to_string()),
+        "head\r\nalpha\r\nbeta\ngamma\rdelta"
+    );
+    assert_eq!(
+        apply("INS.TAIL|tail".to_string()),
+        "alpha\r\nbeta\ngamma\rdelta\r\ntail"
+    );
+}
+
+#[test]
+fn preserves_bom_and_final_newline_with_mixed_line_endings() {
+    let original = "\u{feff}alpha\r\nbeta\ngamma\rdelta\n";
+    let apply = |patch: String| {
+        apply_hashline_patch("notes.txt", original, &patch).expect("mixed-EOL patch should apply")
+    };
+
+    assert_eq!(
+        apply(format!("SWAP {}\nbravo\ncharlie", line_anchor(2, "beta"))),
+        "\u{feff}alpha\r\nbravo\ncharlie\ngamma\rdelta\n"
+    );
+    assert_eq!(
+        apply(format!("DEL {}", line_anchor(2, "beta"))),
+        "\u{feff}alpha\r\ngamma\rdelta\n"
+    );
+    assert_eq!(
+        apply("INS.TAIL|tail".to_string()),
+        "\u{feff}alpha\r\nbeta\ngamma\rdelta\ntail\n"
+    );
+}
 
 #[test]
 fn rejects_stale_line_hash() {
@@ -806,9 +867,29 @@ fn strips_uniform_read_output_payload_prefixes() {
     let updated = apply_hashline_patch(
         "notes.txt",
         "alpha\nbeta\ngamma\n",
-        "SWAP 2:f589\n1:aa|bravo\n2:bb|charlie",
+        &format!(
+            "SWAP 2:{}\n1:{}|bravo\n2:{}|charlie",
+            line_hash("beta"),
+            line_hash("bravo"),
+            line_hash("charlie")
+        ),
     )
     .expect("pasted read output rows should apply");
+
+    assert_eq!(updated, "alpha\nbravo\ncharlie\ngamma\n");
+}
+
+#[test]
+fn formatter_output_round_trips_as_pasted_payload() {
+    let read = build_hashline_read_body("replacement.txt", "bravo\ncharlie\n", 1, Some(2), 10)
+        .expect("formatter output should build");
+    let pasted_payload = read["content"]
+        .as_str()
+        .expect("formatter content should be a string");
+    let patch = format!("SWAP 2:{}\n{pasted_payload}", line_hash("beta"));
+
+    let updated = apply_hashline_patch("notes.txt", "alpha\nbeta\ngamma\n", &patch)
+        .expect("formatted output should be accepted as pasted payload");
 
     assert_eq!(updated, "alpha\nbravo\ncharlie\ngamma\n");
 }
@@ -818,11 +899,23 @@ fn keeps_uniform_read_output_payload_prefixes_for_scalar_literals() {
     let updated = apply_hashline_patch(
         "notes.txt",
         "alpha\nbeta\ngamma\n",
-        "SWAP 2:f589\n1:aa|123\n2:bb|\"name\"",
+        &format!(
+            "SWAP 2:{}\n1:{}|123\n2:{}|\"name\"",
+            line_hash("beta"),
+            line_hash("123"),
+            line_hash("\"name\"")
+        ),
     )
     .expect("scalar-looking read output rows should stay literal");
 
-    assert_eq!(updated, "alpha\n1:aa|123\n2:bb|\"name\"\ngamma\n");
+    assert_eq!(
+        updated,
+        format!(
+            "alpha\n1:{}|123\n2:{}|\"name\"\ngamma\n",
+            line_hash("123"),
+            line_hash("\"name\"")
+        )
+    );
 }
 
 #[test]
@@ -830,7 +923,13 @@ fn strips_decorated_read_output_payload_prefixes() {
     let updated = apply_hashline_patch(
         "notes.txt",
         "alpha\nbeta\ngamma\n",
-        "SWAP 2:f589\n>>> 1:aa|bravo\n>> * 2:bb|charlie\n  + 3:cc|delta",
+        &format!(
+            "SWAP 2:{}\n>>> 1:{}|bravo\n>> * 2:{}|charlie\n  + 3:{}|delta",
+            line_hash("beta"),
+            line_hash("bravo"),
+            line_hash("charlie"),
+            line_hash("delta")
+        ),
     )
     .expect("decorated pasted read output rows should apply");
 
@@ -842,11 +941,18 @@ fn keeps_mixed_read_output_payload_prefixes_literal() {
     let updated = apply_hashline_patch(
         "notes.txt",
         "alpha\nbeta\ngamma\n",
-        "SWAP 2:f589\n1:aa|bravo\ncharlie",
+        &format!(
+            "SWAP 2:{}\n1:{}|bravo\ncharlie",
+            line_hash("beta"),
+            line_hash("bravo")
+        ),
     )
     .expect("mixed bare payload rows should stay literal");
 
-    assert_eq!(updated, "alpha\n1:aa|bravo\ncharlie\ngamma\n");
+    assert_eq!(
+        updated,
+        format!("alpha\n1:{}|bravo\ncharlie\ngamma\n", line_hash("bravo"))
+    );
 }
 
 #[test]
@@ -854,11 +960,18 @@ fn explicit_payload_rows_keep_read_output_prefixes_literal() {
     let updated = apply_hashline_patch(
         "notes.txt",
         "alpha\nbeta\ngamma\n",
-        "SWAP 2:f589\n+1:aa|literal",
+        &format!(
+            "SWAP 2:{}\n+1:{}|literal",
+            line_hash("beta"),
+            line_hash("literal")
+        ),
     )
     .expect("explicit payload row should stay literal");
 
-    assert_eq!(updated, "alpha\n1:aa|literal\ngamma\n");
+    assert_eq!(
+        updated,
+        format!("alpha\n1:{}|literal\ngamma\n", line_hash("literal"))
+    );
 }
 #[test]
 fn explicit_payload_preserves_leading_hash_and_bracket() {
@@ -1547,21 +1660,52 @@ fn find_block_anchor_accepts_block_prefix_and_unique_hash() {
     let lines = vec!["alpha", "beta", "gamma"];
 
     assert_eq!(
-        resolve_find_block_anchor("block 2:", &lines)
+        resolve_find_block_anchor("src/main.rs", "block 2:", &lines)
             .expect("block-prefixed anchor should resolve"),
         2
     );
     assert_eq!(
-        resolve_find_block_anchor(&line_hash("gamma"), &lines)
+        resolve_find_block_anchor("src/main.rs", &line_hash("gamma"), &lines)
             .expect("unique short hash should resolve"),
         3
     );
 }
 
 #[test]
+fn find_block_anchor_round_trips_from_find_block_output() {
+    let path = "src/main.rs";
+    let lines = vec!["fn main() {", "    work();", "}"];
+    let (block_start, block_end) = find_block_span(path, &lines, 2);
+    let block_hash = hash_hex(&lines[block_start - 1..block_end].join("\n"));
+    let anchor = format!("2:{}@{block_hash}", line_hash(lines[1]));
+
+    assert_eq!(
+        resolve_find_block_anchor(path, &anchor, &lines)
+            .expect("find_block block anchor should round-trip"),
+        2
+    );
+}
+
+#[test]
+fn find_block_anchor_rejects_stale_block_hash() {
+    let path = "src/main.rs";
+    let lines = vec!["fn main() {", "    work();", "}"];
+    let stale_hash = if hash_hex("fn main() {\n    work();\n}") == "00000000" {
+        "00000001"
+    } else {
+        "00000000"
+    };
+    let anchor = format!("2:{}@{stale_hash}", line_hash(lines[1]));
+
+    let error = resolve_find_block_anchor(path, &anchor, &lines)
+        .expect_err("stale block hash should reject");
+    assert!(error.to_string().contains("block hash mismatch"));
+}
+
+#[test]
 fn find_block_anchor_rejects_ambiguous_short_hash() {
     let lines = vec!["same", "same"];
-    let error = resolve_find_block_anchor(&line_hash("same"), &lines)
+    let error = resolve_find_block_anchor("src/main.rs", &line_hash("same"), &lines)
         .expect_err("ambiguous short hash should reject");
 
     assert!(

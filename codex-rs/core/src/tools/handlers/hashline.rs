@@ -32,6 +32,7 @@ use self::hashline_block::find_block_span;
 use self::hashline_block::language_for_path;
 use self::hashline_format::build_hashline_excerpt;
 use self::hashline_format::split_lines_preserve;
+use self::hashline_hash::FILE_HASH_WIDTH;
 use self::hashline_hash::LINE_HASH_WIDTH;
 use self::hashline_hash::hash_hex;
 use self::hashline_hash::hash_normalized_hex;
@@ -771,7 +772,7 @@ async fn handle_find_block(
     .await?;
     let normalized_contents = normalize_file_text(&contents);
     let lines = split_lines_preserve(&normalized_contents);
-    let anchor_line = resolve_find_block_anchor(&args.anchor, &lines)?;
+    let anchor_line = resolve_find_block_anchor(&args.path, &args.anchor, &lines)?;
 
     let max_lines = args
         .max_lines
@@ -817,8 +818,50 @@ async fn handle_find_block(
     )))
 }
 
-fn resolve_find_block_anchor(anchor: &str, lines: &[&str]) -> Result<usize, FunctionCallError> {
+fn resolve_find_block_anchor(
+    path: &str,
+    anchor: &str,
+    lines: &[&str],
+) -> Result<usize, FunctionCallError> {
     let trimmed = anchor.trim();
+    if let Some((line_anchor, block_hash)) = trimmed.rsplit_once('@') {
+        let line_anchor = line_anchor.trim();
+        let block_hash = block_hash.trim().to_ascii_lowercase();
+        let anchor_line = parse_anchor_line(line_anchor)?;
+        validate_find_block_line(anchor_line, lines)?;
+        let Some(expected_line_hash) = parse_anchor_hash(line_anchor) else {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "invalid Hashline block anchor {anchor}: expected line:4-hex@{FILE_HASH_WIDTH}-hex"
+            )));
+        };
+        if !is_line_hash(expected_line_hash) {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "invalid Hashline block anchor {anchor}: expected a {LINE_HASH_WIDTH}-hex line hash"
+            )));
+        }
+        let actual_line_hash = line_hash(lines[anchor_line - 1]);
+        if expected_line_hash.to_ascii_lowercase() != actual_line_hash {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "anchor hash mismatch at line {anchor_line}: expected {expected_line_hash}, found {actual_line_hash}"
+            )));
+        }
+        if block_hash.len() != FILE_HASH_WIDTH
+            || !block_hash.chars().all(|ch| ch.is_ascii_hexdigit())
+        {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "invalid Hashline block anchor {anchor}: expected a {FILE_HASH_WIDTH}-hex block hash"
+            )));
+        }
+        let (block_start, block_end) = find_block_span(path, lines, anchor_line);
+        let actual_block_hash = hash_hex(&lines[block_start - 1..block_end].join("\n"));
+        if actual_block_hash != block_hash {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "block hash mismatch: expected {block_hash}, found {actual_block_hash}"
+            )));
+        }
+        return Ok(anchor_line);
+    }
+
     let lower = trimmed.to_ascii_lowercase();
     if let Some(line_text) = lower
         .strip_prefix("block ")
@@ -836,7 +879,12 @@ fn resolve_find_block_anchor(anchor: &str, lines: &[&str]) -> Result<usize, Func
     let anchor_line = parse_anchor_line(trimmed)?;
     validate_find_block_line(anchor_line, lines)?;
     if let Some(expected_hash) = parse_anchor_hash(trimmed) {
-        let actual_hash = line_hash(lines.get(anchor_line - 1).copied().unwrap_or(""));
+        if !is_line_hash(expected_hash) {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "invalid Hashline anchor {anchor}: expected a {LINE_HASH_WIDTH}-hex hash"
+            )));
+        }
+        let actual_hash = line_hash(lines[anchor_line - 1]);
         if expected_hash.to_ascii_lowercase() != actual_hash {
             return Err(FunctionCallError::RespondToModel(format!(
                 "anchor hash mismatch at line {anchor_line}: expected {expected_hash}, found {actual_hash}"
