@@ -114,6 +114,10 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::feedback_tags;
+use crate::prompt_cache_observation::PromptCacheObservation;
+use crate::prompt_cache_observation::PromptCacheObservationLedger;
+use crate::prompt_cache_observation::PromptCacheTransport;
+use crate::prompt_cache_observation::request_class;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::subagent_header_value;
 use crate::util::emit_feedback_auth_recovery_tags;
@@ -213,6 +217,7 @@ struct ModelClientState {
     disable_websockets: AtomicBool,
     agent_identity_session_fallback: AgentIdentitySessionFallback,
     cached_websocket_session: StdMutex<WebsocketSession>,
+    prompt_cache_observation_ledger: PromptCacheObservationLedger,
 }
 
 /// Resolved API client setup for a single request attempt.
@@ -451,6 +456,7 @@ impl ModelClient {
                 disable_websockets: AtomicBool::new(false),
                 agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
+                prompt_cache_observation_ledger: PromptCacheObservationLedger::default(),
             }),
             agent_identity_policy,
             prompt_cache_key_override: None,
@@ -470,6 +476,14 @@ impl ModelClient {
         self.prompt_cache_key_override
             .clone()
             .unwrap_or_else(|| self.state.thread_id.to_string())
+    }
+
+    fn prompt_cache_key_scope(&self) -> &'static str {
+        if self.prompt_cache_key_override.is_some() {
+            "guardian_parent"
+        } else {
+            "thread"
+        }
     }
 
     /// Creates a fresh turn-scoped streaming session.
@@ -1416,6 +1430,7 @@ impl ModelClientSession {
         summary: ReasoningSummaryConfig,
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
+        prompt_cache_transport: PromptCacheTransport,
         inference_trace: &InferenceTraceContext,
     ) -> Result<ResponseStream> {
         let auth_manager = self.client.state.provider.auth_manager();
@@ -1461,6 +1476,24 @@ impl ModelClientSession {
             let store = request.store;
             self.client
                 .prepare_response_items_for_request(&mut request.input, store);
+            let prompt_cache_observation = self
+                .client
+                .state
+                .prompt_cache_observation_ledger
+                .observe_request(
+                    &request,
+                    &self.client.state.provider.info().name,
+                    &self.client.prompt_cache_key(),
+                    self.client.prompt_cache_key_scope(),
+                    request_class(
+                        &request,
+                        /*warmup*/ false,
+                        pending_retry.retry_after_unauthorized,
+                    ),
+                    prompt_cache_transport,
+                    /*previous_response_id_present*/ false,
+                    /*connection_reused*/ false,
+                );
             let request_session_telemetry =
                 session_telemetry_for_request(session_telemetry, &request);
             let inference_trace_attempt = inference_trace.start_attempt();
@@ -1481,12 +1514,14 @@ impl ModelClientSession {
                         request_session_telemetry,
                         inference_trace_attempt,
                         Arc::clone(&self.client.state.provider),
+                        prompt_cache_observation,
                     );
                     return Ok(stream);
                 }
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
+                    prompt_cache_observation.record_failed("transport_error");
                     let response_debug_context =
                         extract_response_debug_context(&unauthorized_transport);
                     inference_trace_attempt.record_failed(
@@ -1506,6 +1541,7 @@ impl ModelClientSession {
                     continue;
                 }
                 Err(err) => {
+                    prompt_cache_observation.record_failed("transport_error");
                     let response_debug_context =
                         extract_response_debug_context_from_api_error(&err);
                     let err = self.client.state.provider.map_api_error(err);
@@ -1644,6 +1680,33 @@ impl ModelClientSession {
             let store = ws_payload.store;
             self.client
                 .prepare_response_items_for_request(&mut ws_payload.input, store);
+            let mut prepared_request = request.clone();
+            self.client.prepare_response_items_for_request(
+                &mut prepared_request.input,
+                prepared_request.store,
+            );
+            let connection_reused = self.websocket_session.connection_reused();
+            let transport = if warmup {
+                PromptCacheTransport::Warmup
+            } else if connection_reused {
+                PromptCacheTransport::WebsocketReused
+            } else {
+                PromptCacheTransport::Websocket
+            };
+            let prompt_cache_observation = self
+                .client
+                .state
+                .prompt_cache_observation_ledger
+                .observe_request(
+                    &prepared_request,
+                    &self.client.state.provider.info().name,
+                    &self.client.prompt_cache_key(),
+                    self.client.prompt_cache_key_scope(),
+                    request_class(&request, warmup, pending_retry.retry_after_unauthorized),
+                    transport,
+                    ws_payload.previous_response_id.is_some(),
+                    connection_reused,
+                );
             if previous_response_id_from_untraced_warmup {
                 // The transport can reuse an untraced warmup response id and omit the
                 // already-sent input, but rollout replay needs the logical model-visible
@@ -1663,11 +1726,13 @@ impl ModelClientSession {
             let stream_result = websocket_connection
                 .stream_request(
                     ws_request,
-                    self.websocket_session.connection_reused(),
+                    connection_reused,
                     Some(Arc::clone(&self.turn_state)),
                 )
-                .await
-                .map_err(|err| {
+                .await;
+            let stream_result = match stream_result {
+                Ok(stream_result) => stream_result,
+                Err(err) => {
                     let response_debug_context =
                         extract_response_debug_context_from_api_error(&err);
                     let err = self.client.state.provider.map_api_error(err);
@@ -1676,13 +1741,16 @@ impl ModelClientSession {
                         response_debug_context.request_id.as_deref(),
                         /*output_items*/ &[],
                     );
-                    err
-                })?;
+                    prompt_cache_observation.record_failed("transport_error");
+                    return Err(err);
+                }
+            };
             let (stream, last_request_rx) = map_response_stream(
                 stream_result,
                 request_session_telemetry,
                 inference_trace_attempt,
                 Arc::clone(&self.client.state.provider),
+                prompt_cache_observation,
             );
             self.websocket_session.last_response_rx = Some(last_request_rx);
             return Ok(WebsocketStreamOutcome::Stream(stream));
@@ -1800,6 +1868,7 @@ impl ModelClientSession {
         let wire_api = self.client.state.provider.info().wire_api;
         match wire_api {
             WireApi::Responses => {
+                let mut transport = PromptCacheTransport::Http;
                 if self.client.responses_websocket_enabled() {
                     let request_trace = current_span_w3c_trace_context();
                     match self
@@ -1820,6 +1889,7 @@ impl ModelClientSession {
                         WebsocketStreamOutcome::Stream(stream) => return Ok(stream),
                         WebsocketStreamOutcome::FallbackToHttp => {
                             self.try_switch_fallback_transport(session_telemetry, model_info);
+                            transport = PromptCacheTransport::Fallback;
                         }
                     }
                 }
@@ -1832,6 +1902,7 @@ impl ModelClientSession {
                     summary,
                     service_tier,
                     responses_metadata,
+                    transport,
                     inference_trace,
                 )
                 .await
@@ -1927,11 +1998,21 @@ fn add_responses_lite_header(headers: &mut ApiHeaderMap, use_responses_lite: boo
 const RESPONSE_STREAM_CHANNEL_CAPACITY: usize = 1600;
 const STREAM_DROPPED_REASON: &str = "response stream dropped before provider terminal event";
 
+fn record_prompt_cache_failure(
+    observation: &mut Option<PromptCacheObservation>,
+    outcome: &'static str,
+) {
+    if let Some(observation) = observation.take() {
+        observation.record_failed(outcome);
+    }
+}
+
 fn map_response_stream(
     api_stream: codex_api::ResponseStream,
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
     provider: SharedModelProvider,
+    prompt_cache_observation: PromptCacheObservation,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>) {
     let codex_api::ResponseStream {
         rx_event,
@@ -1947,6 +2028,7 @@ fn map_response_stream(
         session_telemetry,
         inference_trace_attempt,
         provider,
+        Some(prompt_cache_observation),
     )
 }
 
@@ -1956,6 +2038,7 @@ fn map_response_events<S>(
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
     provider: SharedModelProvider,
+    prompt_cache_observation: Option<PromptCacheObservation>,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>)
 where
     S: futures::Stream<Item = std::result::Result<ResponseEvent, ApiError>>
@@ -1970,6 +2053,7 @@ where
     let consumer_dropped_for_stream = consumer_dropped.clone();
 
     tokio::spawn(async move {
+        let mut prompt_cache_observation = prompt_cache_observation;
         let mut logged_error = false;
         let mut tx_last_response = Some(tx_last_response);
         let mut items_added: Vec<ResponseItem> = Vec::new();
@@ -1987,6 +2071,7 @@ where
                         upstream_request_id,
                         &items_added,
                     );
+                    record_prompt_cache_failure(&mut prompt_cache_observation, "cancelled");
                     return;
                 }
                 event = api_stream.next() => event,
@@ -2007,6 +2092,7 @@ where
                             upstream_request_id,
                             &items_added,
                         );
+                        record_prompt_cache_failure(&mut prompt_cache_observation, "cancelled");
                         return;
                     }
                 }
@@ -2025,6 +2111,9 @@ where
                             usage.total_tokens,
                             ttft_ms,
                         );
+                    }
+                    if let Some(observation) = prompt_cache_observation.take() {
+                        observation.record_completed(token_usage.as_ref(), ttft_ms);
                     }
                     inference_trace_attempt.record_completed(
                         &response_id,
@@ -2047,6 +2136,7 @@ where
                         .await
                         .is_err()
                     {
+                        // The completed observation was emitted before forwarding the terminal event.
                         return;
                     }
                 }
@@ -2062,6 +2152,7 @@ where
                             upstream_request_id,
                             &items_added,
                         );
+                        record_prompt_cache_failure(&mut prompt_cache_observation, "cancelled");
                         return;
                     }
                 }
@@ -2083,6 +2174,7 @@ where
                         session_telemetry.see_event_completed_failed(&mapped);
                         logged_error = true;
                     }
+                    record_prompt_cache_failure(&mut prompt_cache_observation, "provider_error");
                     if tx_event.send(Err(mapped)).await.is_err() {
                         return;
                     }
@@ -2094,6 +2186,7 @@ where
             upstream_request_id,
             &items_added,
         );
+        record_prompt_cache_failure(&mut prompt_cache_observation, "stream_closed");
     });
 
     (
