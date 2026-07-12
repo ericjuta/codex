@@ -4,7 +4,7 @@
 - Status: Complete
 - Owner(s): Codex
 - Created: 2026-07-12
-- Last Updated: 2026-07-12 21:40Z
+- Last Updated: 2026-07-12 22:00Z
 
 - Links: [Hashline tool integration spec](../codex-rs/docs/hashline_tool_integration_spec.md) | [Prompt caching observability spec](../codex-rs/docs/prompt_caching_observability_spec.md) | [Audit proposal](https://chatgpt.com/s/t_6a53aa9fd5c48191937e16ee580984cb)
 
@@ -200,6 +200,14 @@ Run after each coherent Rust milestone:
 Do not run a direct `cargo test`. Do not run the complete workspace suite unless
 the user explicitly approves it. If a command is unavailable or too expensive,
 record it as skipped rather than weakening the acceptance criteria.
+
+## Before / After / Net Unlocks
+
+Before this branch, Hashline relied on shorter collision-prone anchors, could miss stale interior range changes, emitted a `find_block` anchor its own resolver could not replay, and could rewrite unrelated BOM/EOL/final-newline representation during cardinality-changing edits. Model-facing output also duplicated line content, write success could reread an arbitrary first 200 lines, and important multi-file atomicity, output-budget, file-operation, and representation-only-write boundaries were not proven end to end.
+
+After this branch, the greenfield protocol uses fixed-width 4-hex line anchors and mandatory 8-hex file/block version guards for existing-file mutations; read and block anchors round-trip; stale range, block, rename/remove, and multi-file operations reject before mutation; exact line terminators survive structural edits; and compact byte-bounded responses avoid duplicated line payloads and oversized no-op output. Prompt-cache keys and global model-visible tool ordering remain unchanged pending provider telemetry.
+
+This net unlocks safer autonomous multi-line, block, and multi-file editing; reliable read-to-edit protocol replay; representation-safe work on mixed-EOL/BOM/no-final-newline files; lower model-context pressure; and clearer maintenance boundaries across parser, section, block, line-ending, and application modules. These are correctness and efficiency guarantees for trusted workspaces, not atomic filesystem transactions, adversarial collision resistance, syntax-aware block selection, or raw-byte representation guards.
 
 ## Outcomes & Retrospective
 
