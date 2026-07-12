@@ -2805,3 +2805,36 @@ fn request_tools_include(body: &Value, tool_name: &str) -> bool {
                 .any(|tool| tool.get("name").and_then(Value::as_str) == Some(tool_name))
         })
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_write_dry_run_accepts_representation_only_change() -> anyhow::Result<()> {
+    let harness = TestCodexHarness::with_auto_env_builder(test_codex().with_config(|config| {
+        config.hashline.enabled = true;
+    }))
+    .await?;
+
+    let file_name = "hashline-dry-representation.txt";
+    let original = "\u{feff}alpha\r\nbeta\r\n";
+    harness.write_file(file_name, original).await?;
+
+    let output = run_hashline_tool(
+        &harness,
+        "hashline-dry-representation-call",
+        "write",
+        &json!({
+            "path": file_name,
+            "content": "alpha\nbeta\n",
+            "force": true,
+            "dry_run": true
+        }),
+        "dry run a representation-only hashline write",
+    )
+    .await?;
+    let output: Value = serde_json::from_str(&output)?;
+
+    assert_eq!(output["success"], json!(true));
+    assert_eq!(output["dry_run"], json!(true));
+    assert_eq!(output["preview"], Value::Null);
+    assert_eq!(harness.read_file_text(file_name).await?, original);
+    Ok(())
+}

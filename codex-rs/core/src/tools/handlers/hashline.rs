@@ -672,9 +672,7 @@ async fn handle_write(
     let operation = if create { "create" } else { "update" };
     let new_hash = hash_hex(&write_contents);
     if args.dry_run.unwrap_or(false) {
-        let preview = (old_contents != write_contents)
-            .then(|| build_hashline_patch_preview(&old_contents, &write_contents))
-            .transpose()?;
+        let preview = build_hashline_patch_preview_or_none(&old_contents, &write_contents, create)?;
         let body = json!({
             "success": true,
             "path": args.path,
@@ -1657,40 +1655,41 @@ fn build_hashline_patch_success_body(
     let normalized = normalize_file_text(written_contents);
     let all_lines = split_lines_preserve(&normalized);
     let total_lines = all_lines.len();
-    let (start_line, end_line, excerpt_truncated, content, lines) = if total_lines == 0 {
-        (None, None, false, String::new(), Vec::new())
-    } else {
-        let start_line = preview
-            .as_ref()
-            .and_then(|preview| preview.new_start_line.or(preview.old_start_line))
-            .unwrap_or(1)
-            .min(total_lines)
-            .max(1);
-        let requested_end_line = preview
-            .as_ref()
-            .and_then(|preview| preview.new_end_line)
-            .unwrap_or(start_line)
-            .clamp(start_line, total_lines);
-        let capped_end_line = requested_end_line.min(
-            start_line
-                .saturating_add(PATCH_OUTPUT_MAX_LINES)
-                .saturating_sub(1),
-        );
-        let excerpt = build_hashline_excerpt(
-            &all_lines,
-            start_line,
-            capped_end_line,
-            PATCH_EXCERPT_MAX_SERIALIZED_BYTES,
-        );
-        let end_line = excerpt.end_line.unwrap_or(start_line);
-        (
-            Some(start_line),
-            Some(end_line),
-            capped_end_line < requested_end_line || excerpt.truncated,
-            excerpt.content,
-            excerpt.lines,
-        )
-    };
+    let (start_line, end_line, excerpt_truncated, content, lines) =
+        if total_lines == 0 || preview.is_none() {
+            (None, None, false, String::new(), Vec::new())
+        } else {
+            let start_line = preview
+                .as_ref()
+                .and_then(|preview| preview.new_start_line.or(preview.old_start_line))
+                .unwrap_or(1)
+                .min(total_lines)
+                .max(1);
+            let requested_end_line = preview
+                .as_ref()
+                .and_then(|preview| preview.new_end_line)
+                .unwrap_or(start_line)
+                .clamp(start_line, total_lines);
+            let capped_end_line = requested_end_line.min(
+                start_line
+                    .saturating_add(PATCH_OUTPUT_MAX_LINES)
+                    .saturating_sub(1),
+            );
+            let excerpt = build_hashline_excerpt(
+                &all_lines,
+                start_line,
+                capped_end_line,
+                PATCH_EXCERPT_MAX_SERIALIZED_BYTES,
+            );
+            let end_line = excerpt.end_line.unwrap_or(start_line);
+            (
+                Some(start_line),
+                Some(end_line),
+                capped_end_line < requested_end_line || excerpt.truncated,
+                excerpt.content,
+                excerpt.lines,
+            )
+        };
     let new_hash = hash_normalized_hex(&normalized);
 
     Ok(json!({

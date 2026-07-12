@@ -1982,5 +1982,9 @@ fn write_output_treats_logically_unchanged_content_as_success_without_preview() 
 
         assert_eq!(output["success"], json!(true));
         assert_eq!(output["preview"], serde_json::Value::Null);
+        assert_eq!(output["start_line"], serde_json::Value::Null);
+        assert_eq!(output["end_line"], serde_json::Value::Null);
+        assert_eq!(output["content"], json!(""));
+        assert_eq!(output["lines"], json!([]));
     }
 }
