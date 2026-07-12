@@ -82,6 +82,17 @@ use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
+use xxhash_rust::xxh3::xxh3_64;
+use xxhash_rust::xxh32::xxh32;
+
+fn hashline_file_hash(contents: &str) -> String {
+    format!("{:08x}", xxh3_64(contents.as_bytes()) >> 32)
+}
+
+fn hashline_line_hash(line: &str) -> String {
+    format!("{:04x}", xxh32(line.as_bytes(), 0) & 0xffff)
+}
+
 async fn unified_exec_test(server: &wiremock::MockServer) -> Result<TestCodex> {
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
@@ -1505,7 +1516,11 @@ async fn hashline_patch_routes_to_selected_remote_environment() -> Result<()> {
     let call_id = "hashline-remote-routing-call";
     let patch_args = json!({
         "path": file_name,
-        "patch": "SWAP 1|remote-updated",
+        "patch": format!(
+            "[{file_name}]#{}\nSWAP 1:{}|remote-updated",
+            hashline_file_hash("remote\n"),
+            hashline_line_hash("remote")
+        ),
         "environment_id": REMOTE_ENVIRONMENT_ID,
     });
     let response_mock = mount_sse_sequence(
@@ -1556,8 +1571,21 @@ async fn hashline_patch_routes_to_selected_remote_environment() -> Result<()> {
         .context("missing request containing hashline output")?
         .function_call_output_text(call_id)
         .context("hashline output should be sent to model")?;
-    assert!(output.contains("\"success\": true"));
-    assert!(output.contains("|remote-updated"));
+    let output: Value = serde_json::from_str(&output)?;
+    assert_eq!(output["success"], json!(true));
+    assert_eq!(output["operation"], json!("update"));
+    assert_eq!(
+        output["header"],
+        json!(format!(
+            "[{file_name}]#{}",
+            hashline_file_hash("remote-updated\n")
+        ))
+    );
+    assert!(
+        output["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("|remote-updated"))
+    );
 
     test.fs()
         .remove(
@@ -1698,18 +1726,48 @@ async fn hashline_read_and_write_route_to_selected_remote_environment() -> Resul
     let read_output = request
         .function_call_output_text(read_call_id)
         .context("hashline read output should be sent to model")?;
-    assert!(read_output.contains(&format!("[{read_file_name}#")));
-    assert!(read_output.contains("|remote-read"));
-    assert!(!read_output.contains("|local-read"));
+    let read_output: Value = serde_json::from_str(&read_output)?;
+    assert_eq!(
+        read_output["header"],
+        json!(format!(
+            "[{read_file_name}]#{}",
+            hashline_file_hash("remote-read\n")
+        ))
+    );
+    assert!(
+        read_output["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("|remote-read"))
+    );
+    assert!(
+        !read_output["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("|local-read"))
+    );
 
     let write_output = request
         .function_call_output_text(write_call_id)
         .context("hashline write output should be sent to model")?;
-    assert!(write_output.contains("\"success\": true"));
-    assert!(write_output.contains("\"operation\": \"update\""));
-    assert!(write_output.contains(&format!("\"header\": \"[{write_file_name}#")));
-    assert!(write_output.contains("|remote-written"));
-    assert!(!write_output.contains("|local-write"));
+    let write_output: Value = serde_json::from_str(&write_output)?;
+    assert_eq!(write_output["success"], json!(true));
+    assert_eq!(write_output["operation"], json!("update"));
+    assert_eq!(
+        write_output["header"],
+        json!(format!(
+            "[{write_file_name}]#{}",
+            hashline_file_hash("remote-written\n")
+        ))
+    );
+    assert!(
+        write_output["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("|remote-written"))
+    );
+    assert!(
+        !write_output["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("|local-write"))
+    );
 
     test.fs()
         .remove(

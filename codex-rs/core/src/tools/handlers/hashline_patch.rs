@@ -731,7 +731,7 @@ fn collect_payload_lines(
 ) -> Result<Vec<String>, FunctionCallError> {
     let mut payload = Vec::new();
     while *index < raw_lines.len() {
-        let line = raw_lines[*index].trim_end();
+        let line = raw_lines[*index];
         if is_ignorable_patch_line(line) {
             *index += 1;
             if payload.is_empty() {

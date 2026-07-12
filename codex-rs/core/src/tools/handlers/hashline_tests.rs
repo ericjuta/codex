@@ -652,6 +652,21 @@ fn patch_preserves_bare_bracket_payload_lines() {
 }
 
 #[test]
+fn patch_preserves_trailing_payload_whitespace() {
+    let original = "alpha\n";
+    let patch = format!(
+        "[notes.txt]#{}\nSWAP 1:{}\n+replacement   ",
+        hash_hex(original),
+        line_hash("alpha")
+    );
+
+    assert_eq!(
+        apply_hashline_patch("notes.txt", original, &patch).expect("patch should apply"),
+        "replacement   \n"
+    );
+}
+
+#[test]
 fn patch_accepts_bracketed_apply_patch_style_file_header() {
     let original = "alpha\nbeta\ngamma\n";
     let patch = format!(
@@ -1713,6 +1728,38 @@ fn find_block_anchor_accepts_block_prefix_and_unique_hash() {
         resolve_find_block_anchor("src/main.rs", &line_hash("gamma"), &lines)
             .expect("unique short hash should resolve"),
         3
+    );
+}
+
+#[test]
+fn find_block_anchor_rejects_bare_numeric_line_numbers() {
+    let lines = vec!["alpha", "beta", "gamma"];
+    let error = resolve_find_block_anchor("src/main.rs", "2", &lines)
+        .expect_err("bare line numbers should be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("bare line numbers are not accepted")
+    );
+}
+
+#[test]
+fn find_block_anchor_resolves_numeric_only_line_hashes() {
+    let (line, hash) = (0..1000)
+        .map(|index| format!("numeric-hash-candidate-{index}"))
+        .find_map(|line| {
+            let hash = line_hash(&line);
+            hash.chars()
+                .all(|character| character.is_ascii_digit())
+                .then_some((line, hash))
+        })
+        .expect("the deterministic candidate set should contain a numeric-only hash");
+    let lines = vec![line.as_str()];
+
+    assert_eq!(
+        resolve_find_block_anchor("src/main.rs", &hash, &lines)
+            .expect("numeric-only hashes should resolve as line hashes"),
+        1
     );
 }
 

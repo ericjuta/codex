@@ -397,7 +397,8 @@ fn find_block_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "anchor".to_string(),
                     JsonSchema::string(Some(
-                        "Line anchor as line:4-hex-hash, or a unique 4-hex line hash; block anchors use line:4-hex@8-hex-block-hash.".to_string(),
+                        "Anchor forms: line:4-hex, block N:, a unique 4-hex line hash, or line:4-hex@8-hex-block-hash; bare line numbers are not accepted."
+                            .to_string(),
                     )),
                 ),
                 (
@@ -872,10 +873,14 @@ fn resolve_find_block_anchor(
         return Ok(anchor_line);
     }
 
-    if trimmed.parse::<usize>().is_err() && is_line_hash(trimmed) {
+    if is_line_hash(trimmed) {
         return resolve_unique_line_hash(trimmed, lines);
     }
-
+    if trimmed.parse::<usize>().is_ok() {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "invalid Hashline block anchor {anchor}: bare line numbers are not accepted; use line:4-hex, block N:, a unique 4-hex line hash, or line:4-hex@8-hex-block-hash"
+        )));
+    }
     let anchor_line = parse_anchor_line(trimmed)?;
     validate_find_block_line(anchor_line, lines)?;
     if let Some(expected_hash) = parse_anchor_hash(trimmed) {

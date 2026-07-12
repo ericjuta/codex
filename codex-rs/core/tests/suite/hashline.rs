@@ -330,7 +330,7 @@ async fn hashline_find_block_reports_language_and_excerpt() -> anyhow::Result<()
     let call_id = "hashline-find-block-call";
     let find_args = json!({
         "path": file_name,
-        "anchor": "3"
+        "anchor": format!("3:{}", hashline_line_hash("        println!(\"hi\");"))
     });
     mount_sse_once(
         &server,
