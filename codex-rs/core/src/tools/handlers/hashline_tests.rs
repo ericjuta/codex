@@ -1969,3 +1969,18 @@ fn find_block_language_guess_matches_reference_extensions() {
     assert_eq!(language_for_path("notes.md"), "Markdown");
     assert_eq!(language_for_path("Makefile"), "Unknown");
 }
+
+#[test]
+fn write_output_treats_logically_unchanged_content_as_success_without_preview() {
+    for (old_contents, new_contents) in [
+        ("alpha\nbeta\n", "alpha\nbeta\n"),
+        ("\u{feff}alpha\r\nbeta\r\n", "alpha\nbeta\n"),
+    ] {
+        let output =
+            build_hashline_patch_success_body("example.txt", old_contents, new_contents, false)
+                .expect("logically unchanged writes should produce a success response");
+
+        assert_eq!(output["success"], json!(true));
+        assert_eq!(output["preview"], serde_json::Value::Null);
+    }
+}

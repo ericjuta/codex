@@ -1778,9 +1778,9 @@ fn apply_hashline_patch_or_create_empty(
 fn build_hashline_patch_preview_or_none(
     old_contents: &str,
     new_contents: &str,
-    create: bool,
+    _create: bool,
 ) -> Result<Option<HashlinePatchPreview>, FunctionCallError> {
-    if create && old_contents == new_contents {
+    if normalize_file_text(old_contents) == normalize_file_text(new_contents) {
         Ok(None)
     } else {
         build_hashline_patch_preview(old_contents, new_contents).map(Some)
