@@ -1113,19 +1113,16 @@ async fn handle_patch(
                     args.environment_id.as_deref(),
                 )
                 .await?;
-                let written_contents = read_selected_file(
+                let written_contents = read_selected_file_after_update(
                     post_write_turn.as_ref(),
                     post_write_step_context.as_ref(),
                     &new_path,
                     args.environment_id.as_deref(),
+                    &patched,
+                    &new_hash,
+                    "hashline.patch rename",
                 )
                 .await?;
-                let written_hash = hash_hex(&written_contents);
-                if written_hash != new_hash {
-                    return Err(FunctionCallError::RespondToModel(format!(
-                        "hashline.patch rename completed but destination hash for {new_path} was {written_hash}, expected {new_hash}"
-                    )));
-                }
                 let mut body = build_hashline_rename_update_success_body(
                     target_path,
                     &new_path,
@@ -1690,7 +1687,7 @@ async fn handle_multi_file_patch(
                 old_hash,
                 new_hash,
                 warnings,
-                ..
+                new_contents,
             } => {
                 ensure_selected_file_missing(
                     invocation.turn.as_ref(),
@@ -1699,19 +1696,16 @@ async fn handle_multi_file_patch(
                     args.environment_id.as_deref(),
                 )
                 .await?;
-                let renamed_contents = read_selected_file(
+                let renamed_contents = read_selected_file_after_update(
                     invocation.turn.as_ref(),
                     invocation.step_context.as_ref(),
                     new_path,
                     args.environment_id.as_deref(),
+                    new_contents,
+                    new_hash,
+                    "hashline.patch rename",
                 )
                 .await?;
-                let written_hash = hash_hex(&renamed_contents);
-                if written_hash != *new_hash {
-                    return Err(FunctionCallError::RespondToModel(format!(
-                        "hashline.patch rename completed but destination hash for {new_path} was {written_hash}, expected {new_hash}"
-                    )));
-                }
                 if details_full {
                     None
                 } else {
@@ -2177,14 +2171,6 @@ async fn read_selected_file_after_update(
 ) -> Result<String, FunctionCallError> {
     let written_contents = read_selected_file(turn, step_context, path, environment_id).await?;
     let written_hash = hash_hex(&written_contents);
-    // apply_patch materializes a final LF; Hashline preserves exact EOF shape.
-    let apply_patch_added_trailing_newline = !expected_contents.ends_with('\n')
-        && written_contents.strip_suffix('\n') == Some(expected_contents);
-    if written_hash != expected_hash && !apply_patch_added_trailing_newline {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "{operation} applied but post-write file hash for {path} was {written_hash}, expected {expected_hash}"
-        )));
-    }
     if written_contents == expected_contents {
         return Ok(written_contents);
     }
@@ -2213,7 +2199,7 @@ async fn read_selected_file_after_update(
     .await
     .map_err(|error| {
         FunctionCallError::RespondToModel(format!(
-            "{operation} could not restore exact contents for {path}: {error}"
+            "{operation} could not restore exact contents for {path} (post-write hash {written_hash}, expected {expected_hash}): {error}"
         ))
     })?;
 

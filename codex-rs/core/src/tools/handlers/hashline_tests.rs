@@ -23,6 +23,7 @@ use super::hashline_patch::hashline_patch_is_aborted;
 use super::hashline_patch::hashline_patch_warnings;
 use super::hashline_patch::parse_hashline_patch_file_operation;
 use super::hashline_patch::split_hashline_patch_sections;
+use super::hashline_patch::validate_file_hash;
 use super::resolve_find_block_anchor;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -779,6 +780,19 @@ fn patch_rejects_stale_file_header() {
             .contains("reread it with hashline.read and rebuild the patch"),
         "stale file hash error should tell the model how to recover: {error}"
     );
+}
+
+#[test]
+fn direct_file_hash_guards_accept_uppercase_hex_and_reject_bad_width() {
+    let contents = "alpha\nbeta\n";
+    let uppercase_hash = hash_hex(contents).to_ascii_uppercase();
+
+    validate_file_hash("notes.txt", contents, &uppercase_hash)
+        .expect("direct file-operation guards should accept uppercase hex");
+
+    let error = validate_file_hash("notes.txt", contents, "ABC")
+        .expect_err("direct file-operation guards should enforce the file-hash width");
+    assert!(error.to_string().contains("invalid file hash"));
 }
 
 #[test]

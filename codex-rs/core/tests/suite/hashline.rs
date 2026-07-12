@@ -248,6 +248,69 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hashline_patch_restores_no_final_newline_after_apply_patch() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.hashline.enabled = true;
+        })
+        .build(&server)
+        .await?;
+
+    let file_name = "hashline-no-final-newline.txt";
+    let file_path = test.cwd.path().join(file_name);
+    fs::write(&file_path, "alpha\r\nbeta")?;
+
+    let call_id = "hashline-no-final-newline-call";
+    let patch_args = json!({
+        "path": file_name,
+        "patch": format!(
+            "[{file_name}]#{}\nSWAP 2:{}|bravo",
+            hashline_file_hash("alpha\nbeta"),
+            hashline_line_hash("beta")
+        )
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                call_id,
+                "hashline",
+                "patch",
+                &serde_json::to_string(&patch_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "hashline edit complete"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, "update the no-final-newline file with hashline").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(fs::read(file_path)?, b"alpha\r\nbravo");
+    let request = final_mock.single_request();
+    let patch_output = request
+        .function_call_output_text(call_id)
+        .expect("patch output should be sent to model");
+    let patch_output: Value = serde_json::from_str(&patch_output)?;
+    assert_eq!(patch_output["success"], json!(true));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hashline_patch_abort_marker_does_not_write() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let test = test_codex()

@@ -357,8 +357,15 @@ pub(super) fn validate_file_hash(
     contents: &str,
     expected_hash: &str,
 ) -> Result<(), FunctionCallError> {
+    if expected_hash.len() != FILE_HASH_WIDTH
+        || !expected_hash.chars().all(|ch| ch.is_ascii_hexdigit())
+    {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "invalid file hash for {path}: expected a {FILE_HASH_WIDTH}-hex Hashline file hash, got {expected_hash}"
+        )));
+    }
     let actual_hash = hash_hex(contents);
-    if expected_hash != actual_hash {
+    if !expected_hash.eq_ignore_ascii_case(&actual_hash) {
         return Err(FunctionCallError::RespondToModel(format!(
             "file hash mismatch for {path}: expected {expected_hash}, found {actual_hash}; the file changed since it was read, so reread it with hashline.read and rebuild the patch from the refreshed anchors before retrying"
         )));
