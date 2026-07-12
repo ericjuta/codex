@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use super::sort_model_visible_specs;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -433,37 +432,6 @@ fn apply_patch_accepts_environment_id(spec: &ToolSpec) -> bool {
     }
 }
 
-#[test]
-fn model_visible_specs_have_canonical_top_level_order() {
-    let function = |name: &str| {
-        ToolSpec::Function(ResponsesApiTool {
-            name: name.to_string(),
-            description: String::new(),
-            strict: false,
-            defer_loading: None,
-            parameters: codex_tools::JsonSchema::default(),
-            output_schema: None,
-        })
-    };
-    let namespace = |name: &str| {
-        ToolSpec::Namespace(codex_tools::ResponsesApiNamespace {
-            name: name.to_string(),
-            description: String::new(),
-            tools: Vec::new(),
-        })
-    };
-    let mut first = vec![function("zeta"), namespace("alpha"), function("beta")];
-    let mut second = vec![function("beta"), function("zeta"), namespace("alpha")];
-
-    sort_model_visible_specs(&mut first);
-    sort_model_visible_specs(&mut second);
-
-    assert_eq!(first, second);
-    assert_eq!(
-        first.iter().map(ToolSpec::name).collect::<Vec<_>>(),
-        vec!["alpha", "beta", "zeta"]
-    );
-}
 
 #[tokio::test]
 async fn request_user_input_tool_respects_experimental_config_gate() {
@@ -1680,10 +1648,10 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
     assert_eq!(
         plan.visible_names,
         vec![
-            "agents",
             "exec",
-            "request_user_input",
             "wait",
+            "request_user_input",
+            "agents",
             // Hosted Responses tool.
             "web_search",
         ]
@@ -1799,11 +1767,13 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
     assert_eq!(
         code_mode_only.visible_names,
         vec![
-            // Canonical top-level name order.
-            MULTI_AGENT_V2_NAMESPACE,
+            // Code-mode entrypoints.
             codex_code_mode::PUBLIC_TOOL_NAME,
-            "request_user_input",
             codex_code_mode::WAIT_TOOL_NAME,
+            "request_user_input",
+            // Multi-agent v2 tools.
+            MULTI_AGENT_V2_NAMESPACE,
+            // Hosted Responses tools.
             "web_search",
         ]
     );

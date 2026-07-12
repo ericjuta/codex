@@ -630,8 +630,8 @@ async fn code_mode_only_restricts_prompt_tools() -> Result<()> {
         tool_names(&first_body),
         vec![
             "exec".to_string(),
-            "request_user_input".to_string(),
             "wait".to_string(),
+            "request_user_input".to_string(),
             "web_search".to_string()
         ]
     );
@@ -717,8 +717,8 @@ if (!tool) {
         tool_names(&first_body),
         vec![
             "exec".to_string(),
-            "request_user_input".to_string(),
             "wait".to_string(),
+            "request_user_input".to_string(),
             "web_search".to_string()
         ]
     );

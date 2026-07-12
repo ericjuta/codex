@@ -206,7 +206,6 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "tool_search",
         "web_search",
     ]);
-    expected_tools_names.sort_unstable();
     let body0 = req1.single_request().body_json();
 
     let expected_instructions = if expected_tools_names.contains(&"apply_patch") {

@@ -265,13 +265,12 @@ fn build_model_visible_specs_and_registry(
     specs.extend(hosted_specs);
 
     let registry = ToolRegistry::from_tools(runtimes);
-    let mut model_visible_specs = merge_into_namespaces(specs)
+    let model_visible_specs = merge_into_namespaces(specs)
         .into_iter()
         .filter(|spec| {
             namespace_tools_enabled(turn_context) || !matches!(spec, ToolSpec::Namespace(_))
         })
-        .collect::<Vec<_>>();
-    sort_model_visible_specs(&mut model_visible_specs);
+        .collect();
 
     (model_visible_specs, registry)
 }
@@ -568,23 +567,6 @@ fn merge_into_namespaces(specs: Vec<ToolSpec>) -> Vec<ToolSpec> {
     merged_specs
 }
 
-fn sort_model_visible_specs(specs: &mut [ToolSpec]) {
-    specs.sort_by(|left, right| {
-        left.name()
-            .cmp(right.name())
-            .then_with(|| model_visible_spec_kind(left).cmp(&model_visible_spec_kind(right)))
-    });
-}
-
-fn model_visible_spec_kind(spec: &ToolSpec) -> u8 {
-    match spec {
-        ToolSpec::Function(_) => 0,
-        ToolSpec::Namespace(_) => 1,
-        ToolSpec::ToolSearch { .. } => 2,
-        ToolSpec::WebSearch { .. } => 3,
-        ToolSpec::Freeform(_) => 4,
-    }
-}
 
 fn code_mode_namespace_descriptions(
     specs: &[ToolSpec],
