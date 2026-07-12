@@ -27,6 +27,14 @@ use std::fs;
 use xxhash_rust::xxh3::xxh3_64;
 use xxhash_rust::xxh32::xxh32;
 
+fn hashline_file_hash(contents: &str) -> String {
+    format!("{:08x}", xxh3_64(contents.as_bytes()) >> 32)
+}
+
+fn hashline_line_hash(line: &str) -> String {
+    format!("{:04x}", xxh32(line.as_bytes(), 0) & 0xffff)
+}
+
 async fn submit_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
     let cwd = test.cwd.abs();
     let (sandbox_policy, permission_profile) =
@@ -152,7 +160,10 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
     });
     let patch_args = json!({
         "path": file_name,
-        "patch": "SWAP 2|bravo"
+        "patch": format!(
+            "[{file_name}]#{}\nSWAP 2:f589|bravo",
+            hashline_file_hash("alpha\nbeta\ngamma\n")
+        )
     });
     mount_sse_once(
         &server,
@@ -205,7 +216,7 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
     let read_output = request
         .function_call_output_text("hashline-read-call")
         .expect("read output should be sent to model");
-    assert!(read_output.contains("[hashline-notes.txt#"));
+    assert!(read_output.contains("[hashline-notes.txt]#"));
     assert!(read_output.contains("2:"));
     assert!(read_output.contains("|beta"));
     let read_output: Value = serde_json::from_str(&read_output)?;
@@ -226,13 +237,11 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
     let patch_output = request
         .function_call_output_text("hashline-patch-call")
         .expect("patch output should be sent to model");
-    assert!(patch_output.contains("\"success\": true"));
-    assert!(patch_output.contains(&format!("\"header\": \"[{file_name}#")));
-    assert!(patch_output.contains("\"operation\": \"update\""));
+    assert!(patch_output.contains("\"success\":true"));
+    assert!(patch_output.contains(&format!("\"header\":\"[{file_name}]#")));
+    assert!(patch_output.contains("\"operation\":\"update\""));
     assert!(patch_output.contains("|bravo"));
     assert!(!patch_output.contains("\\r"));
-    assert!(patch_output.contains("\"warnings\""));
-    assert!(patch_output.contains("line:hash anchors"));
     assert!(patch_output.contains("\"preview\""));
 
     Ok(())
@@ -255,7 +264,7 @@ async fn hashline_patch_abort_marker_does_not_write() -> anyhow::Result<()> {
     let call_id = "hashline-abort-call";
     let patch_args = json!({
         "path": file_name,
-        "patch": "*** Begin Patch\nSWAP 2:\n+bravo\n*** Abort\n*** End Patch"
+        "patch": "*** Begin Patch\nSWAP 2:f589\n+bravo\n*** Abort\n*** End Patch"
     });
     mount_sse_once(
         &server,
@@ -292,10 +301,10 @@ async fn hashline_patch_abort_marker_does_not_write() -> anyhow::Result<()> {
     let patch_output = request
         .function_call_output_text(call_id)
         .expect("patch output should be sent to model");
-    assert!(patch_output.contains("\"success\": true"));
-    assert!(patch_output.contains("\"operation\": \"abort\""));
-    assert!(patch_output.contains("\"aborted\": true"));
-    assert!(patch_output.contains("\"dry_run\": false"));
+    assert!(patch_output.contains("\"success\":true"));
+    assert!(patch_output.contains("\"operation\":\"abort\""));
+    assert!(patch_output.contains("\"aborted\":true"));
+    assert!(patch_output.contains("\"dry_run\":false"));
     Ok(())
 }
 
@@ -358,17 +367,17 @@ async fn hashline_find_block_reports_language_and_excerpt() -> anyhow::Result<()
         .function_call_output_text(call_id)
         .expect("find_block output should be sent to model");
     let find_output_json: Value = serde_json::from_str(&find_output)?;
-    assert!(find_output.contains("\"language\": \"Rust\""));
-    assert!(find_output.contains("\"start_line\": 2"));
-    assert!(find_output.contains("\"end_line\": 4"));
+    assert!(find_output.contains("\"language\":\"Rust\""));
+    assert!(find_output.contains("\"start_line\":2"));
+    assert!(find_output.contains("\"end_line\":4"));
     assert!(find_output.contains("3:"));
     assert!(find_output.contains("println!"));
     assert_eq!(find_output_json["file"], json!(file_name));
     assert_eq!(find_output_json["line_count"], json!(5));
     assert_eq!(find_output_json["block_lines"][1]["n"], json!(3));
     assert_eq!(
-        find_output_json["block_lines"][1]["content"],
-        json!("        println!(\"hi\");")
+        find_output_json["block_lines"][1]["hash"],
+        json!(hashline_line_hash("        println!(\"hi\");")),
     );
 
     Ok(())
@@ -391,7 +400,10 @@ async fn hashline_patch_rejects_stale_line_hash() -> anyhow::Result<()> {
     let call_id = "hashline-stale-call";
     let patch_args = json!({
         "path": file_name,
-        "patch": "SWAP 2:00|bravo"
+        "patch": format!(
+            "[{file_name}]#{}\nSWAP 2:0000|bravo",
+            hashline_file_hash("alpha\nbeta\ngamma\n")
+        )
     });
     mount_sse_once(
         &server,
@@ -429,7 +441,7 @@ async fn hashline_patch_rejects_stale_line_hash() -> anyhow::Result<()> {
         .function_call_output_text(call_id)
         .expect("patch output should be sent to model");
     assert!(patch_output.contains("line 2 hash mismatch"));
-    assert!(patch_output.contains("expected 00"));
+    assert!(patch_output.contains("expected 0000"));
     Ok(())
 }
 
@@ -448,13 +460,17 @@ async fn hashline_patch_rejects_stale_hash_anchor_for_ins_post() -> anyhow::Resu
     fs::write(&file_path, "alpha\nbeta\ngamma\n")?;
 
     let call_id = "hashline-stale-ins-post-call";
-    let stale_hash = {
-        let actual = format!("{:02x}", (xxh32("beta".as_bytes(), 0) & 0xff) as u8);
-        if actual == "00" { "01" } else { "00" }
+    let stale_hash = if hashline_line_hash("beta") == "0000" {
+        "0001"
+    } else {
+        "0000"
     };
     let patch_args = json!({
         "path": file_name,
-        "patch": format!("INS.POST 2:{stale_hash}|omega")
+        "patch": format!(
+            "[{file_name}]#{}\nINS.POST 2:{stale_hash}|omega",
+            hashline_file_hash("alpha\nbeta\ngamma\n")
+        )
     });
     mount_sse_once(
         &server,
@@ -516,14 +532,14 @@ async fn hashline_patch_applies_multi_file_sections_through_apply_patch() -> any
     let second_contents = "one\ntwo\n";
     fs::write(&first_path, first_contents)?;
     fs::write(&second_path, second_contents)?;
-    let first_hash = format!("{:04x}", xxh3_64(first_contents.as_bytes()) >> 48);
-    let second_hash = format!("{:04x}", xxh3_64(second_contents.as_bytes()) >> 48);
+    let first_hash = hashline_file_hash(first_contents);
+    let second_hash = hashline_file_hash(second_contents);
 
     let call_id = "hashline-multi-file-call";
     let patch_args = json!({
         "path": first_name,
         "patch": format!(
-            "[{first_name}#{first_hash}]\nSWAP 2:\n+bravo\n[{second_name}#{second_hash}]\nINS.TAIL:\n+three"
+            "[{first_name}]#{first_hash}\nSWAP 2:f589\n+bravo\n[{second_name}]#{second_hash}\nINS.TAIL:\n+three"
         )
     });
     mount_sse_once(
@@ -562,12 +578,12 @@ async fn hashline_patch_applies_multi_file_sections_through_apply_patch() -> any
     let patch_output = request
         .function_call_output_text(call_id)
         .expect("patch output should be sent to model");
-    assert!(patch_output.contains("\"success\": true"));
-    assert!(patch_output.contains("\"operation\": \"multi_file_update\""));
-    assert!(patch_output.contains(&format!("\"path\": \"{first_name}\"")));
-    assert!(patch_output.contains(&format!("\"path\": \"{second_name}\"")));
-    assert!(patch_output.contains(&format!("\"header\": \"[{first_name}#")));
-    assert!(patch_output.contains(&format!("\"header\": \"[{second_name}#")));
+    assert!(patch_output.contains("\"success\":true"));
+    assert!(patch_output.contains("\"operation\":\"multi_file_update\""));
+    assert!(patch_output.contains(&format!("\"path\":\"{first_name}\"")));
+    assert!(patch_output.contains(&format!("\"path\":\"{second_name}\"")));
+    assert!(patch_output.contains(&format!("\"header\":\"[{first_name}]#")));
+    assert!(patch_output.contains(&format!("\"header\":\"[{second_name}]#")));
     Ok(())
 }
 
@@ -596,15 +612,16 @@ async fn hashline_patch_applies_mixed_multi_file_sections_through_apply_patch() 
     fs::write(&update_path, update_contents)?;
     fs::write(&remove_path, remove_contents)?;
     fs::write(&move_path, move_contents)?;
-    let update_hash = format!("{:04x}", xxh3_64(update_contents.as_bytes()) >> 48);
-    let remove_hash = format!("{:04x}", xxh3_64(remove_contents.as_bytes()) >> 48);
-    let move_hash = format!("{:04x}", xxh3_64(move_contents.as_bytes()) >> 48);
+    let update_hash = hashline_file_hash(update_contents);
+    let remove_hash = hashline_file_hash(remove_contents);
+    let move_hash = hashline_file_hash(move_contents);
 
     let call_id = "hashline-mixed-multi-file-call";
     let patch_args = json!({
         "path": update_name,
         "patch": format!(
-            "[{update_name}#{update_hash}]\nSWAP 2:\n+bravo\n[{remove_name}#{remove_hash}]\nREM\n[{move_name}#{move_hash}]\nMV {moved_name}\nSWAP 2:\n+after"
+            "[{update_name}]#{update_hash}\nSWAP 2:f589\n+bravo\n[{remove_name}]#{remove_hash}\nREM\n[{move_name}]#{move_hash}\nMV {moved_name}\nSWAP 2:{}\n+after",
+            hashline_line_hash("before")
         )
     });
     mount_sse_once(
@@ -645,14 +662,14 @@ async fn hashline_patch_applies_mixed_multi_file_sections_through_apply_patch() 
     let patch_output = request
         .function_call_output_text(call_id)
         .expect("patch output should be sent to model");
-    assert!(patch_output.contains("\"success\": true"));
-    assert!(patch_output.contains("\"operation\": \"multi_file_operation\""));
-    assert!(patch_output.contains(&format!("\"path\": \"{update_name}\"")));
-    assert!(patch_output.contains(&format!("\"path\": \"{remove_name}\"")));
-    assert!(patch_output.contains(&format!("\"path\": \"{move_name}\"")));
-    assert!(patch_output.contains(&format!("\"new_path\": \"{moved_name}\"")));
-    assert!(patch_output.contains("\"operation\": \"remove_file\""));
-    assert!(patch_output.contains("\"operation\": \"rename_file\""));
+    assert!(patch_output.contains("\"success\":true"));
+    assert!(patch_output.contains("\"operation\":\"multi_file_operation\""));
+    assert!(patch_output.contains(&format!("\"path\":\"{update_name}\"")));
+    assert!(patch_output.contains(&format!("\"path\":\"{remove_name}\"")));
+    assert!(patch_output.contains(&format!("\"path\":\"{move_name}\"")));
+    assert!(patch_output.contains(&format!("\"new_path\":\"{moved_name}\"")));
+    assert!(patch_output.contains("\"operation\":\"remove_file\""));
+    assert!(patch_output.contains("\"operation\":\"rename_file\""));
     let patch_output_json: Value = serde_json::from_str(&patch_output)?;
     let files = patch_output_json["files"]
         .as_array()
@@ -667,7 +684,7 @@ async fn hashline_patch_applies_mixed_multi_file_sections_through_apply_patch() 
     assert!(
         rename_file["header"]
             .as_str()
-            .is_some_and(|header| header.starts_with(&format!("[{moved_name}#")))
+            .is_some_and(|header| header.starts_with(&format!("[{moved_name}]#")))
     );
     assert!(
         rename_file["content"]
@@ -712,16 +729,21 @@ async fn hashline_dry_run_outputs_report_success_without_writing() -> anyhow::Re
     });
     let patch_args = json!({
         "path": patch_name,
-        "patch": "SWAP 2:\n+bravo",
+        "patch": format!(
+            "[{patch_name}]#{}\nSWAP 2:f589\n+bravo",
+            hashline_file_hash("alpha\nbeta\n")
+        ),
         "dry_run": true
     });
     let remove_args = json!({
         "path": remove_name,
+        "expected_hash": hashline_file_hash("remove me\n"),
         "dry_run": true
     });
     let rename_args = json!({
         "path": rename_name,
         "new_path": renamed_name,
+        "expected_hash": hashline_file_hash("move me\n"),
         "dry_run": true
     });
     mount_sse_once(
@@ -841,15 +863,15 @@ async fn hashline_multi_file_dry_run_reports_success_per_file_without_writing() 
     fs::write(&update_path, update_contents)?;
     fs::write(&remove_path, remove_contents)?;
     fs::write(&move_path, move_contents)?;
-    let update_hash = format!("{:04x}", xxh3_64(update_contents.as_bytes()) >> 48);
-    let remove_hash = format!("{:04x}", xxh3_64(remove_contents.as_bytes()) >> 48);
-    let move_hash = format!("{:04x}", xxh3_64(move_contents.as_bytes()) >> 48);
+    let update_hash = hashline_file_hash(update_contents);
+    let remove_hash = hashline_file_hash(remove_contents);
+    let move_hash = hashline_file_hash(move_contents);
 
     let call_id = "hashline-dry-multi-call";
     let patch_args = json!({
         "path": update_name,
         "patch": format!(
-            "[{update_name}#{update_hash}]\nSWAP 2:\n+bravo\n[{remove_name}#{remove_hash}]\nREM\n[{move_name}#{move_hash}]\nMV {moved_name}"
+            "[{update_name}]#{update_hash}\nSWAP 2:f589\n+bravo\n[{remove_name}]#{remove_hash}\nREM\n[{move_name}]#{move_hash}\nMV {moved_name}"
         ),
         "dry_run": true
     });
@@ -983,9 +1005,9 @@ async fn hashline_patch_can_create_missing_file() -> anyhow::Result<()> {
     let patch_output = request
         .function_call_output_text(call_id)
         .expect("patch output should be sent to model");
-    assert!(patch_output.contains("\"success\": true"));
-    assert!(patch_output.contains(&format!("\"header\": \"[{file_name}#")));
-    assert!(patch_output.contains("\"operation\": \"create\""));
+    assert!(patch_output.contains("\"success\":true"));
+    assert!(patch_output.contains(&format!("\"header\":\"[{file_name}]#")));
+    assert!(patch_output.contains("\"operation\":\"create\""));
     assert!(patch_output.contains("1:"));
     assert!(patch_output.contains("|created by hashline"));
     Ok(())
@@ -1007,7 +1029,7 @@ async fn hashline_patch_create_rejects_hashed_sections() -> anyhow::Result<()> {
     let call_id = "hashline-create-hashed-call";
     let patch_args = json!({
         "path": file_name,
-        "patch": format!("[{file_name}#dead]\nINS.TAIL:\n+created by hashline"),
+        "patch": format!("[{file_name}]#deadbeef\nINS.TAIL:\n+created by hashline"),
         "create": true
     });
     mount_sse_once(
@@ -1049,7 +1071,7 @@ async fn hashline_patch_create_rejects_hashed_sections() -> anyhow::Result<()> {
     let patch_output = request
         .function_call_output_text(call_id)
         .expect("patch output should be sent to model");
-    assert!(patch_output.contains("create=true cannot use a [path#HASH] section header"));
+    assert!(patch_output.contains("create=true cannot use a [path]#HASH section header"));
     Ok(())
 }
 
@@ -1113,10 +1135,10 @@ async fn hashline_patch_can_create_multi_file_sections() -> anyhow::Result<()> {
     let patch_output = request
         .function_call_output_text(call_id)
         .expect("patch output should be sent to model");
-    assert!(patch_output.contains("\"success\": true"));
-    assert!(patch_output.contains("\"operation\": \"multi_file_create\""));
-    assert!(patch_output.contains(&format!("\"header\": \"[{first_name}#")));
-    assert!(patch_output.contains(&format!("\"header\": \"[{second_name}#")));
+    assert!(patch_output.contains("\"success\":true"));
+    assert!(patch_output.contains("\"operation\":\"multi_file_create\""));
+    assert!(patch_output.contains(&format!("\"header\":\"[{first_name}]#")));
+    assert!(patch_output.contains(&format!("\"header\":\"[{second_name}]#")));
     assert!(patch_output.contains("|created beta"));
     Ok(())
 }
@@ -1177,9 +1199,9 @@ async fn hashline_patch_can_create_missing_file_with_repeated_section_path() -> 
     let patch_output = request
         .function_call_output_text(call_id)
         .expect("patch output should be sent to model");
-    assert!(patch_output.contains("\"operation\": \"create\""));
-    assert!(patch_output.contains(&format!("\"path\": \"{file_name}\"")));
-    assert!(!patch_output.contains("\"operation\": \"multi_file_create\""));
+    assert!(patch_output.contains("\"operation\":\"create\""));
+    assert!(patch_output.contains(&format!("\"path\":\"{file_name}\"")));
+    assert!(!patch_output.contains("\"operation\":\"multi_file_create\""));
 
     Ok(())
 }
@@ -1238,13 +1260,13 @@ async fn hashline_write_creates_empty_file_through_apply_patch() -> anyhow::Resu
     let write_output = request
         .function_call_output_text(call_id)
         .expect("write output should be sent to model");
-    assert!(write_output.contains("\"success\": true"));
-    assert!(write_output.contains(&format!("\"header\": \"[{file_name}#")));
-    assert!(write_output.contains("\"operation\": \"create\""));
-    assert!(write_output.contains("\"start_line\": null"));
-    assert!(write_output.contains("\"end_line\": null"));
-    assert!(write_output.contains("\"total_lines\": 0"));
-    assert!(write_output.contains("\"content\": \"\""));
+    assert!(write_output.contains("\"success\":true"));
+    assert!(write_output.contains(&format!("\"header\":\"[{file_name}]#")));
+    assert!(write_output.contains("\"operation\":\"create\""));
+    assert!(write_output.contains("\"start_line\":null"));
+    assert!(write_output.contains("\"end_line\":null"));
+    assert!(write_output.contains("\"total_lines\":0"));
+    assert!(write_output.contains("\"content\":\"\""));
     Ok(())
 }
 
@@ -1361,9 +1383,9 @@ async fn hashline_write_creates_missing_file_through_apply_patch() -> anyhow::Re
     let write_output = request
         .function_call_output_text(call_id)
         .expect("write output should be sent to model");
-    assert!(write_output.contains("\"success\": true"));
-    assert!(write_output.contains(&format!("\"header\": \"[{file_name}#")));
-    assert!(write_output.contains("\"operation\": \"create\""));
+    assert!(write_output.contains("\"success\":true"));
+    assert!(write_output.contains(&format!("\"header\":\"[{file_name}]#")));
+    assert!(write_output.contains("\"operation\":\"create\""));
     assert!(write_output.contains("1:"));
     assert!(write_output.contains("|alpha"));
     assert!(write_output.contains("|beta"));
@@ -1438,15 +1460,26 @@ async fn hashline_write_overwrites_existing_file_with_force() -> anyhow::Result<
         })
         .build(&server)
         .await?;
-
     let file_name = "hashline-write-force.txt";
     let file_path = test.cwd.path().join(file_name);
-    fs::write(&file_path, "alpha\nbeta\n")?;
+
+    let old_contents = (1..=200)
+        .map(|line| format!("line {line}"))
+        .chain(["alpha".to_string()])
+        .collect::<Vec<_>>()
+        .join("\n");
+    let new_contents = (1..=200)
+        .map(|line| format!("line {line}"))
+        .chain(["omega".to_string(), "theta".to_string()])
+        .collect::<Vec<_>>()
+        .join("\r\n");
+    let expected_contents = new_contents.replace("\r\n", "\n");
+    fs::write(&file_path, &old_contents)?;
 
     let call_id = "hashline-write-force-call";
     let write_args = json!({
         "path": file_name,
-        "content": "omega\r\ntheta",
+        "content": &new_contents,
         "force": true
     });
     mount_sse_once(
@@ -1479,15 +1512,17 @@ async fn hashline_write_overwrites_existing_file_with_force() -> anyhow::Result<
     })
     .await;
 
-    assert_eq!(fs::read_to_string(file_path)?, "omega\ntheta");
+    assert_eq!(fs::read_to_string(file_path)?, expected_contents);
     let request = final_mock.single_request();
     let write_output = request
         .function_call_output_text(call_id)
         .expect("write output should be sent to model");
-    assert!(write_output.contains("\"success\": true"));
-    assert!(write_output.contains("\"operation\": \"update\""));
-    assert!(write_output.contains("\"old_hash\""));
-    assert!(write_output.contains("\"new_hash\""));
+    let write_output_json: Value = serde_json::from_str(&write_output)?;
+    assert_eq!(write_output_json["success"], json!(true));
+    assert_eq!(write_output_json["operation"], json!("update"));
+    assert_eq!(write_output_json["start_line"], json!(201));
+    assert_eq!(write_output_json["end_line"], json!(202));
+    assert!(!write_output.contains("|line 1"));
     assert!(write_output.contains("|omega"));
     assert!(write_output.contains("|theta"));
     Ok(())
@@ -1509,7 +1544,8 @@ async fn hashline_remove_file_deletes_through_apply_patch() -> anyhow::Result<()
 
     let call_id = "hashline-remove-call";
     let remove_args = json!({
-        "path": file_name
+        "path": file_name,
+        "expected_hash": hashline_file_hash("remove me\n"),
     });
     mount_sse_once(
         &server,
@@ -1546,9 +1582,9 @@ async fn hashline_remove_file_deletes_through_apply_patch() -> anyhow::Result<()
     let remove_output = request
         .function_call_output_text(call_id)
         .expect("remove output should be sent to model");
-    assert!(remove_output.contains("\"success\": true"));
-    assert!(remove_output.contains("\"operation\": \"remove_file\""));
-    assert!(remove_output.contains(&format!("\"path\": \"{file_name}\"")));
+    assert!(remove_output.contains("\"success\":true"));
+    assert!(remove_output.contains("\"operation\":\"remove_file\""));
+    assert!(remove_output.contains(&format!("\"path\":\"{file_name}\"")));
     assert!(remove_output.contains("\"old_hash\""));
     Ok(())
 }
@@ -1572,7 +1608,8 @@ async fn hashline_rename_file_moves_through_apply_patch() -> anyhow::Result<()> 
     let call_id = "hashline-rename-call";
     let rename_args = json!({
         "path": old_name,
-        "new_path": new_name
+        "new_path": new_name,
+        "expected_hash": hashline_file_hash("first\nsecond"),
     });
     mount_sse_once(
         &server,
@@ -1610,11 +1647,11 @@ async fn hashline_rename_file_moves_through_apply_patch() -> anyhow::Result<()> 
     let rename_output = request
         .function_call_output_text(call_id)
         .expect("rename output should be sent to model");
-    assert!(rename_output.contains("\"success\": true"));
-    assert!(rename_output.contains("\"operation\": \"rename_file\""));
-    assert!(rename_output.contains(&format!("\"path\": \"{old_name}\"")));
-    assert!(rename_output.contains(&format!("\"new_path\": \"{new_name}\"")));
-    assert!(rename_output.contains(&format!("\"header\": \"[{new_name}#")));
+    assert!(rename_output.contains("\"success\":true"));
+    assert!(rename_output.contains("\"operation\":\"rename_file\""));
+    assert!(rename_output.contains(&format!("\"path\":\"{old_name}\"")));
+    assert!(rename_output.contains(&format!("\"new_path\":\"{new_name}\"")));
+    assert!(rename_output.contains(&format!("\"header\":\"[{new_name}]#")));
     Ok(())
 }
 
@@ -1637,7 +1674,8 @@ async fn hashline_rename_file_moves_empty_file_through_apply_patch() -> anyhow::
     let call_id = "hashline-empty-rename-call";
     let rename_args = json!({
         "path": old_name,
-        "new_path": new_name
+        "new_path": new_name,
+        "expected_hash": hashline_file_hash(""),
     });
     mount_sse_once(
         &server,
@@ -1675,9 +1713,9 @@ async fn hashline_rename_file_moves_empty_file_through_apply_patch() -> anyhow::
     let rename_output = request
         .function_call_output_text(call_id)
         .expect("rename output should be sent to model");
-    assert!(rename_output.contains("\"success\": true"));
-    assert!(rename_output.contains("\"operation\": \"rename_file\""));
-    assert!(rename_output.contains(&format!("\"header\": \"[{new_name}#")));
+    assert!(rename_output.contains("\"success\":true"));
+    assert!(rename_output.contains("\"operation\":\"rename_file\""));
+    assert!(rename_output.contains(&format!("\"header\":\"[{new_name}]#")));
     Ok(())
 }
 
@@ -1705,7 +1743,10 @@ async fn hashline_patch_uses_apply_patch_approval_flow() -> anyhow::Result<()> {
     let call_id = "hashline-approval-call";
     let patch_args = json!({
         "path": file_name,
-        "patch": "SWAP 2|bravo"
+        "patch": format!(
+            "[{file_name}]#{}\nSWAP 2:f589|bravo",
+            hashline_file_hash("alpha\nbeta\ngamma\n")
+        )
     });
     mount_sse_once(
         &server,

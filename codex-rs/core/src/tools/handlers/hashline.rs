@@ -32,6 +32,7 @@ use self::hashline_block::find_block_span;
 use self::hashline_block::language_for_path;
 use self::hashline_format::build_hashline_excerpt;
 use self::hashline_format::split_lines_preserve;
+use self::hashline_hash::LINE_HASH_WIDTH;
 use self::hashline_hash::hash_hex;
 use self::hashline_hash::hash_normalized_hex;
 use self::hashline_hash::line_hash;
@@ -158,7 +159,7 @@ struct FindBlockArgs {
 struct RemoveFileArgs {
     #[serde(alias = "file")]
     path: String,
-    expected_hash: Option<String>,
+    expected_hash: String,
     dry_run: Option<bool>,
     environment_id: Option<String>,
 }
@@ -170,7 +171,7 @@ struct RenameFileArgs {
     path: String,
     #[serde(alias = "dst")]
     new_path: String,
-    expected_hash: Option<String>,
+    expected_hash: String,
     dry_run: Option<bool>,
     environment_id: Option<String>,
 }
@@ -217,7 +218,7 @@ impl ToolExecutor<ToolInvocation> for HashlineHandler {
     fn spec(&self) -> ToolSpec {
         ToolSpec::Namespace(ResponsesApiNamespace {
             name: NAMESPACE.to_string(),
-            description: "Tools for hash-anchored file reading and editing. Prefer Hashline for line-anchored edits; broader edit tools may remain available for compatibility."
+            description: "Tools for hash-anchored file reading and editing. Prefer Hashline for line-anchored edits; broader edit tools may remain available."
                 .to_string(),
             tools: vec![ResponsesApiNamespaceTool::Function(match self.kind {
                 HashlineToolKind::Read => read_tool_spec(self.multi_environment),
@@ -295,10 +296,9 @@ fn read_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                         "properties": {
                             "n": { "type": "integer" },
                             "hash": { "type": "string" },
-                            "content": { "type": "string" },
                             "content_truncated": { "type": "boolean" }
                         },
-                        "required": ["n", "hash", "content"],
+                        "required": ["n", "hash"],
                         "additionalProperties": false
                     }
                 }
@@ -349,7 +349,7 @@ fn write_tool_spec(multi_environment: bool) -> ResponsesApiTool {
 fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
     ResponsesApiTool {
         name: PATCH_TOOL.to_string(),
-        description: "Apply a Hashline line operation patch. Supports one target file by default, multiple existing files when split into [path#HASH] sections, or multiple missing files with create=true and [path] sections. Supported operations: SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, INS.TAIL, SWAP.BLK, DEL.BLK, INS.BLK.POST, INS.BLK.PRE, INS.BLK, sectioned REM file ops, and MV file ops that may also include line edits, using either README-style + payload bodies or compact |text forms where supported."
+        description: "Apply a Hashline line operation patch. Supports one target file by default, multiple existing files when split into [path]#HASH sections, or multiple missing files with create=true and [path] sections. Supported operations: SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, INS.TAIL, SWAP.BLK, DEL.BLK, INS.BLK.POST, INS.BLK.PRE, INS.BLK, sectioned REM file ops, and MV file ops that may also include line edits, using README-style + payload bodies or compact |text forms where supported."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -358,7 +358,7 @@ fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "patch".to_string(),
                     JsonSchema::string(Some(
-                        "Hashline operations. Guardrails: start operation lines only with documented operation tokens; copy line and file hash anchors verbatim from a recent hashline.read or find_block output and never invent or reconstruct hashes; prefix each payload body line with + so it cannot be parsed as patch structure; after a file or line hash mismatch, reread the file and rebuild the patch from the refreshed anchors before retrying. Use README-style bodies such as SWAP 12:\n+replacement, SWAP 12:ab..14:cd:\n+replacement, DEL 12..=14, DEL 12-14, INS.POST 12:\n+text, INS.HEAD:\n+text, SWAP.BLK 12:\n+replacement block, DEL.BLK 12, INS.BLK.POST 12:\n+block, INS.BLK.PRE 12:\n+block, INS.BLK 12:\n+block, compact forms such as SWAP 12:ab|replacement and INS.TAIL|text, [path#HASH] sections for existing-file multi-file edits, or [path] sections with create=true for missing files. Bracketed headers also recover common apply-patch-style path noise such as [*** Update File: path#HASH]. Bare payload lines are accepted after an operation header, and uniformly pasted bare read-output rows such as 1:ab|content or >>> 1:ab|content have their read prefixes stripped. Plus-prefixed payload rows are explicit literals after removing the patch + marker, so +1:ab|content writes 1:ab|content. Empty create sections create zero-byte files. In payload bodies, use ++ for literal + and +- for literal -. Sectioned patches also accept REM and MV <path>; MV may be combined with line operations to rename and edit one section, while REM must stand alone. *** Abort suppresses an embedded patch."
+                        "Hashline operations. Guardrails: start operation lines only with documented operation tokens; copy line and file hash anchors verbatim from a recent hashline.read or find_block output and never invent or reconstruct hashes; prefix each payload body line with + so it cannot be parsed as patch structure; after a file or line hash mismatch, reread the file and rebuild the patch from the refreshed anchors before retrying. Use README-style bodies such as SWAP 12:1a2b:\n+replacement, SWAP 12:1a2b..14:3c4d:\n+replacement, DEL 12:1a2b..=14:3c4d, INS.POST 12:1a2b:\n+text, INS.HEAD:\n+text, SWAP.BLK 12:1a2b@0123abcd:\n+replacement block, DEL.BLK 12:1a2b@0123abcd, INS.BLK.POST 12:1a2b@0123abcd:\n+block, INS.BLK.PRE 12:1a2b@0123abcd:\n+block, INS.BLK 12:1a2b@0123abcd:\n+block, compact forms such as SWAP 12:1a2b|replacement and INS.TAIL|text, [path]#HASH sections for existing-file multi-file edits, or [path] sections with create=true for missing files. Bracketed headers also recover common apply-patch-style path noise such as [*** Update File: path]#HASH. Bare payload lines are accepted after an operation header, and uniformly pasted bare read-output rows such as 1:1a2b|content or >>> 1:1a2b|content have their read prefixes stripped. Plus-prefixed payload rows are explicit literals after removing the patch + marker, so +1:1a2b|content writes 1:1a2b|content. Empty create sections create zero-byte files. In payload bodies, use ++ for literal + and +- for literal -. Sectioned patches also accept REM and MV <path>; MV may be combined with line operations to rename and edit one section, while REM must stand alone. *** Abort suppresses an embedded patch."
                             .to_string(),
                     )),
                 ),
@@ -396,7 +396,7 @@ fn find_block_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "anchor".to_string(),
                     JsonSchema::string(Some(
-                        "Line anchor as line, line:hash, block N:, or a unique short line hash.".to_string(),
+                        "Line anchor as line:4-hex-hash, or a unique 4-hex line hash; block anchors use line:4-hex@8-hex-block-hash.".to_string(),
                     )),
                 ),
                 (
@@ -416,7 +416,7 @@ fn find_block_tool_spec(multi_environment: bool) -> ResponsesApiTool {
 fn remove_file_tool_spec(multi_environment: bool) -> ResponsesApiTool {
     ResponsesApiTool {
         name: REMOVE_FILE_TOOL.to_string(),
-        description: "Remove one text file after optional Hashline file-hash validation."
+        description: "Remove one text file after required Hashline file-hash validation."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -425,7 +425,7 @@ fn remove_file_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "expected_hash".to_string(),
                     JsonSchema::string(Some(
-                        "Optional 4-hex file hash from a Hashline read header.".to_string(),
+                        "Required 8-hex file hash from a Hashline read header.".to_string(),
                     )),
                 ),
                 (
@@ -437,7 +437,7 @@ fn remove_file_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 ),
             ]),
             multi_environment,
-            vec!["path".to_string()],
+            vec!["path".to_string(), "expected_hash".to_string()],
         ),
         output_schema: None,
     }
@@ -446,7 +446,7 @@ fn remove_file_tool_spec(multi_environment: bool) -> ResponsesApiTool {
 fn rename_file_tool_spec(multi_environment: bool) -> ResponsesApiTool {
     ResponsesApiTool {
         name: RENAME_FILE_TOOL.to_string(),
-        description: "Rename one text file after optional Hashline file-hash validation."
+        description: "Rename one text file after required Hashline file-hash validation."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -462,7 +462,7 @@ fn rename_file_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 (
                     "expected_hash".to_string(),
                     JsonSchema::string(Some(
-                        "Optional 4-hex file hash from a Hashline read header.".to_string(),
+                        "Required 8-hex file hash from a Hashline read header.".to_string(),
                     )),
                 ),
                 (
@@ -474,7 +474,11 @@ fn rename_file_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 ),
             ]),
             multi_environment,
-            vec!["path".to_string(), "new_path".to_string()],
+            vec![
+                "path".to_string(),
+                "new_path".to_string(),
+                "expected_hash".to_string(),
+            ],
         ),
         output_schema: None,
     }
@@ -538,7 +542,7 @@ async fn handle_read(
         args.max_lines.unwrap_or(DEFAULT_READ_MAX_LINES),
     )?;
     Ok(boxed_tool_output(FunctionToolOutput::from_text(
-        serde_json::to_string_pretty(&body)
+        serde_json::to_string(&body)
             .unwrap_or_else(|err| format!("failed to serialize hashline.read output: {err}")),
         Some(true),
     )))
@@ -575,7 +579,7 @@ fn build_hashline_read_body(
             "hashline.read start_line {start_line} is outside file range 1..={total_lines}"
         )));
     }
-    let path_hash = hash_normalized_hex(&normalized, 4);
+    let path_hash = hash_normalized_hex(&normalized);
     let (start_line, end_line, truncated, next_start_line, content, lines) = if total_lines == 0 {
         (None, None, false, None, String::new(), Vec::new())
     } else {
@@ -606,7 +610,7 @@ fn build_hashline_read_body(
     Ok(json!({
         "path": path,
         "hash": path_hash,
-        "header": format!("[{path}#{path_hash}]"),
+        "header": format!("[{path}]#{path_hash}"),
         "start_line": start_line,
         "end_line": end_line,
         "total_lines": total_lines,
@@ -660,7 +664,7 @@ async fn handle_write(
     };
     let write_contents = normalize_file_text(&args.content).into_owned();
     let operation = if create { "create" } else { "update" };
-    let new_hash = hash_hex(&write_contents, 4);
+    let new_hash = hash_hex(&write_contents);
     if args.dry_run.unwrap_or(false) {
         let preview = (old_contents != write_contents)
             .then(|| build_hashline_patch_preview(&old_contents, &write_contents))
@@ -670,12 +674,12 @@ async fn handle_write(
             "path": args.path,
             "dry_run": true,
             "operation": operation,
-            "old_hash": hash_hex(&old_contents, 4),
+            "old_hash": hash_hex(&old_contents),
             "new_hash": new_hash,
             "preview": preview,
         });
         return Ok(boxed_tool_output(FunctionToolOutput::from_text(
-            serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+            serde_json::to_string(&body).unwrap_or_else(|err| {
                 format!("failed to serialize hashline.write dry-run output: {err}")
             }),
             Some(true),
@@ -730,31 +734,14 @@ fn build_hashline_write_output(
     written_contents: &str,
     operation: &str,
 ) -> Result<Box<dyn codex_tools::ToolOutput>, FunctionCallError> {
-    let mut body = build_hashline_read_body(
+    let body = build_hashline_patch_success_body(
         path,
+        old_contents,
         written_contents,
-        /*start_line*/ 1,
-        None,
-        DEFAULT_READ_MAX_LINES,
+        operation == "create",
     )?;
-    let new_hash = hash_hex(written_contents, 4);
-    let Some(body_object) = body.as_object_mut() else {
-        return Err(FunctionCallError::RespondToModel(
-            "failed to construct hashline.write output".to_string(),
-        ));
-    };
-    body_object.insert("success".to_string(), Value::Bool(true));
-    body_object.insert(
-        "operation".to_string(),
-        Value::String(operation.to_string()),
-    );
-    body_object.insert(
-        "old_hash".to_string(),
-        Value::String(hash_hex(old_contents, 4)),
-    );
-    body_object.insert("new_hash".to_string(), Value::String(new_hash));
     Ok(boxed_tool_output(FunctionToolOutput::from_text(
-        serde_json::to_string_pretty(&body)
+        serde_json::to_string(&body)
             .unwrap_or_else(|err| format!("failed to serialize hashline.write output: {err}")),
         Some(true),
     )))
@@ -798,9 +785,22 @@ async fn handle_find_block(
         capped_end,
         FIND_BLOCK_EXCERPT_MAX_SERIALIZED_BYTES,
     );
+    let file_hash = hash_hex(&normalized_contents);
+    let block_hash = hash_hex(&lines[block_start - 1..block_end].join("\n"));
+    let anchor_hash = line_hash(lines[anchor_line - 1]);
+    let block_anchor = format!("{anchor_line}:{anchor_hash}@{block_hash}");
+    let file_header = format!(
+        "[{path}]#{file_hash}",
+        path = args.path.as_str(),
+        file_hash = &file_hash
+    );
     let body = json!({
         "file": &args.path,
         "path": &args.path,
+        "hash": file_hash,
+        "header": file_header,
+        "block_hash": block_hash,
+        "block_anchor": block_anchor,
         "anchor": args.anchor,
         "line_count": lines.len(),
         "language": language_for_path(&args.path),
@@ -811,7 +811,7 @@ async fn handle_find_block(
         "block_lines": excerpt.lines,
     });
     Ok(boxed_tool_output(FunctionToolOutput::from_text(
-        serde_json::to_string_pretty(&body)
+        serde_json::to_string(&body)
             .unwrap_or_else(|err| format!("failed to serialize hashline.find_block output: {err}")),
         Some(true),
     )))
@@ -829,7 +829,7 @@ fn resolve_find_block_anchor(anchor: &str, lines: &[&str]) -> Result<usize, Func
         return Ok(anchor_line);
     }
 
-    if trimmed.parse::<usize>().is_err() && is_short_hash(trimmed) {
+    if trimmed.parse::<usize>().is_err() && is_line_hash(trimmed) {
         return resolve_unique_line_hash(trimmed, lines);
     }
 
@@ -847,7 +847,7 @@ fn resolve_find_block_anchor(anchor: &str, lines: &[&str]) -> Result<usize, Func
 }
 
 fn validate_find_block_line(anchor_line: usize, lines: &[&str]) -> Result<(), FunctionCallError> {
-    if anchor_line == 0 || anchor_line > lines.len().max(1) {
+    if anchor_line == 0 || anchor_line > lines.len() {
         return Err(FunctionCallError::RespondToModel(format!(
             "anchor line {anchor_line} is outside file range 1..={}",
             lines.len()
@@ -879,8 +879,8 @@ fn resolve_unique_line_hash(hash: &str, lines: &[&str]) -> Result<usize, Functio
     }
 }
 
-fn is_short_hash(value: &str) -> bool {
-    value.len() == 2 && value.chars().all(|ch| ch.is_ascii_hexdigit())
+fn is_line_hash(value: &str) -> bool {
+    value.len() == LINE_HASH_WIDTH && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 async fn handle_patch(
@@ -919,7 +919,7 @@ async fn handle_patch(
     let target_path = &section.path;
     if create && section.expected_hash.is_some() {
         return Err(FunctionCallError::RespondToModel(
-            "hashline.patch create=true cannot use a [path#HASH] section header because the target file must be missing"
+            "hashline.patch create=true cannot use a [path]#HASH section header because the target file must be missing"
                 .to_string(),
         ));
     }
@@ -942,7 +942,14 @@ async fn handle_patch(
         )
         .await?
     };
-    validate_file_hash(target_path, &contents, section.expected_hash.as_deref())?;
+    if !create {
+        let Some(expected_hash) = section.expected_hash.as_deref() else {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "existing-file Hashline patches require a [{target_path}]#HASH section header"
+            )));
+        };
+        validate_file_hash(target_path, &contents, expected_hash)?;
+    }
 
     if let Some(file_operation) = parse_hashline_patch_file_operation(&section.patch)? {
         if create {
@@ -991,7 +998,7 @@ async fn handle_patch(
                     /*create*/ false,
                 )?;
                 let warnings = hashline_patch_warnings(&section.patch)?;
-                let new_hash = hash_hex(&patched, 4);
+                let new_hash = hash_hex(&patched);
                 let apply_patch_text = apply_patch_for_hashline_mutations(
                     &[HashlinePatchFileMutation::Rename {
                         path: target_path,
@@ -1017,14 +1024,14 @@ async fn handle_patch(
                         "src": target_path,
                         "dst": &new_path,
                         "dry_run": true,
-                        "old_hash": hash_hex(&contents, 4),
+                        "old_hash": hash_hex(&contents),
                         "new_hash": new_hash,
                         "operation": "rename_file",
                         "preview": preview,
                     });
                     add_hashline_warnings(&mut body, &warnings);
                     return Ok(boxed_tool_output(FunctionToolOutput::from_text(
-                        serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+                        serde_json::to_string(&body).unwrap_or_else(|err| {
                             format!(
                                 "failed to serialize hashline.patch rename dry-run output: {err}"
                             )
@@ -1060,7 +1067,7 @@ async fn handle_patch(
                     args.environment_id.as_deref(),
                 )
                 .await?;
-                let written_hash = hash_hex(&written_contents, 4);
+                let written_hash = hash_hex(&written_contents);
                 if written_hash != new_hash {
                     return Err(FunctionCallError::RespondToModel(format!(
                         "hashline.patch rename completed but destination hash for {new_path} was {written_hash}, expected {new_hash}"
@@ -1074,7 +1081,7 @@ async fn handle_patch(
                 )?;
                 add_hashline_warnings(&mut body, &warnings);
                 return Ok(boxed_tool_output(FunctionToolOutput::from_text(
-                    serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+                    serde_json::to_string(&body).unwrap_or_else(|err| {
                         format!("failed to serialize hashline.patch rename output: {err}")
                     }),
                     Some(true),
@@ -1086,7 +1093,7 @@ async fn handle_patch(
     let patched =
         apply_hashline_patch_or_create_empty(target_path, &contents, &section.patch, create)?;
     let warnings = hashline_patch_warnings(&section.patch)?;
-    let new_hash = hash_hex(&patched, 4);
+    let new_hash = hash_hex(&patched);
     let apply_patch_text = apply_patch_for_hashline_update(
         target_path,
         &contents,
@@ -1102,13 +1109,13 @@ async fn handle_patch(
             "path": target_path,
             "dry_run": true,
             "operation": if create { "create" } else { "update" },
-            "old_hash": hash_hex(&contents, 4),
+            "old_hash": hash_hex(&contents),
             "new_hash": new_hash,
             "preview": preview,
         });
         add_hashline_warnings(&mut body, &warnings);
         return Ok(boxed_tool_output(FunctionToolOutput::from_text(
-            serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+            serde_json::to_string(&body).unwrap_or_else(|err| {
                 format!("failed to serialize hashline.patch dry-run output: {err}")
             }),
             Some(true),
@@ -1143,7 +1150,7 @@ async fn handle_patch(
         build_hashline_patch_success_body(target_path, &contents, &written_contents, create)?;
     add_hashline_warnings(&mut body, &warnings);
     Ok(boxed_tool_output(FunctionToolOutput::from_text(
-        serde_json::to_string_pretty(&body)
+        serde_json::to_string(&body)
             .unwrap_or_else(|err| format!("failed to serialize hashline.patch output: {err}")),
         Some(true),
     )))
@@ -1161,7 +1168,7 @@ fn build_hashline_patch_aborted_output(
         "dry_run": dry_run,
     });
     boxed_tool_output(FunctionToolOutput::from_text(
-        serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+        serde_json::to_string(&body).unwrap_or_else(|err| {
             format!("failed to serialize hashline.patch abort output: {err}")
         }),
         Some(true),
@@ -1177,7 +1184,7 @@ async fn handle_patch_file_operation(
     dry_run: bool,
     environment_id: Option<&str>,
 ) -> Result<Box<dyn codex_tools::ToolOutput>, FunctionCallError> {
-    let old_hash = hash_hex(contents, 4);
+    let old_hash = hash_hex(contents);
     match file_operation {
         HashlinePatchFileOperation::Remove => {
             if dry_run {
@@ -1189,7 +1196,7 @@ async fn handle_patch_file_operation(
                     "operation": "remove_file",
                 });
                 return Ok(boxed_tool_output(FunctionToolOutput::from_text(
-                    serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+                    serde_json::to_string(&body).unwrap_or_else(|err| {
                         format!("failed to serialize hashline.patch remove dry-run output: {err}")
                     }),
                     Some(true),
@@ -1223,7 +1230,7 @@ async fn handle_patch_file_operation(
                 "old_hash": old_hash,
             });
             Ok(boxed_tool_output(FunctionToolOutput::from_text(
-                serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+                serde_json::to_string(&body).unwrap_or_else(|err| {
                     format!("failed to serialize hashline.patch remove output: {err}")
                 }),
                 Some(true),
@@ -1249,7 +1256,7 @@ async fn handle_patch_file_operation(
                     "operation": "rename_file",
                 });
                 return Ok(boxed_tool_output(FunctionToolOutput::from_text(
-                    serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+                    serde_json::to_string(&body).unwrap_or_else(|err| {
                         format!("failed to serialize hashline.patch rename dry-run output: {err}")
                     }),
                     Some(true),
@@ -1284,7 +1291,7 @@ async fn handle_patch_file_operation(
                 environment_id,
             )
             .await?;
-            let new_hash = hash_hex(&renamed_contents, 4);
+            let new_hash = hash_hex(&renamed_contents);
             if new_hash != old_hash {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "hashline.patch rename completed but destination hash for {new_path} was {new_hash}, expected {old_hash}"
@@ -1299,10 +1306,10 @@ async fn handle_patch_file_operation(
                 "operation": "rename_file",
                 "old_hash": old_hash,
                 "new_hash": new_hash,
-                "header": format!("[{new_path}#{new_hash}]"),
+                "header": format!("[{new_path}]#{new_hash}"),
             });
             Ok(boxed_tool_output(FunctionToolOutput::from_text(
-                serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+                serde_json::to_string(&body).unwrap_or_else(|err| {
                     format!("failed to serialize hashline.patch rename output: {err}")
                 }),
                 Some(true),
@@ -1322,7 +1329,7 @@ async fn handle_multi_file_patch(
     for section in sections {
         if create && section.expected_hash.is_some() {
             return Err(FunctionCallError::RespondToModel(
-                "hashline.patch create=true cannot use [path#HASH] section headers because every target file must be missing"
+                "hashline.patch create=true cannot use [path]#HASH section headers because every target file must be missing"
                     .to_string(),
             ));
         }
@@ -1344,11 +1351,15 @@ async fn handle_multi_file_patch(
             )
             .await?
         };
-        validate_file_hash(
-            &section.path,
-            &old_contents,
-            section.expected_hash.as_deref(),
-        )?;
+        if !create {
+            let Some(expected_hash) = section.expected_hash.as_deref() else {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "existing-file Hashline patches require a [{}]#HASH section header",
+                    section.path
+                )));
+            };
+            validate_file_hash(&section.path, &old_contents, expected_hash)?;
+        }
 
         if let Some(file_operation) = parse_hashline_patch_file_operation(&section.patch)? {
             if create {
@@ -1358,7 +1369,7 @@ async fn handle_multi_file_patch(
             }
             match file_operation {
                 HashlinePatchFileOperation::Remove => {
-                    let old_hash = hash_hex(&old_contents, 4);
+                    let old_hash = hash_hex(&old_contents);
                     prepared_files.push(PreparedHashlinePatchFile::Remove {
                         path: section.path.clone(),
                         old_hash,
@@ -1372,7 +1383,7 @@ async fn handle_multi_file_patch(
                         args.environment_id.as_deref(),
                     )
                     .await?;
-                    let old_hash = hash_hex(&old_contents, 4);
+                    let old_hash = hash_hex(&old_contents);
                     let has_line_operations = hashline_patch_has_line_operations(&section.patch)?;
                     let (new_contents, new_hash, warnings) = if has_line_operations {
                         let new_contents = apply_hashline_patch_or_create_empty(
@@ -1381,7 +1392,7 @@ async fn handle_multi_file_patch(
                             &section.patch,
                             /*create*/ false,
                         )?;
-                        let new_hash = hash_hex(&new_contents, 4);
+                        let new_hash = hash_hex(&new_contents);
                         let warnings = hashline_patch_warnings(&section.patch)?;
                         (new_contents, new_hash, warnings)
                     } else {
@@ -1407,7 +1418,7 @@ async fn handle_multi_file_patch(
             &section.patch,
             create,
         )?;
-        let new_hash = hash_hex(&new_contents, 4);
+        let new_hash = hash_hex(&new_contents);
         let warnings = hashline_patch_warnings(&section.patch)?;
         prepared_files.push(PreparedHashlinePatchFile::Update {
             path: section.path.clone(),
@@ -1453,7 +1464,7 @@ async fn handle_multi_file_patch(
                         "success": true,
                         "path": path,
                         "operation": if *create { "create" } else { "update" },
-                        "old_hash": hash_hex(old_contents, 4),
+                        "old_hash": hash_hex(old_contents),
                         "new_hash": new_hash,
                         "preview": preview,
                     });
@@ -1513,7 +1524,7 @@ async fn handle_multi_file_patch(
             "files": files,
         });
         return Ok(boxed_tool_output(FunctionToolOutput::from_text(
-            serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+            serde_json::to_string(&body).unwrap_or_else(|err| {
                 format!("failed to serialize hashline.patch multi-file dry-run output: {err}")
             }),
             Some(true),
@@ -1642,7 +1653,7 @@ async fn handle_multi_file_patch(
                     args.environment_id.as_deref(),
                 )
                 .await?;
-                let written_hash = hash_hex(&renamed_contents, 4);
+                let written_hash = hash_hex(&renamed_contents);
                 if written_hash != *new_hash {
                     return Err(FunctionCallError::RespondToModel(format!(
                         "hashline.patch rename completed but destination hash for {new_path} was {written_hash}, expected {new_hash}"
@@ -1661,7 +1672,7 @@ async fn handle_multi_file_patch(
                             "operation": "rename_file",
                             "old_hash": old_hash,
                             "new_hash": new_hash,
-                            "header": format!("[{new_path}#{new_hash}]"),
+                            "header": format!("[{new_path}]#{new_hash}"),
                         })
                     } else {
                         build_hashline_rename_update_success_body(
@@ -1691,7 +1702,7 @@ async fn handle_multi_file_patch(
         "files": files,
     });
     Ok(boxed_tool_output(FunctionToolOutput::from_text(
-        serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+        serde_json::to_string(&body).unwrap_or_else(|err| {
             format!("failed to serialize hashline.patch multi-file output: {err}")
         }),
         Some(true),
@@ -1742,14 +1753,14 @@ fn build_hashline_patch_success_body(
             excerpt.lines,
         )
     };
-    let new_hash = hash_normalized_hex(&normalized, 4);
+    let new_hash = hash_normalized_hex(&normalized);
 
     Ok(json!({
         "success": true,
         "path": path,
-        "header": format!("[{path}#{new_hash}]"),
+        "header": format!("[{path}]#{new_hash}"),
         "operation": if create { "create" } else { "update" },
-        "old_hash": hash_hex(old_contents, 4),
+        "old_hash": hash_hex(old_contents),
         "new_hash": new_hash,
         "start_line": start_line,
         "end_line": end_line,
@@ -1797,7 +1808,7 @@ fn push_bounded_file_detail(
     serialized_bytes: &mut usize,
     detail: Value,
 ) -> bool {
-    let detail_bytes = serde_json::to_string_pretty(&detail).map_or(usize::MAX, |value| {
+    let detail_bytes = serde_json::to_string(&detail).map_or(usize::MAX, |value| {
         value
             .len()
             .saturating_add(value.lines().count().saturating_mul(4))
@@ -1861,8 +1872,8 @@ async fn handle_remove_file(
         args.environment_id.as_deref(),
     )
     .await?;
-    validate_file_hash(&args.path, &contents, args.expected_hash.as_deref())?;
-    let old_hash = hash_hex(&contents, 4);
+    validate_file_hash(&args.path, &contents, &args.expected_hash)?;
+    let old_hash = hash_hex(&contents);
 
     if args.dry_run.unwrap_or(false) {
         let body = json!({
@@ -1873,7 +1884,7 @@ async fn handle_remove_file(
             "operation": "remove_file",
         });
         return Ok(boxed_tool_output(FunctionToolOutput::from_text(
-            serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+            serde_json::to_string(&body).unwrap_or_else(|err| {
                 format!("failed to serialize hashline.remove_file dry-run output: {err}")
             }),
             Some(true),
@@ -1909,7 +1920,7 @@ async fn handle_remove_file(
         "old_hash": old_hash,
     });
     Ok(boxed_tool_output(FunctionToolOutput::from_text(
-        serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+        serde_json::to_string(&body).unwrap_or_else(|err| {
             format!("failed to serialize hashline.remove_file output: {err}")
         }),
         Some(true),
@@ -1939,7 +1950,7 @@ async fn handle_rename_file(
         args.environment_id.as_deref(),
     )
     .await?;
-    validate_file_hash(&args.path, &contents, args.expected_hash.as_deref())?;
+    validate_file_hash(&args.path, &contents, &args.expected_hash)?;
     ensure_selected_file_missing(
         turn.as_ref(),
         step_context.as_ref(),
@@ -1947,7 +1958,7 @@ async fn handle_rename_file(
         args.environment_id.as_deref(),
     )
     .await?;
-    let old_hash = hash_hex(&contents, 4);
+    let old_hash = hash_hex(&contents);
 
     if args.dry_run.unwrap_or(false) {
         let body = json!({
@@ -1961,7 +1972,7 @@ async fn handle_rename_file(
             "operation": "rename_file",
         });
         return Ok(boxed_tool_output(FunctionToolOutput::from_text(
-            serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+            serde_json::to_string(&body).unwrap_or_else(|err| {
                 format!("failed to serialize hashline.rename_file dry-run output: {err}")
             }),
             Some(true),
@@ -2001,14 +2012,14 @@ async fn handle_rename_file(
         args.environment_id.as_deref(),
     )
     .await?;
-    let new_hash = hash_hex(&renamed_contents, 4);
+    let new_hash = hash_hex(&renamed_contents);
     if new_hash != old_hash {
         return Err(FunctionCallError::RespondToModel(format!(
             "hashline.rename_file completed but destination hash for {} was {}, expected {old_hash}",
             args.new_path, new_hash
         )));
     }
-    let header = format!("[{}#{}]", args.new_path, new_hash);
+    let header = format!("[{}]#{}", args.new_path, new_hash);
     let body = json!({
         "success": true,
         "path": &args.path,
@@ -2021,7 +2032,7 @@ async fn handle_rename_file(
         "header": header,
     });
     Ok(boxed_tool_output(FunctionToolOutput::from_text(
-        serde_json::to_string_pretty(&body).unwrap_or_else(|err| {
+        serde_json::to_string(&body).unwrap_or_else(|err| {
             format!("failed to serialize hashline.rename_file output: {err}")
         }),
         Some(true),
@@ -2112,7 +2123,7 @@ async fn read_selected_file_after_update(
     operation: &str,
 ) -> Result<String, FunctionCallError> {
     let written_contents = read_selected_file(turn, step_context, path, environment_id).await?;
-    let written_hash = hash_hex(&written_contents, 4);
+    let written_hash = hash_hex(&written_contents);
     // apply_patch materializes a final LF; Hashline preserves exact EOF shape.
     let apply_patch_added_trailing_newline = !expected_contents.ends_with('\n')
         && written_contents.strip_suffix('\n') == Some(expected_contents);

@@ -5,6 +5,8 @@ use serde::Serialize;
 use super::hashline_block::find_block_span;
 use super::hashline_format::json_escaped_content_len_bounded;
 use super::hashline_format::split_lines_preserve;
+use super::hashline_hash::FILE_HASH_WIDTH;
+use super::hashline_hash::LINE_HASH_WIDTH;
 use super::hashline_hash::hash_hex;
 use super::hashline_hash::line_hash;
 use super::hashline_hash::normalize_file_text;
@@ -13,7 +15,6 @@ const APPLY_PATCH_CONTEXT_LINES: usize = 3;
 const PATCH_PREVIEW_MAX_LINES: usize = 40;
 const PATCH_PREVIEW_MAX_SERIALIZED_BYTES: usize = 4 * 1024;
 const PREVIEW_TRUNCATION_MARKER: &str = "... [content truncated]";
-const BARE_LINE_ANCHOR_WARNING: &str = "hashline.patch used bare line anchors; prefer line:hash anchors from hashline.read when editing existing files";
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
 pub(super) struct HashlinePatchPreview {
@@ -74,7 +75,13 @@ enum PayloadLineKind {
 #[derive(Debug, Clone)]
 struct LineAnchor {
     line: usize,
-    expected_hash: Option<String>,
+    expected_hash: String,
+}
+
+#[derive(Debug, Clone)]
+struct BlockAnchor {
+    line: LineAnchor,
+    expected_hash: String,
 }
 
 #[derive(Debug, Clone)]
@@ -107,18 +114,18 @@ enum HashlineOperation {
         inserted: Vec<String>,
     },
     SwapBlock {
-        anchor: LineAnchor,
+        anchor: BlockAnchor,
         replacement: Vec<String>,
     },
     DeleteBlock {
-        anchor: LineAnchor,
+        anchor: BlockAnchor,
     },
     InsertBlockBefore {
-        anchor: LineAnchor,
+        anchor: BlockAnchor,
         inserted: Vec<String>,
     },
     InsertBlockAfter {
-        anchor: LineAnchor,
+        anchor: BlockAnchor,
         inserted: Vec<String>,
     },
     RemoveFile,
@@ -156,11 +163,6 @@ pub(super) fn apply_hashline_patch(
         .into_iter()
         .filter(|operation| !operation.is_file_operation())
         .collect::<Vec<_>>();
-    let contents_bytes = contents.as_bytes();
-    let restore_crlf = contents_bytes
-        .iter()
-        .position(|byte| *byte == b'\n')
-        .is_some_and(|index| index > 0 && contents_bytes[index - 1] == b'\r');
     let normalized_contents = normalize_file_text(contents);
     let mut lines = split_lines_preserve(&normalized_contents)
         .into_iter()
@@ -175,14 +177,53 @@ pub(super) fn apply_hashline_patch(
 
     apply_operations(path, &mut lines, &operations, &normalized_contents)?;
 
-    let mut output = lines.join("\n");
-    if normalized_contents.ends_with('\n') {
-        output.push('\n');
-    }
-    if restore_crlf {
-        output = output.replace('\n', "\r\n");
-    }
+    let output = reassemble_file_contents(&lines, contents, &normalized_contents);
     Ok(output)
+}
+
+fn reassemble_file_contents(
+    lines: &[String],
+    original_contents: &str,
+    normalized_contents: &str,
+) -> String {
+    let line_endings = original_line_endings(original_contents);
+    let separator_count = if normalized_contents.ends_with('\n') {
+        lines.len()
+    } else {
+        lines.len().saturating_sub(1)
+    };
+    let fallback = line_endings.first().copied().unwrap_or("\n");
+    let mut output = String::new();
+    if original_contents.starts_with('\u{feff}') {
+        output.push('\u{feff}');
+    }
+    for (index, line) in lines.iter().enumerate() {
+        output.push_str(line);
+        if index < separator_count {
+            output.push_str(line_endings.get(index).copied().unwrap_or(fallback));
+        }
+    }
+    output
+}
+
+fn original_line_endings(contents: &str) -> Vec<&str> {
+    let mut line_endings = Vec::new();
+    let mut chars = contents.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        let end = match ch {
+            '\r' => match chars.peek().copied() {
+                Some((next_index, '\n')) => {
+                    chars.next();
+                    next_index + '\n'.len_utf8()
+                }
+                _ => index + ch.len_utf8(),
+            },
+            '\n' => index + ch.len_utf8(),
+            _ => continue,
+        };
+        line_endings.push(&contents[index..end]);
+    }
+    line_endings
 }
 
 pub(super) fn parse_hashline_patch_file_operation(
@@ -252,36 +293,11 @@ impl HashlineOperation {
             HashlineOperation::RemoveFile | HashlineOperation::RenameFile { .. }
         )
     }
-
-    fn uses_bare_line_anchor(&self) -> bool {
-        match self {
-            HashlineOperation::Swap { range, .. } | HashlineOperation::Delete { range } => {
-                range.start.expected_hash.is_none() || range.end.expected_hash.is_none()
-            }
-            HashlineOperation::InsertBefore { anchor, .. }
-            | HashlineOperation::InsertAfter { anchor, .. }
-            | HashlineOperation::SwapBlock { anchor, .. }
-            | HashlineOperation::DeleteBlock { anchor }
-            | HashlineOperation::InsertBlockBefore { anchor, .. }
-            | HashlineOperation::InsertBlockAfter { anchor, .. } => anchor.expected_hash.is_none(),
-            HashlineOperation::InsertHead { .. }
-            | HashlineOperation::InsertTail { .. }
-            | HashlineOperation::RemoveFile
-            | HashlineOperation::RenameFile { .. } => false,
-        }
-    }
 }
 
 pub(super) fn hashline_patch_warnings(patch: &str) -> Result<Vec<String>, FunctionCallError> {
-    let operations = parse_hashline_patch(patch)?;
-    if operations
-        .iter()
-        .any(HashlineOperation::uses_bare_line_anchor)
-    {
-        Ok(vec![BARE_LINE_ANCHOR_WARNING.to_string()])
-    } else {
-        Ok(Vec::new())
-    }
+    parse_hashline_patch(patch)?;
+    Ok(Vec::new())
 }
 
 pub(super) fn parse_anchor_line(anchor: &str) -> Result<usize, FunctionCallError> {
@@ -304,19 +320,16 @@ pub(super) fn parse_anchor_hash(anchor: &str) -> Option<&str> {
 pub(super) fn validate_file_hash(
     path: &str,
     contents: &str,
-    expected_hash: Option<&str>,
+    expected_hash: &str,
 ) -> Result<(), FunctionCallError> {
-    if let Some(expected_hash) = expected_hash {
-        let actual_hash = hash_hex(contents, 4);
-        if expected_hash != actual_hash {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "file hash mismatch for {path}: expected {expected_hash}, found {actual_hash}; the file changed since it was read, so reread it with hashline.read and rebuild the patch from the refreshed anchors before retrying"
-            )));
-        }
+    let actual_hash = hash_hex(contents);
+    if expected_hash != actual_hash {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "file hash mismatch for {path}: expected {expected_hash}, found {actual_hash}; the file changed since it was read, so reread it with hashline.read and rebuild the patch from the refreshed anchors before retrying"
+        )));
     }
     Ok(())
 }
-
 pub(super) fn split_hashline_patch_sections(
     default_path: &str,
     patch: &str,
@@ -367,7 +380,7 @@ pub(super) fn split_hashline_patch_sections(
                 return Err(FunctionCallError::RespondToModel(message));
             }
             return Err(FunctionCallError::RespondToModel(format!(
-                "Hashline operation {line:?} appears before the first [path#HASH] section header"
+                "Hashline operation {line:?} appears before the first [path]#HASH section header"
             )));
         };
 
@@ -393,30 +406,33 @@ fn parse_patch_file_header(
     if !line.starts_with('[') {
         return Ok(None);
     }
-    let Some(header) = line
-        .strip_prefix('[')
-        .and_then(|value| value.strip_suffix(']'))
-    else {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "invalid Hashline file header {line}; expected [{target_path}#HASH]"
-        )));
+    let Some(inner) = line.strip_prefix('[') else {
+        unreachable!("checked prefix above");
     };
-    let (header_path, expected_hash) = match header.rsplit_once('#') {
-        Some((header_path, expected_hash)) => {
-            validate_hash_token(header_path, expected_hash)?;
+    let (header_path, expected_hash) =
+        if let Some((header_path, expected_hash)) = inner.rsplit_once("]#") {
+            if expected_hash.is_empty() {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "invalid Hashline file header {line}; expected [{target_path}]#HASH"
+                )));
+            }
+            validate_hash_token(target_path, expected_hash)?;
             (header_path, Some(expected_hash.to_ascii_lowercase()))
-        }
-        None => (header, None),
-    };
+        } else if let Some(header_path) = inner.strip_suffix(']') {
+            (header_path, None)
+        } else {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "invalid Hashline file header {line}; expected [{target_path}]#HASH"
+            )));
+        };
     let header_path = strip_apply_patch_path_noise(header_path);
-    if header_path.trim().is_empty() || header_path.contains('#') {
+    if header_path.trim().is_empty() {
         return Err(FunctionCallError::RespondToModel(format!(
-            "invalid Hashline file header {line}; expected [{target_path}#HASH] or [{target_path}]"
+            "invalid Hashline file header {line}; expected [{target_path}]#HASH"
         )));
     }
     Ok(Some((header_path, expected_hash)))
 }
-
 fn strip_apply_patch_path_noise(path_text: &str) -> String {
     let bytes = path_text.as_bytes();
     let mut stripped_stars = 0;
@@ -481,30 +497,19 @@ fn validate_patch_headers(
     let mut section_hash = None;
     for raw_line in patch.lines() {
         let line = raw_line.trim();
-        if !line.starts_with('[') {
+        let Some((header_path, expected_hash)) = parse_patch_file_header(path, line)? else {
             continue;
-        }
-        let Some(header) = line
-            .strip_prefix('[')
-            .and_then(|value| value.strip_suffix(']'))
-        else {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "invalid Hashline file header {line}; expected [{path}#HASH]"
-            )));
         };
-        let Some((header_path, expected_hash)) = header.rsplit_once('#') else {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "invalid Hashline file header {line}; expected [{path}#HASH]"
-            )));
-        };
-        let header_path = strip_apply_patch_path_noise(header_path);
         if header_path != path {
             return Err(FunctionCallError::RespondToModel(format!(
                 "Hashline file header path {header_path} does not match target path {path}; this single-file patch application only accepts headers for {path}"
             )));
         }
-        validate_hash_token(path, expected_hash)?;
-        let expected_hash = expected_hash.to_ascii_lowercase();
+        let Some(expected_hash) = expected_hash else {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "existing-file Hashline patches require a [{path}]#HASH header"
+            )));
+        };
         match &section_hash {
             Some(previous_hash) if previous_hash != &expected_hash => {
                 return Err(FunctionCallError::RespondToModel(format!(
@@ -516,17 +521,19 @@ fn validate_patch_headers(
         }
     }
     if let Some(expected_hash) = section_hash {
-        validate_file_hash(path, contents, Some(&expected_hash))?;
+        validate_file_hash(path, contents, &expected_hash)?;
     }
     Ok(())
 }
 
 fn validate_hash_token(path: &str, expected_hash: &str) -> Result<(), FunctionCallError> {
-    if expected_hash.len() == 4 && expected_hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
+    if expected_hash.len() == FILE_HASH_WIDTH
+        && expected_hash.chars().all(|ch| ch.is_ascii_hexdigit())
+    {
         return Ok(());
     }
     Err(FunctionCallError::RespondToModel(format!(
-        "invalid file hash for {path}: expected a 4-hex Hashline file hash, got {expected_hash}"
+        "invalid file hash for {path}: expected a {FILE_HASH_WIDTH}-hex Hashline file hash, got {expected_hash}"
     )))
 }
 
@@ -540,6 +547,10 @@ fn parse_hashline_patch(patch: &str) -> Result<Vec<HashlineOperation>, FunctionC
     while index < raw_lines.len() {
         let line = raw_lines[index].trim_end();
         if is_ignorable_patch_line(line) {
+            index += 1;
+            continue;
+        }
+        if line.starts_with('[') && parse_patch_file_header("", line)?.is_some() {
             index += 1;
             continue;
         }
@@ -618,18 +629,18 @@ fn parse_hashline_patch(patch: &str) -> Result<Vec<HashlineOperation>, FunctionC
                 }
             }
             "SWAP.BLK" => HashlineOperation::SwapBlock {
-                anchor: parse_line_anchor(rest)?,
+                anchor: parse_block_anchor(rest)?,
                 replacement: collect_payload_lines(&raw_lines, &mut index)?,
             },
             "DEL.BLK" => HashlineOperation::DeleteBlock {
-                anchor: parse_line_anchor(rest)?,
+                anchor: parse_block_anchor(rest)?,
             },
             "INS.BLK.POST" | "INS.BLK" => HashlineOperation::InsertBlockAfter {
-                anchor: parse_line_anchor(rest)?,
+                anchor: parse_block_anchor(rest)?,
                 inserted: collect_payload_lines(&raw_lines, &mut index)?,
             },
             "INS.BLK.PRE" => HashlineOperation::InsertBlockBefore {
-                anchor: parse_line_anchor(rest)?,
+                anchor: parse_block_anchor(rest)?,
                 inserted: collect_payload_lines(&raw_lines, &mut index)?,
             },
             "REM" => {
@@ -658,11 +669,7 @@ pub(super) fn hashline_patch_is_aborted(patch: &str) -> bool {
 
 fn is_ignorable_patch_line(line: &str) -> bool {
     let trimmed = line.trim();
-    trimmed.is_empty()
-        || trimmed.starts_with('[')
-        || trimmed.starts_with('#')
-        || trimmed == "*** Begin Patch"
-        || trimmed == "*** End Patch"
+    trimmed.is_empty() || trimmed == "*** Begin Patch" || trimmed == "*** End Patch"
 }
 
 fn collect_payload_lines(
@@ -677,6 +684,9 @@ fn collect_payload_lines(
             if payload.is_empty() {
                 continue;
             }
+            break;
+        }
+        if line.starts_with('[') && parse_patch_file_header("", line)?.is_some() {
             break;
         }
         if let Some(message) = apply_patch_contamination_message(line) {
@@ -779,7 +789,7 @@ fn apply_patch_contamination_message(line: &str) -> Option<String> {
             trimmed.to_string()
         };
         return Some(format!(
-            "apply_patch sentinel {preview:?} is not valid in hashline. File sections start with [path#HASH]. Use SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, INS.TAIL, or block ops."
+            "apply_patch sentinel {preview:?} is not valid in hashline. File sections start with [path]#HASH. Use SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, INS.TAIL, or block ops."
         ));
     }
     if trimmed.starts_with("@@ ") && trimmed.contains("@@") {
@@ -921,49 +931,53 @@ fn split_range_anchor_text(input: &str) -> Option<(&str, &str)> {
 }
 
 fn parse_line_anchor_text(input: &str, source: &str) -> Result<LineAnchor, FunctionCallError> {
-    let (line_text, expected_hash) = split_optional_anchor_hash(input.trim(), source)?;
+    let (line_text, expected_hash) = split_anchor_hash(input.trim(), source)?;
     Ok(LineAnchor {
         line: parse_positive_line_number(line_text, source)?,
         expected_hash,
     })
 }
 
-fn split_optional_anchor_hash<'a>(
+fn split_anchor_hash<'a>(
     input: &'a str,
     source: &str,
-) -> Result<(&'a str, Option<String>), FunctionCallError> {
-    if source.ends_with("::") {
+) -> Result<(&'a str, String), FunctionCallError> {
+    let Some((target, hash)) = input.rsplit_once(':') else {
         return Err(FunctionCallError::RespondToModel(format!(
-            "invalid Hashline anchor {source}: expected formats like 1, 1:ab, or 1-2 hex hash with one optional ':'"
+            "invalid Hashline anchor {source}: expected line:4-hex-hash"
+        )));
+    };
+    let hash = hash.trim().to_ascii_lowercase();
+    if hash.len() != LINE_HASH_WIDTH || !hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "invalid Hashline anchor {source}: expected a {LINE_HASH_WIDTH}-hex hash token after ':'; got {hash}"
         )));
     }
-
-    if input.is_empty() {
-        return Err(invalid_operation_error(source));
-    }
-
-    let (target, expected_hash) = match input.rsplit_once(':') {
-        Some((target, hash)) => {
-            let hash = hash.trim().to_ascii_lowercase();
-            if hash.is_empty() {
-                (target.trim(), None)
-            } else if hash.len() > 2 || !hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "invalid Hashline anchor {source}: expected a 1-2 hex hash token after ':'; got {hash}"
-                )));
-            } else {
-                (target.trim(), Some(hash))
-            }
-        }
-        None => (input, None),
-    };
+    let target = target.trim();
     if target.is_empty() || target.ends_with(':') || target.contains(':') {
         return Err(FunctionCallError::RespondToModel(format!(
-            "invalid Hashline anchor {source}: expected formats like 1, 1:ab, or 1-2 hex hash with one optional ':'"
+            "invalid Hashline anchor {source}: expected line:4-hex-hash"
         )));
     }
+    Ok((target, hash))
+}
 
-    Ok((target, expected_hash))
+fn parse_block_anchor(input: &str) -> Result<BlockAnchor, FunctionCallError> {
+    let normalized = normalize_anchor_target(input);
+    let Some((line_anchor, block_hash)) = normalized.rsplit_once('@') else {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "invalid Hashline block anchor {input}: expected line:LINE_HASH@BLOCK_HASH"
+        )));
+    };
+    if block_hash.len() != FILE_HASH_WIDTH || !block_hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "invalid Hashline block anchor {input}: expected a {FILE_HASH_WIDTH}-hex block hash"
+        )));
+    }
+    Ok(BlockAnchor {
+        line: parse_line_anchor(line_anchor)?,
+        expected_hash: block_hash.to_ascii_lowercase(),
+    })
 }
 
 fn parse_positive_line_number(input: &str, source: &str) -> Result<usize, FunctionCallError> {
@@ -1036,10 +1050,11 @@ fn apply_operations(
                 anchor,
                 replacement,
             } => {
-                validate_anchor(&original_lines, &deleted, anchor)?;
-                let original_span = block_span(path, &original_lines, anchor.line)?;
+                validate_anchor(&original_lines, &deleted, &anchor.line)?;
+                let original_span = block_span(path, &original_lines, anchor.line.line)?;
+                validate_block_hash(&original_lines, original_span, &anchor.expected_hash)?;
                 validate_not_deleted(&deleted, original_span.0, original_span.1)?;
-                let current_line = adjusted_index(anchor.line, &shifts)?.saturating_add(1);
+                let current_line = adjusted_index(anchor.line.line, &shifts)?.saturating_add(1);
                 let current_span = block_span(path, lines, current_line)?;
                 replace_current_range(
                     lines,
@@ -1055,10 +1070,11 @@ fn apply_operations(
                 );
             }
             HashlineOperation::DeleteBlock { anchor } => {
-                validate_anchor(&original_lines, &deleted, anchor)?;
-                let original_span = block_span(path, &original_lines, anchor.line)?;
+                validate_anchor(&original_lines, &deleted, &anchor.line)?;
+                let original_span = block_span(path, &original_lines, anchor.line.line)?;
+                validate_block_hash(&original_lines, original_span, &anchor.expected_hash)?;
                 validate_not_deleted(&deleted, original_span.0, original_span.1)?;
-                let current_line = adjusted_index(anchor.line, &shifts)?.saturating_add(1);
+                let current_line = adjusted_index(anchor.line.line, &shifts)?.saturating_add(1);
                 let current_span = block_span(path, lines, current_line)?;
                 replace_current_range(
                     lines,
@@ -1074,20 +1090,22 @@ fn apply_operations(
                 );
             }
             HashlineOperation::InsertBlockBefore { anchor, inserted } => {
-                validate_anchor(&original_lines, &deleted, anchor)?;
-                let original_span = block_span(path, &original_lines, anchor.line)?;
+                validate_anchor(&original_lines, &deleted, &anchor.line)?;
+                let original_span = block_span(path, &original_lines, anchor.line.line)?;
+                validate_block_hash(&original_lines, original_span, &anchor.expected_hash)?;
                 validate_not_deleted(&deleted, original_span.0, original_span.1)?;
-                let current_line = adjusted_index(anchor.line, &shifts)?.saturating_add(1);
+                let current_line = adjusted_index(anchor.line.line, &shifts)?.saturating_add(1);
                 let current_span = block_span(path, lines, current_line)?;
                 let index = current_span.0 - 1;
                 lines.splice(index..index, inserted.iter().cloned());
                 apply_delta_from(&mut shifts, original_span.0, inserted.len() as isize);
             }
             HashlineOperation::InsertBlockAfter { anchor, inserted } => {
-                validate_anchor(&original_lines, &deleted, anchor)?;
-                let original_span = block_span(path, &original_lines, anchor.line)?;
+                validate_anchor(&original_lines, &deleted, &anchor.line)?;
+                let original_span = block_span(path, &original_lines, anchor.line.line)?;
+                validate_block_hash(&original_lines, original_span, &anchor.expected_hash)?;
                 validate_not_deleted(&deleted, original_span.0, original_span.1)?;
-                let current_line = adjusted_index(anchor.line, &shifts)?.saturating_add(1);
+                let current_line = adjusted_index(anchor.line.line, &shifts)?.saturating_add(1);
                 let current_span = block_span(path, lines, current_line)?;
                 let index = current_span.1;
                 lines.splice(index..index, inserted.iter().cloned());
@@ -1122,6 +1140,20 @@ fn block_span(
     Ok((start, end))
 }
 
+fn validate_block_hash(
+    lines: &[String],
+    span: (usize, usize),
+    expected_hash: &str,
+) -> Result<(), FunctionCallError> {
+    let actual_hash = hash_hex(&lines[span.0 - 1..span.1].join("\n"));
+    if actual_hash != expected_hash {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "block hash mismatch: expected {expected_hash}, found {actual_hash}; reread the block with hashline.find_block and rebuild the patch from the refreshed anchor"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_range(
     original_lines: &[String],
     deleted: &[bool],
@@ -1139,11 +1171,7 @@ fn validate_range(
         validate_not_deleted(deleted, line, line)?;
     }
     if range.end.line != range.start.line {
-        validate_line_hash(
-            original_lines,
-            range.end.line,
-            range.end.expected_hash.as_deref(),
-        )?;
+        validate_line_hash(original_lines, range.end.line, &range.end.expected_hash)?;
     }
     Ok(())
 }
@@ -1168,7 +1196,7 @@ fn validate_anchor(
     deleted: &[bool],
     anchor: &LineAnchor,
 ) -> Result<(), FunctionCallError> {
-    validate_line_hash(original_lines, anchor.line, anchor.expected_hash.as_deref())?;
+    validate_line_hash(original_lines, anchor.line, &anchor.expected_hash)?;
     if deleted[anchor.line - 1] {
         return Err(FunctionCallError::RespondToModel(format!(
             "line {} has already been deleted by an earlier Hashline operation",
@@ -1501,7 +1529,7 @@ fn invalid_operation_error(line: &str) -> FunctionCallError {
 fn validate_line_hash(
     lines: &[String],
     line_number: usize,
-    expected_hash: Option<&str>,
+    expected_hash: &str,
 ) -> Result<(), FunctionCallError> {
     if line_number == 0 || line_number > lines.len() {
         return Err(FunctionCallError::RespondToModel(format!(
@@ -1509,27 +1537,21 @@ fn validate_line_hash(
             lines.len()
         )));
     }
-    if let Some(expected_hash) = expected_hash {
-        let actual_hash = line_hash(&lines[line_number - 1]);
-        if !line_hash_matches(expected_hash, &actual_hash) {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "line {line_number} hash mismatch: expected {expected_hash}, found {actual_hash}; the anchor is stale, so reread the file with hashline.read and rebuild the patch from the refreshed anchors before retrying"
-            )));
-        }
+    if expected_hash.len() != LINE_HASH_WIDTH
+        || !expected_hash.chars().all(|ch| ch.is_ascii_hexdigit())
+    {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "invalid line hash {expected_hash}; expected a {LINE_HASH_WIDTH}-hex hash"
+        )));
+    }
+    let actual_hash = line_hash(&lines[line_number - 1]);
+    if actual_hash != expected_hash {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "line {line_number} hash mismatch: expected {expected_hash}, found {actual_hash}; the anchor is stale, so reread the file with hashline.read and rebuild the patch from the refreshed anchors before retrying"
+        )));
     }
     Ok(())
 }
-
-fn line_hash_matches(expected_hash: &str, actual_hash: &str) -> bool {
-    let Ok(expected) = u8::from_str_radix(expected_hash, 16) else {
-        return false;
-    };
-    let Ok(actual) = u8::from_str_radix(actual_hash, 16) else {
-        return false;
-    };
-    expected == actual
-}
-
 fn apply_patch_header(environment_id: Option<&str>) -> String {
     let mut patch = String::from("*** Begin Patch\n");
     if let Some(environment_id) = environment_id {

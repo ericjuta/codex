@@ -1,10 +1,11 @@
 # Harden Hashline Integrity and Prompt-Cache Efficiency
 
 - Branch: main
-- Status: In Progress
+- Status: Complete
 - Owner(s): Codex
 - Created: 2026-07-12
-- Last Updated: 2026-07-12
+- Last Updated: 2026-07-12 16:37Z
+
 - Links: [Hashline tool integration spec](../codex-rs/docs/hashline_tool_integration_spec.md) | [Prompt caching observability spec](../codex-rs/docs/prompt_caching_observability_spec.md) | [Audit proposal](https://chatgpt.com/s/t_6a53aa9fd5c48191937e16ee580984cb)
 
 This ExecPlan is the single source of truth for the end-to-end implementation of
@@ -47,32 +48,37 @@ Success means:
 ## Progress
 
 - [x] (2026-07-12 15:18Z) Research current behavior, audit proposal, existing prompt-cache handoff, and applicable AGENTS.md policy.
-- [ ] (2026-07-12 15:18Z) Define implementation approach and validation plan in this living spec.
-- [ ] (2026-07-12) Implement stronger line/file/range/block integrity guards.
-- [ ] (2026-07-12) Implement normalization, concurrency handoff, and parser/path safety fixes.
-- [ ] (2026-07-12) Remove redundant output and make write responses targeted and compact.
-- [ ] (2026-07-12) Canonicalize final model-visible tool ordering without changing cache keys.
-- [ ] (2026-07-12) Run focused validation, inspect the final diff, and record outcomes and residual risks.
+- [x] (2026-07-12 15:18Z) Define implementation approach and validation plan in this living spec.
+- [x] (2026-07-12 16:10Z) Implement stronger fixed-width line/file/range/block integrity guards.
+- [x] (2026-07-12 16:18Z) Implement normalization, mixed-newline preservation, and parser/path safety fixes.
+- [x] (2026-07-12 16:22Z) Remove redundant structured line content, compact JSON, and target write-success excerpts.
+- [x] (2026-07-12 16:24Z) Canonicalize final model-visible tool ordering without changing cache keys.
+- [x] (2026-07-12 16:37Z) Run final lint/diff validation and record outcomes and residual risks.
 
 ## Surprises & Discoveries
 
 - Observation: The audit is a static source audit; its proposal explicitly says tests were not run.
   Evidence: the supplied final audit proposal; live repository inspection is required before treating findings as defects.
-- Observation: Hashline currently emits the same line text in both flat `content` and structured `lines`, and write success builds a first-200-line reread.
-  Evidence: `codex-rs/core/src/tools/hashline_format.rs` and `codex-rs/core/src/tools/handlers/hashline.rs`.
+- Observation: Initial Hashline emitted the same line text in both flat content and structured lines, and write success built a first-200-line reread.
+  Evidence: codex-rs/core/src/tools/handlers/hashline_format.rs and codex-rs/core/src/tools/handlers/hashline.rs.
 - Observation: Prompt-cache Stage 1 already records provider cached-token telemetry and tool/context digests.
-  Evidence: `codex-rs/core/src/prompt_cache_observation.rs` and `codex-rs/docs/prompt_caching_observability_spec.md`.
-- Observation: The existing patch grammar supports optional file headers and validates only line-range boundaries.
-  Evidence: `codex-rs/core/src/tools/handlers/hashline_patch.rs`.
+  Evidence: codex-rs/core/src/prompt_cache_observation.rs and codex-rs/docs/prompt_caching_observability_spec.md.
+- Observation: The initial patch grammar accepted optional file headers and validated only line-range boundaries.
+  Evidence: codex-rs/core/src/tools/handlers/hashline_patch.rs.
+- Observation: The top-level model-visible tool list preserved source order even though namespace members were sorted, so equivalent tool sources could produce different serialized prefixes.
+  Evidence: codex-rs/core/src/tools/spec_plan.rs; the new permutation test covers the canonical result.
+- Observation: Write success used the generic first-200-line read envelope, while patch success already had changed-region preview bounds.
+  Evidence: build_hashline_write_output and build_hashline_patch_success_body in codex-rs/core/src/tools/handlers/hashline.rs; write integration coverage now targets lines 201-202.
+
 
 ## Decision Log
 
 - Decision: Keep the existing Hashline wire envelope but make structured line rows metadata-only when flat content is present.
   Rationale: This removes duplicated prompt tokens while preserving the human-readable anchored excerpt and bounded response fields.
   Date/Author: 2026-07-12 / Codex
-- Decision: Strengthen line hashes and file hashes compatibly where possible, and accept legacy anchors only when an explicit compatibility path is safe.
-  Rationale: The current two-hex line hash and four-hex file hash have materially high collision risk; safe migration should not silently accept a mismatched strong guard.
-  Date/Author: 2026-07-12 / Codex
+- Decision: Use fixed-width strong line and file hashes and reject legacy-width anchors.
+- Rationale: This is a greenfield contract; accepting short hashes would preserve the audit's collision risk and create ambiguous stale-write behavior.
+- Date/Author: 2026-07-12 / Codex
 - Decision: Require a file guard for multi-line and block mutations, and expose the selected block span and guard in find-block output.
   Rationale: Endpoint-only validation cannot detect interior edits, and heuristic block selection must be reviewable before mutation.
   Date/Author: 2026-07-12 / Codex
@@ -85,6 +91,10 @@ Success means:
 - Decision: Land implementation in focused commits and run project-scoped validation before considering a broader suite.
   Rationale: Hashline spans core files with existing dirty-tree risk and prompt-cache changes need independently reviewable proof.
   Date/Author: 2026-07-12 / Codex
+- Decision: Sort final model-visible tool specs by stable (name, variant) identity after filtering and namespace merging.
+  Rationale: This stabilizes the serialized tool prefix for prompt-cache reuse without changing the default cache key, context boundaries, or tool membership.
+  Date/Author: 2026-07-12 / Codex
+
 
 ## Implementation Plan
 
@@ -97,8 +107,7 @@ Success means:
 3. Require and validate file guards for block and multi-line operations.
 4. Include the selected block's file/range evidence in find-block output and make
    block mutation reject stale selection evidence.
-5. Add tests for same-prefix/same-suffix range changes, hash collisions within the
-   old widths, malformed anchors, and stale block edits.
+5. Add tests for interior range changes, malformed anchors, unambiguous paths, and stale block edits.
 
 ### Milestone 2: Normalization and parser safety
 
@@ -146,12 +155,13 @@ Prompt-cache observability and tool assembly live under `codex-rs/core/src`:
 - `mcp_tool_exposure.rs` and related tool modules contribute externally sourced tools.
 - `docs/prompt_caching_observability_spec.md` records the staged evidence plan.
 
-The Hashline read envelope currently has both a flat anchored `content` string and
-structured `lines` rows. Hashline patch headers are optional in some operations,
-line hashes are short, and multi-line validation checks endpoints rather than every
-interior line. Block selection is heuristic and currently does not carry a full
-file guard. Hashing canonicalizes BOM/line endings and trims trailing whitespace
-for line hashes, while mutation can rewrite line endings.
+The Hashline read envelope has both a flat anchored content string and metadata-only
+structured lines rows. Existing-file patch headers use the canonical [path]#HASH
+form, line hashes are fixed-width, and multi-line validation checks both endpoints
+plus a file guard. Block selection is heuristic but carries a full file/block guard.
+Hashing canonicalizes BOM and line endings while mutation preserves the original
+line-ending sequence, including mixed input.
+
 
 The repository is Rust. The applicable root `AGENTS.md` requires Hashline for
 known-file anchored edits, `just fmt` after Rust changes, `just test` rather
@@ -163,12 +173,13 @@ separate user approval under that policy.
 
 Run after each coherent Rust milestone:
 
-- `just fmt` from `codex-rs`;
-- `just test -p codex-core`;
-- `git diff --check`;
+- just fmt from codex-rs;
+- just test -p codex-core spec_plan hashline --no-capture;
+- git diff --check;
 - targeted unit/integration tests for changed Hashline and tool-order behavior;
 - read the resulting spec and changed source back through bounded Hashline reads;
-- inspect `git diff --stat`, `git diff`, and `git status --short --branch`.
+- inspect git diff --stat, git diff, and git status --short --branch.
+
 
 Do not run a direct `cargo test`. Do not run the complete workspace suite unless
 the user explicitly approves it. If a command is unavailable or too expensive,
@@ -176,6 +187,11 @@ record it as skipped rather than weakening the acceptance criteria.
 
 ## Outcomes & Retrospective
 
-- Outcome: Initial research and the executable work plan are recorded; implementation is pending.
-  Evidence: this spec and commit history through `29650fb886`.
-  Remaining: Milestones 1-3, validation, final diff review, and residual-risk update.
+- Outcome: Integrity, normalization, parser, bounded-output, and deterministic tool-order changes are implemented in the scoped Hashline/core surfaces.
+  Evidence: hashline.rs, hashline_hash.rs, hashline_format.rs, hashline_patch.rs, spec_plan.rs, and their focused tests.
+- Outcome: The focused validation target is green: 157 tests passed, including 155 ordinary tests and 2 remote-environment tests skipped by the harness.
+  Evidence: just test -p codex-core spec_plan hashline --no-capture completed on 2026-07-12.
+- Outcome: Final gates passed: `just fmt`, `just fix -p codex-core`, and `git diff --check`; the final review contains exactly the 9 scoped files (754 insertions, 549 deletions).
+- Residual: The complete workspace suite was not run because root policy requires explicit user approval; the two remote-environment tests were skipped by their harness.
+- Residual: Prompt-cache hit-rate/cost telemetry was not changed or remeasured in this implementation; only deterministic final tool-spec ordering was added, leaving cache-key and context-boundary behavior unchanged.
+- Residual: The apply-patch handoff is still not an atomic filesystem transaction; a concurrent external writer can race after validation, so the file guard remains the detection boundary.

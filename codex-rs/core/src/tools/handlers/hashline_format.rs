@@ -4,7 +4,7 @@ use serde_json::Value;
 use serde_json::json;
 
 const CONTENT_TRUNCATION_MARKER: &str = "... [content truncated]";
-const SERIALIZED_LINE_FIXED_OVERHEAD: usize = 112;
+const SERIALIZED_LINE_FIXED_OVERHEAD: usize = 80;
 
 pub(super) struct HashlineExcerpt {
     pub content: String,
@@ -109,7 +109,6 @@ fn formatted_line(
     let mut row = json!({
         "n": line_number,
         "hash": hash,
-        "content": content,
     });
     if content_truncated {
         row["content_truncated"] = Value::Bool(true);
@@ -128,9 +127,9 @@ fn serialized_line_cost(
         .saturating_add(decimal_digits(line_number).saturating_mul(2))
         .saturating_add(hash.len().saturating_mul(2))
         .saturating_add(usize::from(content_truncated).saturating_mul(48));
-    let content_limit = limit.checked_sub(fixed)?.checked_div(2)?;
+    let content_limit = limit.checked_sub(fixed)?;
     let content_len = json_escaped_content_len_bounded(content, content_limit)?;
-    fixed.checked_add(content_len.checked_mul(2)?)
+    fixed.checked_add(content_len)
 }
 
 pub(super) fn json_escaped_content_len_bounded(value: &str, limit: usize) -> Option<usize> {

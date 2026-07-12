@@ -3,6 +3,7 @@ use super::build_hashline_patch_success_body;
 use super::build_hashline_read_body;
 use super::hashline_block::find_block_span;
 use super::hashline_block::language_for_path;
+use super::hashline_format::split_lines_preserve;
 use super::hashline_hash::hash_hex;
 use super::hashline_hash::line_hash;
 use super::hashline_hash::normalize_file_text;
@@ -25,14 +26,32 @@ use super::resolve_find_block_anchor;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+fn line_anchor(line_number: usize, line: &str) -> String {
+    format!("{line_number}:{}", line_hash(line))
+}
+
+fn block_anchor(path: &str, contents: &str, anchor_line: usize) -> String {
+    let normalized = normalize_file_text(contents);
+    let lines = split_lines_preserve(&normalized);
+    let (start_line, mut end_line) = find_block_span(path, &lines, anchor_line);
+    while end_line > start_line && lines[end_line - 1].trim().is_empty() {
+        end_line -= 1;
+    }
+    let block_hash = hash_hex(&lines[start_line - 1..end_line].join("\n"));
+    format!(
+        "{anchor_line}:{}@{block_hash}",
+        line_hash(lines[anchor_line - 1])
+    )
+}
+
 #[test]
 fn applies_basic_line_operations() {
     let original = "alpha\nbeta\ngamma\n";
     let patch = format!(
-        "SWAP 2:{}|bravo\nINS.POST 3:{}|delta\nDEL 1:{}",
-        line_hash("beta"),
-        line_hash("gamma"),
-        line_hash("alpha")
+        "SWAP {}|bravo\nINS.POST {}|delta\nDEL {}",
+        line_anchor(2, "beta"),
+        line_anchor(3, "gamma"),
+        line_anchor(1, "alpha")
     );
 
     let updated = apply_hashline_patch("notes.txt", original, &patch).expect("patch should apply");
@@ -49,10 +68,19 @@ fn applies_patch_against_normalized_crlf_and_restores_crlf() {
 
     assert_eq!(updated, "alpha\r\nbravo\r\ngamma\r\n");
 }
+#[test]
+fn applies_patch_preserving_mixed_line_endings() {
+    let original = "alpha\r\nbeta\ngamma\rdelta";
+    let patch = format!("SWAP 2:{}|bravo", line_hash("beta"));
+
+    let updated = apply_hashline_patch("notes.txt", original, &patch).expect("patch should apply");
+
+    assert_eq!(updated, "alpha\r\nbravo\ngamma\rdelta");
+}
 
 #[test]
 fn rejects_stale_line_hash() {
-    let error = apply_hashline_patch("notes.txt", "alpha\n", "SWAP 1:00|omega")
+    let error = apply_hashline_patch("notes.txt", "alpha\n", "SWAP 1:0000|omega")
         .expect_err("stale hash should be rejected");
 
     assert!(
@@ -68,42 +96,29 @@ fn rejects_stale_line_hash() {
 }
 
 #[test]
-fn accepts_single_hex_line_hash_anchor() {
-    let original_line = (0..10_000)
-        .map(|index| format!("candidate {index}"))
-        .find(|line| {
-            let hash = line_hash(line);
-            hash.starts_with('0') && hash != "00"
-        })
-        .expect("test fixture should find a line with a one-digit hash value");
-    let full_hash = line_hash(&original_line);
-    let short_hash = full_hash
-        .strip_prefix('0')
-        .expect("fixture hash should start with zero");
-    let original = format!("{original_line}\n");
-    let patch = format!("SWAP 1:{short_hash}|omega");
+fn rejects_short_line_hash_anchor() {
+    let error = apply_hashline_patch("notes.txt", "alpha\n", "SWAP 1:000|omega")
+        .expect_err("short line hashes should be rejected");
 
-    let updated = apply_hashline_patch("notes.txt", &original, &patch)
-        .expect("one-hex line hash should validate as the same numeric hash");
-
-    assert_eq!(updated, "omega\n");
+    assert!(
+        error.to_string().contains("expected a 4-hex hash token"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
-fn patch_warnings_report_bare_line_anchors() {
-    let warnings = hashline_patch_warnings("SWAP 2:\n+bravo\nINS.POST 3:ab|delta")
-        .expect("warnings should be computed");
-
+fn patch_warnings_validate_canonical_anchors() {
     assert_eq!(
-        warnings,
-        vec![
-            "hashline.patch used bare line anchors; prefer line:hash anchors from hashline.read when editing existing files".to_string()
-        ]
-    );
-    assert_eq!(
-        hashline_patch_warnings("SWAP 2:ab|bravo\nINS.TAIL|omega")
-            .expect("warnings should be computed"),
+        hashline_patch_warnings("SWAP 1:93c8|omega\nINS.TAIL|delta")
+            .expect("canonical anchors should parse"),
         Vec::<String>::new()
+    );
+
+    let error =
+        hashline_patch_warnings("SWAP 1:|omega").expect_err("malformed anchors should be rejected");
+    assert!(
+        error.to_string().contains("4-hex"),
+        "unexpected error: {error}"
     );
 }
 
@@ -113,19 +128,17 @@ fn ins_post_rejects_invalid_hash_anchor() {
         .expect_err("invalid hex hash anchors should be rejected");
 
     assert!(
-        error
-            .to_string()
-            .contains("invalid Hashline anchor 2:gg: expected a 1-2 hex hash token"),
+        error.to_string().contains("expected a 4-hex hash token"),
         "unexpected error: {error}"
     );
 }
 
 #[test]
 fn ins_post_rejects_stale_hash_anchor() {
-    let stale_hash = if line_hash("beta") == "00" {
-        "01"
+    let stale_hash = if line_hash("beta") == "0000" {
+        "0001"
     } else {
-        "00"
+        "0000"
     };
     let error = apply_hashline_patch(
         "notes.txt",
@@ -146,9 +159,7 @@ fn ins_post_rejects_malformed_anchor_syntax() {
         .expect_err("malformed anchors should be rejected");
 
     assert!(
-        error
-            .to_string()
-            .contains("1-2 hex hash with one optional ':'"),
+        error.to_string().contains("expected a 4-hex hash token"),
         "unexpected error: {error}"
     );
 }
@@ -159,9 +170,7 @@ fn ins_post_rejects_anchor_with_extra_colon() {
         .expect_err("anchors with extra trailing colon should be rejected");
 
     assert!(
-        error.to_string().contains(
-            "invalid Hashline anchor 2:gg:: expected a 1-2 hex hash token after ':'; got gg"
-        ),
+        error.to_string().contains("expected a 4-hex hash token"),
         "unexpected error: {error}"
     );
 }
@@ -175,8 +184,8 @@ fn accepts_compact_head_and_tail_insert_syntax() {
 }
 
 #[test]
-fn line_hash_matches_reference_trailing_whitespace_behavior() {
-    assert_eq!(
+fn line_hash_preserves_trailing_whitespace() {
+    assert_ne!(
         line_hash("return decoded"),
         line_hash("return decoded   \r")
     );
@@ -185,11 +194,8 @@ fn line_hash_matches_reference_trailing_whitespace_behavior() {
 
 #[test]
 fn file_hash_matches_reference_normalization_behavior() {
-    assert_eq!(
-        hash_hex("alpha\r\nbeta\r\n", 4),
-        hash_hex("alpha\nbeta\n", 4)
-    );
-    assert_eq!(hash_hex("\u{feff}alpha\n", 4), hash_hex("alpha\n", 4));
+    assert_eq!(hash_hex("alpha\r\nbeta\r\n"), hash_hex("alpha\nbeta\n"));
+    assert_eq!(hash_hex("\u{feff}alpha\n"), hash_hex("alpha\n"));
 }
 
 #[test]
@@ -214,8 +220,8 @@ fn read_body_without_end_line_only_truncates_when_capped() {
         body,
         json!({
             "path": "notes.txt",
-            "hash": hash_hex(contents, 4),
-            "header": format!("[notes.txt#{}]", hash_hex(contents, 4)),
+            "hash": hash_hex(contents),
+            "header": format!("[notes.txt]#{}", hash_hex(contents)),
             "start_line": 1,
             "end_line": 2,
             "total_lines": 2,
@@ -226,12 +232,10 @@ fn read_body_without_end_line_only_truncates_when_capped() {
                 {
                     "n": 1,
                     "hash": line_hash("alpha"),
-                    "content": "alpha",
                 },
                 {
                     "n": 2,
                     "hash": line_hash("beta"),
-                    "content": "beta",
                 },
             ],
         })
@@ -254,8 +258,8 @@ fn read_body_normalizes_model_visible_rows() {
         body,
         json!({
             "path": "notes.txt",
-            "hash": hash_hex(contents, 4),
-            "header": format!("[notes.txt#{}]", hash_hex(contents, 4)),
+            "hash": hash_hex(contents),
+            "header": format!("[notes.txt]#{}", hash_hex(contents)),
             "start_line": 1,
             "end_line": 2,
             "total_lines": 2,
@@ -266,12 +270,10 @@ fn read_body_normalizes_model_visible_rows() {
                 {
                     "n": 1,
                     "hash": line_hash("alpha"),
-                    "content": "alpha",
                 },
                 {
                     "n": 2,
                     "hash": line_hash("beta"),
-                    "content": "beta",
                 },
             ],
         })
@@ -289,13 +291,13 @@ fn read_body_reports_empty_file_without_line_range() {
     )
     .expect("empty read body should be built");
 
-    let empty_hash = hash_hex("", 4);
+    let empty_hash = hash_hex("");
     assert_eq!(
         body,
         json!({
             "path": "empty.txt",
             "hash": empty_hash,
-            "header": format!("[empty.txt#{empty_hash}]"),
+            "header": format!("[empty.txt]#{empty_hash}"),
             "start_line": null,
             "end_line": null,
             "total_lines": 0,
@@ -323,8 +325,8 @@ fn read_body_only_reports_truncation_when_the_requested_range_is_capped() {
         body,
         json!({
             "path": "notes.txt",
-            "hash": hash_hex(contents, 4),
-            "header": format!("[notes.txt#{}]", hash_hex(contents, 4)),
+            "hash": hash_hex(contents),
+            "header": format!("[notes.txt]#{}", hash_hex(contents)),
             "start_line": 2,
             "end_line": 2,
             "total_lines": 3,
@@ -334,7 +336,6 @@ fn read_body_only_reports_truncation_when_the_requested_range_is_capped() {
             "lines": [{
                 "n": 2,
                 "hash": line_hash("beta"),
-                "content": "beta",
             }],
         })
     );
@@ -390,8 +391,7 @@ fn read_body_bounds_serialized_output_by_bytes() {
         /*max_lines*/ 200,
     )
     .expect("long-line read body should be built");
-    let serialized =
-        serde_json::to_string_pretty(&long_line_body).expect("serialize long-line body");
+    let serialized = serde_json::to_string(&long_line_body).expect("serialize long-line body");
     assert!(
         serialized.len() <= super::READ_EXCERPT_MAX_SERIALIZED_BYTES + 512,
         "bounded read output was {} bytes",
@@ -409,8 +409,7 @@ fn read_body_bounds_serialized_output_by_bytes() {
         /*max_lines*/ 1_000,
     )
     .expect("many-line read body should be built");
-    let serialized =
-        serde_json::to_string_pretty(&many_lines_body).expect("serialize many-line body");
+    let serialized = serde_json::to_string(&many_lines_body).expect("serialize many-line body");
     assert!(
         serialized.len() <= super::READ_EXCERPT_MAX_SERIALIZED_BYTES + 512,
         "bounded read output was {} bytes",
@@ -449,7 +448,7 @@ fn tool_args_accept_reference_path_aliases() {
     .expect("write args should accept file alias");
     let patch: super::PatchArgs = serde_json::from_value(json!({
         "file": "notes.txt",
-        "patch": "DEL 1",
+        "patch": "DEL 1:93c8",
     }))
     .expect("patch args should accept file alias");
     let find_block: super::FindBlockArgs = serde_json::from_value(json!({
@@ -459,11 +458,13 @@ fn tool_args_accept_reference_path_aliases() {
     .expect("find_block args should accept file alias");
     let remove: super::RemoveFileArgs = serde_json::from_value(json!({
         "file": "notes.txt",
+        "expected_hash": "12345678",
     }))
     .expect("remove_file args should accept file alias");
     let rename: super::RenameFileArgs = serde_json::from_value(json!({
         "src": "old.txt",
         "dst": "new.txt",
+        "expected_hash": "12345678",
     }))
     .expect("rename_file args should accept src/dst aliases");
 
@@ -534,8 +535,8 @@ fn patch_tool_spec_exposes_hash_guardrails() {
 fn patch_accepts_matching_file_header() {
     let original = "alpha\nbeta\ngamma\n";
     let patch = format!(
-        "[notes.txt#{}]\nSWAP 2:{}|bravo",
-        hash_hex(original, 4),
+        "[notes.txt]#{}\nSWAP 2:{}|bravo",
+        hash_hex(original),
         line_hash("beta")
     );
 
@@ -548,8 +549,8 @@ fn patch_accepts_matching_file_header() {
 fn patch_accepts_bracketed_apply_patch_style_file_header() {
     let original = "alpha\nbeta\ngamma\n";
     let patch = format!(
-        "[*** Update File: notes.txt#{}]\nSWAP 2:{}|bravo",
-        hash_hex(original, 4),
+        "[*** Update File: notes.txt]#{}\nSWAP 2:{}|bravo",
+        hash_hex(original),
         line_hash("beta")
     );
 
@@ -562,9 +563,9 @@ fn patch_accepts_bracketed_apply_patch_style_file_header() {
 #[test]
 fn patch_accepts_repeated_matching_file_sections() {
     let original = "alpha\nbeta\ngamma\n";
-    let file_hash = hash_hex(original, 4);
+    let file_hash = hash_hex(original);
     let patch = format!(
-        "[notes.txt#{file_hash}]\nSWAP 2:{}|bravo\n[notes.txt#{file_hash}]\nINS.TAIL:\n+delta",
+        "[notes.txt]#{file_hash}\nSWAP 2:{}|bravo\n[notes.txt]#{file_hash}\nINS.TAIL:\n+delta",
         line_hash("beta")
     );
 
@@ -575,7 +576,7 @@ fn patch_accepts_repeated_matching_file_sections() {
 
 #[test]
 fn patch_sections_group_targets_for_multi_file_handler() {
-    let patch = "[a.txt#1111]\nSWAP 1:\n+uno\n[b.txt#2222]\nDEL 2\n[a.txt#1111]\nINS.TAIL:\n+tres";
+    let patch = "[a.txt]#11111111\nSWAP 1:93c8\n+uno\n[b.txt]#22222222\nDEL 2:f589\n[a.txt]#11111111\nINS.TAIL:\n+tres";
 
     let sections = split_hashline_patch_sections("a.txt", patch).expect("sections should parse");
 
@@ -584,13 +585,13 @@ fn patch_sections_group_targets_for_multi_file_handler() {
         vec![
             HashlinePatchSection {
                 path: "a.txt".to_string(),
-                expected_hash: Some("1111".to_string()),
-                patch: "SWAP 1:\n+uno\nINS.TAIL:\n+tres".to_string(),
+                expected_hash: Some("11111111".to_string()),
+                patch: "SWAP 1:93c8\n+uno\nINS.TAIL:\n+tres".to_string(),
             },
             HashlinePatchSection {
                 path: "b.txt".to_string(),
-                expected_hash: Some("2222".to_string()),
-                patch: "DEL 2".to_string(),
+                expected_hash: Some("22222222".to_string()),
+                patch: "DEL 2:f589".to_string(),
             },
         ]
     );
@@ -599,14 +600,14 @@ fn patch_sections_group_targets_for_multi_file_handler() {
 #[test]
 fn patch_rejects_conflicting_same_path_file_section_hashes() {
     let original = "alpha\nbeta\n";
-    let actual_hash = hash_hex(original, 4);
-    let stale_hash = if actual_hash == "0000" {
-        "0001"
+    let actual_hash = hash_hex(original);
+    let stale_hash = if actual_hash == "00000000" {
+        "00000001"
     } else {
-        "0000"
+        "00000000"
     };
     let patch = format!(
-        "[notes.txt#{actual_hash}]\nSWAP 1:{}|ALPHA\n[notes.txt#{stale_hash}]\nDEL 2:{}",
+        "[notes.txt]#{actual_hash}\nSWAP 1:{}|ALPHA\n[notes.txt]#{stale_hash}\nDEL 2:{}",
         line_hash("alpha"),
         line_hash("beta")
     );
@@ -622,7 +623,7 @@ fn patch_rejects_conflicting_same_path_file_section_hashes() {
 
 #[test]
 fn patch_sections_reject_conflicting_same_path_hashes() {
-    let patch = "[a.txt#1111]\nSWAP 1:\n+uno\n[a.txt#2222]\nDEL 2";
+    let patch = "[a.txt]#11111111\nSWAP 1:93c8\n+uno\n[a.txt]#22222222\nDEL 2:f589";
 
     let error = split_hashline_patch_sections("a.txt", patch)
         .expect_err("conflicting section hashes should be rejected");
@@ -636,13 +637,13 @@ fn patch_sections_reject_conflicting_same_path_hashes() {
 #[test]
 fn patch_rejects_stale_file_header() {
     let original = "alpha\nbeta\n";
-    let actual_hash = hash_hex(original, 4);
-    let stale_hash = if actual_hash == "0000" {
-        "0001"
+    let actual_hash = hash_hex(original);
+    let stale_hash = if actual_hash == "00000000" {
+        "00000001"
     } else {
-        "0000"
+        "00000000"
     };
-    let patch = format!("[notes.txt#{stale_hash}]\nDEL 2:{}", line_hash("beta"));
+    let patch = format!("[notes.txt]#{stale_hash}\nDEL 2:{}", line_hash("beta"));
 
     let error = apply_hashline_patch("notes.txt", original, &patch)
         .expect_err("stale file hash should be rejected");
@@ -662,7 +663,7 @@ fn patch_rejects_stale_file_header() {
 #[test]
 fn patch_rejects_wrong_file_header_path() {
     let original = "alpha\nbeta\n";
-    let patch = format!("[other.txt#{}]\nDEL 2", hash_hex(original, 4));
+    let patch = format!("[other.txt]#{}\nDEL 2:f589", hash_hex(original));
 
     let error = apply_hashline_patch("notes.txt", original, &patch)
         .expect_err("wrong file header path should be rejected");
@@ -674,12 +675,12 @@ fn patch_rejects_wrong_file_header_path() {
 }
 
 #[test]
-fn patch_sections_accept_optional_file_hashes() {
+fn patch_sections_allow_unhashed_create_headers() {
     let sections = split_hashline_patch_sections(
         "fallback.txt",
-        "[created.txt]\nINS.TAIL:\n+new\n[existing.txt#abcd]\nDEL 1",
+        "[created.txt]\nINS.TAIL:\n+new\n[existing.txt]#abcdef12\nDEL 1:93c8",
     )
-    .expect("optional file-hash sections should parse");
+    .expect("create and existing file-hash sections should parse");
 
     assert_eq!(
         sections,
@@ -691,8 +692,8 @@ fn patch_sections_accept_optional_file_hashes() {
             },
             HashlinePatchSection {
                 path: "existing.txt".to_string(),
-                expected_hash: Some("abcd".to_string()),
-                patch: "DEL 1".to_string(),
+                expected_hash: Some("abcdef12".to_string()),
+                patch: "DEL 1:93c8".to_string(),
             },
         ]
     );
@@ -702,7 +703,7 @@ fn patch_sections_accept_optional_file_hashes() {
 fn patch_sections_recover_bracketed_apply_patch_style_headers() {
     let sections = split_hashline_patch_sections(
         "fallback.txt",
-        "[*** Add File: created.txt]\nINS.TAIL:\n+new\n[*** Update File: existing.txt#abcd]\nDEL 1\n[**Move to: moved.txt]\nINS.HEAD:\n+hi",
+        "[*** Add File: created.txt]\nINS.TAIL:\n+new\n[*** Update File: existing.txt]#abcdef12\nDEL 1:93c8\n[**Move to: moved.txt]\nINS.HEAD:\n+hi"
     )
     .expect("bracketed apply_patch-style headers should recover");
 
@@ -716,8 +717,8 @@ fn patch_sections_recover_bracketed_apply_patch_style_headers() {
             },
             HashlinePatchSection {
                 path: "existing.txt".to_string(),
-                expected_hash: Some("abcd".to_string()),
-                patch: "DEL 1".to_string(),
+                expected_hash: Some("abcdef12".to_string()),
+                patch: "DEL 1:93c8".to_string(),
             },
             HashlinePatchSection {
                 path: "moved.txt".to_string(),
@@ -727,13 +728,22 @@ fn patch_sections_recover_bracketed_apply_patch_style_headers() {
         ]
     );
 }
+#[test]
+fn patch_sections_support_paths_containing_hash_delimiters() {
+    let path = "dir/name]#part.txt";
+    let sections = split_hashline_patch_sections(path, "[dir/name]#part.txt]#abcdef12\nDEL 1:93c8")
+        .expect("paths containing the header delimiter should parse");
+
+    assert_eq!(sections[0].path, path);
+    assert_eq!(sections[0].expected_hash.as_deref(), Some("abcdef12"));
+}
 
 #[test]
 fn single_file_applier_rejects_multi_file_sections_with_clear_message() {
     let original = "alpha\nbeta\n";
     let patch = format!(
-        "[notes.txt#{}]\nDEL 2\n[other.txt#0000]\nDEL 1",
-        hash_hex(original, 4)
+        "[notes.txt]#{}\nDEL 2:f589\n[other.txt]#00000000\nDEL 1:93c8",
+        hash_hex(original)
     );
 
     let error = apply_hashline_patch("notes.txt", original, &patch)
@@ -773,7 +783,7 @@ fn patch_rejects_unified_diff_contamination() {
 
 #[test]
 fn applies_readme_style_swap_body() {
-    let updated = apply_hashline_patch("notes.txt", "alpha\nbeta\ngamma\n", "SWAP 2:\n+bravo")
+    let updated = apply_hashline_patch("notes.txt", "alpha\nbeta\ngamma\n", "SWAP 2:f589\n+bravo")
         .expect("README-style swap body should apply");
 
     assert_eq!(updated, "alpha\nbravo\ngamma\n");
@@ -784,7 +794,7 @@ fn applies_bare_payload_lines() {
     let updated = apply_hashline_patch(
         "notes.txt",
         "alpha\nbeta\ngamma\n",
-        "SWAP 2:\nbravo\ncharlie",
+        "SWAP 2:f589\nbravo\ncharlie",
     )
     .expect("bare payload lines should apply");
 
@@ -796,7 +806,7 @@ fn strips_uniform_read_output_payload_prefixes() {
     let updated = apply_hashline_patch(
         "notes.txt",
         "alpha\nbeta\ngamma\n",
-        "SWAP 2:\n1:aa|bravo\n2:bb|charlie",
+        "SWAP 2:f589\n1:aa|bravo\n2:bb|charlie",
     )
     .expect("pasted read output rows should apply");
 
@@ -808,7 +818,7 @@ fn keeps_uniform_read_output_payload_prefixes_for_scalar_literals() {
     let updated = apply_hashline_patch(
         "notes.txt",
         "alpha\nbeta\ngamma\n",
-        "SWAP 2:\n1:aa|123\n2:bb|\"name\"",
+        "SWAP 2:f589\n1:aa|123\n2:bb|\"name\"",
     )
     .expect("scalar-looking read output rows should stay literal");
 
@@ -820,7 +830,7 @@ fn strips_decorated_read_output_payload_prefixes() {
     let updated = apply_hashline_patch(
         "notes.txt",
         "alpha\nbeta\ngamma\n",
-        "SWAP 2:\n>>> 1:aa|bravo\n>> * 2:bb|charlie\n  + 3:cc|delta",
+        "SWAP 2:f589\n>>> 1:aa|bravo\n>> * 2:bb|charlie\n  + 3:cc|delta",
     )
     .expect("decorated pasted read output rows should apply");
 
@@ -832,7 +842,7 @@ fn keeps_mixed_read_output_payload_prefixes_literal() {
     let updated = apply_hashline_patch(
         "notes.txt",
         "alpha\nbeta\ngamma\n",
-        "SWAP 2:\n1:aa|bravo\ncharlie",
+        "SWAP 2:f589\n1:aa|bravo\ncharlie",
     )
     .expect("mixed bare payload rows should stay literal");
 
@@ -844,11 +854,22 @@ fn explicit_payload_rows_keep_read_output_prefixes_literal() {
     let updated = apply_hashline_patch(
         "notes.txt",
         "alpha\nbeta\ngamma\n",
-        "SWAP 2:\n+1:aa|literal",
+        "SWAP 2:f589\n+1:aa|literal",
     )
     .expect("explicit payload row should stay literal");
 
     assert_eq!(updated, "alpha\n1:aa|literal\ngamma\n");
+}
+#[test]
+fn explicit_payload_preserves_leading_hash_and_bracket() {
+    let updated = apply_hashline_patch(
+        "notes.txt",
+        "alpha\nbeta\ngamma\n",
+        "SWAP 2:f589\n+#literal\n+[]literal",
+    )
+    .expect("explicit payload lines should apply");
+
+    assert_eq!(updated, "alpha\n#literal\n[]literal\ngamma\n");
 }
 
 #[test]
@@ -856,7 +877,7 @@ fn bare_payload_stops_before_next_operation() {
     let updated = apply_hashline_patch(
         "notes.txt",
         "alpha\nbeta\ngamma\ndelta\n",
-        "SWAP 2:\nbravo\nDEL 4",
+        "SWAP 2:f589\nbravo\nDEL 4:f67c",
     )
     .expect("operation-looking rows should start the next operation");
 
@@ -865,7 +886,7 @@ fn bare_payload_stops_before_next_operation() {
 
 #[test]
 fn rejects_minus_payload_rows() {
-    let error = apply_hashline_patch("notes.txt", "alpha\nbeta\n", "SWAP 2:\n-bravo")
+    let error = apply_hashline_patch("notes.txt", "alpha\nbeta\n", "SWAP 2:f589\n-bravo")
         .expect_err("minus rows should reject");
 
     assert!(
@@ -879,7 +900,7 @@ fn applies_escaped_payload_prefixes() {
     let updated = apply_hashline_patch(
         "notes.txt",
         "alpha\nbeta\ngamma\n",
-        "SWAP 2:\n++literal plus\n+-literal minus",
+        "SWAP 2:f589\n++literal plus\n+-literal minus",
     )
     .expect("escaped payload prefixes should apply");
 
@@ -891,7 +912,7 @@ fn applies_readme_style_range_swap() {
     let updated = apply_hashline_patch(
         "notes.txt",
         "alpha\nbeta\ngamma\ndelta\n",
-        "SWAP 2..3:\n+bravo\n+charlie",
+        "SWAP 2:f589..3:a56d:\n+bravo\n+charlie",
     )
     .expect("README-style range swap should apply");
 
@@ -918,11 +939,15 @@ fn accepts_reference_range_separators() {
     let spaced_equals = apply_hashline_patch(
         "notes.txt",
         "alpha\nbeta\ngamma\ndelta\n",
-        "SWAP 2 ..= 3:\n+bravo\n+charlie",
+        "SWAP 2:f589 ..= 3:a56d:\n+bravo\n+charlie",
     )
     .expect("..= range separator should apply");
-    let hyphen = apply_hashline_patch("notes.txt", "alpha\nbeta\ngamma\ndelta\n", "DEL 2-3")
-        .expect("hyphen range separator should apply");
+    let hyphen = apply_hashline_patch(
+        "notes.txt",
+        "alpha\nbeta\ngamma\ndelta\n",
+        "DEL 2:f589-3:a56d",
+    )
+    .expect("hyphen range separator should apply");
 
     assert_eq!(spaced_equals, "alpha\nbravo\ncharlie\ndelta\n");
     assert_eq!(hyphen, "alpha\ndelta\n");
@@ -931,7 +956,7 @@ fn accepts_reference_range_separators() {
 #[test]
 fn rejects_stale_range_end_hash() {
     let original = "alpha\nbeta\ngamma\ndelta\n";
-    let patch = format!("DEL 2:{}..3:00", line_hash("beta"));
+    let patch = format!("DEL 2:{}..3:0000", line_hash("beta"));
 
     let error = apply_hashline_patch("notes.txt", original, &patch)
         .expect_err("stale end hash should reject the range");
@@ -944,8 +969,12 @@ fn rejects_stale_range_end_hash() {
 
 #[test]
 fn applies_readme_style_delete_range() {
-    let updated = apply_hashline_patch("notes.txt", "alpha\nbeta\ngamma\ndelta\n", "DEL 2..3")
-        .expect("README-style delete range should apply");
+    let updated = apply_hashline_patch(
+        "notes.txt",
+        "alpha\nbeta\ngamma\ndelta\n",
+        "DEL 2:f589..3:a56d",
+    )
+    .expect("README-style delete range should apply");
 
     assert_eq!(updated, "alpha\ndelta\n");
 }
@@ -955,7 +984,7 @@ fn applies_readme_style_insert_bodies() {
     let updated = apply_hashline_patch(
         "notes.txt",
         "middle\n",
-        "INS.HEAD:\n+top\nINS.POST 1:\n+after middle\nINS.TAIL:\n+bottom",
+        "INS.HEAD:\n+top\nINS.POST 1:9415\n+after middle\nINS.TAIL:\n+bottom",
     )
     .expect("README-style insert bodies should apply");
 
@@ -967,7 +996,7 @@ fn accepts_patch_envelope_markers() {
     let updated = apply_hashline_patch(
         "notes.txt",
         "alpha\nbeta\n",
-        "*** Begin Patch\nSWAP 2:\n+bravo\n*** End Patch",
+        "*** Begin Patch\nSWAP 2:f589\n+bravo\n*** End Patch",
     )
     .expect("Hashline patch envelope should be ignored");
 
@@ -976,7 +1005,7 @@ fn accepts_patch_envelope_markers() {
 
 #[test]
 fn abort_marker_suppresses_hashline_patch() {
-    let patch = "*** Begin Patch\nSWAP 2:\n+bravo\n*** Abort\n*** End Patch";
+    let patch = "*** Begin Patch\nSWAP 2:f589\n+bravo\n*** Abort\n*** End Patch";
     let updated = apply_hashline_patch("notes.txt", "alpha\nbeta\n", patch)
         .expect("abort marker should suppress the embedded patch");
 
@@ -987,7 +1016,7 @@ fn abort_marker_suppresses_hashline_patch() {
 #[test]
 fn subsequent_operations_use_original_line_anchors() {
     let original = "AAA\nBBB\nCCC\nDDD\n";
-    let patch = format!("INS.POST 1:\n+XXX\nSWAP 4:{}:\n+ZZZ", line_hash("DDD"));
+    let patch = format!("INS.POST 1:696c\n+XXX\nSWAP 4:{}:\n+ZZZ", line_hash("DDD"));
 
     let updated = apply_hashline_patch("notes.txt", original, &patch)
         .expect("later operation should target original line after earlier insert");
@@ -1002,19 +1031,42 @@ fn applies_swap_block_operation() {
     let updated = apply_hashline_patch(
         "src/main.rs",
         original,
-        "SWAP.BLK 1:\n+fn replaced() {\n+    let y = 2;\n+}",
+        &format!(
+            "SWAP.BLK {}:\n+fn replaced() {{\n+    let y = 2;\n+}}",
+            block_anchor("src/main.rs", original, 1)
+        ),
     )
     .expect("SWAP.BLK should replace the resolved block");
 
     assert_eq!(updated, "fn replaced() {\n    let y = 2;\n}\n");
+}
+#[test]
+fn rejects_stale_block_hash() {
+    let original = "fn hello() {\n    let x = 1;\n}\n";
+    let patch = format!(
+        "SWAP.BLK {}@00000000:\n+fn replaced() {{\n+}}",
+        line_anchor(1, "fn hello() {")
+    );
+
+    let error = apply_hashline_patch("src/main.rs", original, &patch)
+        .expect_err("stale block hash should be rejected");
+
+    assert!(
+        error.to_string().contains("block hash mismatch"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
 fn applies_delete_block_operation() {
     let original = "fn hello() {\n    let x = 1;\n}\nfn keep() {}\n";
 
-    let updated = apply_hashline_patch("src/main.rs", original, "DEL.BLK 1")
-        .expect("DEL.BLK should delete the resolved block");
+    let updated = apply_hashline_patch(
+        "src/main.rs",
+        original,
+        &format!("DEL.BLK {}", block_anchor("src/main.rs", original, 1)),
+    )
+    .expect("DEL.BLK should delete the resolved block");
 
     assert_eq!(updated, "fn keep() {}\n");
 }
@@ -1026,7 +1078,10 @@ fn applies_insert_block_post_operation() {
     let updated = apply_hashline_patch(
         "src/main.rs",
         original,
-        "INS.BLK.POST 1:\n+fn world() {\n+    let y = 2;\n+}",
+        &format!(
+            "INS.BLK.POST {}:\n+fn world() {{\n+    let y = 2;\n+}}",
+            block_anchor("src/main.rs", original, 1)
+        ),
     )
     .expect("INS.BLK.POST should insert after the resolved block");
 
@@ -1043,7 +1098,10 @@ fn applies_insert_block_alias_operation() {
     let updated = apply_hashline_patch(
         "src/main.rs",
         original,
-        "INS.BLK 1:\n+fn world() {\n+    let y = 2;\n+}",
+        &format!(
+            "INS.BLK {}:\n+fn world() {{\n+    let y = 2;\n+}}",
+            block_anchor("src/main.rs", original, 1)
+        ),
     )
     .expect("INS.BLK should alias INS.BLK.POST");
 
@@ -1060,7 +1118,10 @@ fn applies_insert_block_pre_operation() {
     let updated = apply_hashline_patch(
         "src/main.rs",
         original,
-        "INS.BLK.PRE 1:\n+fn preamble() {\n+}",
+        &format!(
+            "INS.BLK.PRE {}:\n+fn preamble() {{\n+}}",
+            block_anchor("src/main.rs", original, 1)
+        ),
     )
     .expect("INS.BLK.PRE should insert before the resolved block");
 
@@ -1077,7 +1138,10 @@ fn applies_python_swap_block_header_operation() {
     let updated = apply_hashline_patch(
         "src/main.py",
         original,
-        "SWAP.BLK 1:\n+def hello():\n+    return 42",
+        &format!(
+            "SWAP.BLK {}:\n+def hello():\n+    return 42",
+            block_anchor("src/main.py", original, 1)
+        ),
     )
     .expect("Python header block should replace only the anchored suite");
 
@@ -1094,7 +1158,10 @@ fn applies_ruby_swap_block_header_operation() {
     let updated = apply_hashline_patch(
         "src/main.rb",
         original,
-        "SWAP.BLK 1:\n+def hello\n+  42\n+end",
+        &format!(
+            "SWAP.BLK {}:\n+def hello\n+  42\n+end",
+            block_anchor("src/main.rb", original, 1)
+        ),
     )
     .expect("Ruby block should replace only the anchored method");
 
@@ -1186,15 +1253,15 @@ fn success_output_reports_fresh_hashline_excerpt() {
         build_hashline_patch_success_body("notes.txt", original, updated, /*create*/ false)
             .expect("success body should be generated");
 
-    let new_hash = hash_hex(updated, 4);
+    let new_hash = hash_hex(updated);
     assert_eq!(
         output,
         serde_json::json!({
             "success": true,
             "path": "notes.txt",
-            "header": format!("[notes.txt#{new_hash}]"),
+            "header": format!("[notes.txt]#{new_hash}"),
             "operation": "update",
-            "old_hash": hash_hex(original, 4),
+            "old_hash": hash_hex(original),
             "new_hash": new_hash,
             "start_line": 2,
             "end_line": 2,
@@ -1205,7 +1272,6 @@ fn success_output_reports_fresh_hashline_excerpt() {
                 {
                     "n": 2,
                     "hash": line_hash("bravo"),
-                    "content": "bravo",
                 },
             ],
             "preview": {
@@ -1278,13 +1344,13 @@ fn success_output_reports_empty_create() {
     let output = build_hashline_patch_success_body("empty.txt", "", "", /*create*/ true)
         .expect("empty create success body should be generated");
 
-    let empty_hash = hash_hex("", 4);
+    let empty_hash = hash_hex("");
     assert_eq!(
         output,
         serde_json::json!({
             "success": true,
             "path": "empty.txt",
-            "header": format!("[empty.txt#{empty_hash}]"),
+            "header": format!("[empty.txt]#{empty_hash}"),
             "operation": "create",
             "old_hash": empty_hash,
             "new_hash": empty_hash,
@@ -1341,7 +1407,7 @@ fn file_operation_parser_accepts_remove_and_rename() {
 #[test]
 fn file_operation_parser_allows_rename_with_line_ops() {
     assert_eq!(
-        parse_hashline_patch_file_operation("MV renamed.txt\nSWAP 1:\n+omega")
+        parse_hashline_patch_file_operation("MV renamed.txt\nSWAP 1:93c8\n+omega")
             .expect("MV and line ops should parse"),
         Some(HashlinePatchFileOperation::Rename {
             new_path: "renamed.txt".to_string(),
@@ -1351,7 +1417,7 @@ fn file_operation_parser_allows_rename_with_line_ops() {
 
 #[test]
 fn file_operation_parser_rejects_remove_with_line_ops() {
-    let error = parse_hashline_patch_file_operation("REM\nSWAP 1:\n+omega")
+    let error = parse_hashline_patch_file_operation("REM\nSWAP 1:93c8\n+omega")
         .expect_err("REM and line op should not combine");
 
     assert_eq!(
