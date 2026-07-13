@@ -3,6 +3,7 @@
 use crate::agent::AgentStatus;
 use crate::agent::agent_resolver::resolve_agent_target;
 use crate::function_tool::FunctionCallError;
+use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -55,12 +56,27 @@ pub(super) fn communication_from_tool_message(
     author: AgentPath,
     recipient: AgentPath,
     message: String,
+    source: &ToolCallSource,
 ) -> InterAgentCommunication {
-    InterAgentCommunication::new_encrypted(
-        author,
-        recipient,
-        Vec::new(),
-        message,
-        /*trigger_turn*/ true,
-    )
+    // Responses encrypts the marked `message` parameter only for function
+    // calls the model emits directly. Code-mode nested calls pass the literal
+    // string from the JS cell, so labeling it as ciphertext makes upstream
+    // fail decryption with `invalid_encrypted_content` when the communication
+    // is later replayed as an `agent_message` item.
+    match source {
+        ToolCallSource::Direct => InterAgentCommunication::new_encrypted(
+            author,
+            recipient,
+            Vec::new(),
+            message,
+            /*trigger_turn*/ true,
+        ),
+        ToolCallSource::CodeMode { .. } => InterAgentCommunication::new(
+            author,
+            recipient,
+            Vec::new(),
+            message,
+            /*trigger_turn*/ true,
+        ),
+    }
 }

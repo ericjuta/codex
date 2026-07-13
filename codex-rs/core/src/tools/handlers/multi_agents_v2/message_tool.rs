@@ -68,6 +68,7 @@ pub(crate) async fn handle_message_string_tool(
         session,
         turn,
         call_id,
+        source,
         ..
     } = invocation;
     let receiver_thread_id = resolve_agent_target(&session, &turn, &target).await?;
@@ -101,7 +102,7 @@ pub(crate) async fn handle_message_string_tool(
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
     let communication =
-        communication_from_tool_message(author, receiver_agent_path.clone(), message);
+        communication_from_tool_message(author, receiver_agent_path.clone(), message, &source);
     let kind = match mode {
         MessageDeliveryMode::QueueOnly => AgentCommunicationKind::Message,
         MessageDeliveryMode::TriggerTurn => AgentCommunicationKind::Followup,
