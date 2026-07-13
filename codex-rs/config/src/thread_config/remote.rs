@@ -190,6 +190,7 @@ fn model_provider_from_proto(
         websocket_connect_timeout_ms: provider.websocket_connect_timeout_ms,
         requires_openai_auth: provider.requires_openai_auth,
         supports_websockets: provider.supports_websockets,
+        websocket_send_full_history: provider.websocket_send_full_history,
     };
     Ok((id, info))
 }
@@ -217,6 +218,7 @@ fn model_provider_to_proto(
         websocket_connect_timeout_ms,
         requires_openai_auth,
         supports_websockets,
+        websocket_send_full_history,
     } = provider;
 
     proto::ModelProvider {
@@ -237,6 +239,7 @@ fn model_provider_to_proto(
         websocket_connect_timeout_ms,
         requires_openai_auth,
         supports_websockets,
+        websocket_send_full_history,
     }
 }
 
@@ -473,6 +476,7 @@ mod tests {
                             websocket_connect_timeout_ms: Some(10_000),
                             requires_openai_auth: false,
                             supports_websockets: true,
+                            websocket_send_full_history: true,
                         }],
                         features: HashMap::from([
                             ("plugins".to_string(), false),
@@ -536,6 +540,7 @@ mod tests {
             websocket_connect_timeout_ms: Some(10_000),
             requires_openai_auth: false,
             supports_websockets: true,
+            websocket_send_full_history: true,
             aws: None,
         }
     }

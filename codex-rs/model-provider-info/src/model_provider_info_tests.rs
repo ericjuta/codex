@@ -29,6 +29,7 @@ base_url = "http://localhost:11434/v1"
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        websocket_send_full_history: false,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -63,6 +64,7 @@ query_params = { api-version = "2025-04-01-preview" }
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        websocket_send_full_history: false,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -100,6 +102,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        websocket_send_full_history: false,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -126,10 +129,12 @@ name = "OpenAI"
 base_url = "https://api.openai.com/v1"
 websocket_connect_timeout_ms = 15000
 supports_websockets = true
+websocket_send_full_history = true
         "#;
 
     let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
     assert_eq!(provider.websocket_connect_timeout_ms, Some(15_000));
+    assert!(provider.websocket_send_full_history);
 }
 
 #[test]
@@ -177,6 +182,7 @@ fn test_supports_remote_compaction_for_azure_name() {
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        websocket_send_full_history: false,
     };
 
     assert!(provider.supports_remote_compaction());
@@ -202,6 +208,7 @@ fn test_supports_remote_compaction_for_non_openai_non_azure_provider() {
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        websocket_send_full_history: false,
     };
 
     assert!(!provider.supports_remote_compaction());
@@ -310,6 +317,7 @@ fn test_create_amazon_bedrock_provider() {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            websocket_send_full_history: false,
         }
     );
 }

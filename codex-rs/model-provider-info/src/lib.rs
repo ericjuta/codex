@@ -138,6 +138,13 @@ pub struct ModelProviderInfo {
     /// Whether this provider supports the Responses API WebSocket transport.
     #[serde(default)]
     pub supports_websockets: bool,
+    /// When true, always resend the full input history on websocket
+    /// `response.create` requests instead of incremental deltas. Full replays
+    /// keep the upstream prompt cache engaged (cached input tokens are
+    /// discounted); incremental deltas fold server-side without a cache
+    /// discount. Defaults to false (incremental deltas when possible).
+    #[serde(default)]
+    pub websocket_send_full_history: bool,
 }
 
 /// AWS SigV4 auth configuration for a model provider.
@@ -360,6 +367,7 @@ impl ModelProviderInfo {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: true,
             supports_websockets: true,
+            websocket_send_full_history: false,
         }
     }
 
@@ -390,6 +398,7 @@ impl ModelProviderInfo {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            websocket_send_full_history: false,
         }
     }
 
@@ -531,6 +540,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        websocket_send_full_history: false,
     }
 }
 

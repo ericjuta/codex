@@ -1253,6 +1253,16 @@ impl ModelClientSession {
         payload: ResponseCreateWsRequest,
         request: &ResponsesApiRequest,
     ) -> (ResponsesWsRequest, bool) {
+        if self
+            .client
+            .state
+            .provider
+            .info()
+            .websocket_send_full_history
+        {
+            return (ResponsesWsRequest::ResponseCreate(payload), false);
+        }
+
         let Some(last_response) = self.get_last_response() else {
             return (ResponsesWsRequest::ResponseCreate(payload), false);
         };

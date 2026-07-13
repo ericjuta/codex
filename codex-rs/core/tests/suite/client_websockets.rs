@@ -1836,6 +1836,45 @@ async fn responses_websocket_uses_previous_response_id_when_prefix_after_complet
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_provider_can_send_full_history() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![
+        vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+    ]])
+    .await;
+
+    let mut provider = websocket_provider(&server);
+    provider.websocket_send_full_history = true;
+    let harness = websocket_harness_with_provider_options(
+        provider,
+        /*runtime_metrics_enabled*/ false,
+        /*concurrent_reasoning_summaries_enabled*/ false,
+        /*enabled_features*/ &[],
+    )
+    .await;
+    let mut client_session = harness.client.new_session();
+    let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
+
+    stream_until_complete(&mut client_session, &harness, &prompt_one).await;
+    stream_until_complete(&mut client_session, &harness, &prompt_two).await;
+
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 2);
+    let second = connection.get(1).expect("missing request").body_json();
+    assert_eq!(second["type"].as_str(), Some("response.create"));
+    assert_eq!(second.get("previous_response_id"), None);
+    assert_eq!(
+        second["input"],
+        serde_json::to_value(&prompt_two.input).expect("serialize full input")
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_creates_on_non_prefix() {
     skip_if_no_network!();
 
@@ -2225,6 +2264,7 @@ fn websocket_provider_with_connect_timeout(
         websocket_connect_timeout_ms,
         requires_openai_auth: false,
         supports_websockets: true,
+        websocket_send_full_history: false,
     }
 }
 
