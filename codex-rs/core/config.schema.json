@@ -656,6 +656,9 @@
             "skill_mcp_dependency_install": {
               "type": "boolean"
             },
+            "skill_search": {
+              "type": "boolean"
+            },
             "sqlite": {
               "type": "boolean"
             },
@@ -5041,6 +5044,9 @@
           "type": "boolean"
         },
         "skill_mcp_dependency_install": {
+          "type": "boolean"
+        },
+        "skill_search": {
           "type": "boolean"
         },
         "sqlite": {
