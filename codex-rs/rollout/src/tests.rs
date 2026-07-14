@@ -509,6 +509,7 @@ fn write_response_item_user_session_file_with_messages(
     for message in messages {
         let response_item = RolloutLine {
             timestamp: ts_str.to_string(),
+            ordinal: None,
             item: RolloutItem::ResponseItem(ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),

@@ -29,7 +29,9 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -1734,6 +1736,7 @@ async fn hashline_patch_routes_to_selected_remote_environment() -> Result<()> {
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd),
+                workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
             },
         ]),
     )
@@ -1880,6 +1883,7 @@ async fn hashline_read_and_write_route_to_selected_remote_environment() -> Resul
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd),
+                workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
             },
         ]),
     )

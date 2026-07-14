@@ -2009,8 +2009,8 @@ async fn selected_file_exists(
             turn_environment.cwd(),
         ))
     })?;
-    let sandbox = turn
-        .file_system_sandbox_context(/*additional_permissions*/ None, turn_environment.cwd());
+    let sandbox =
+        turn.file_system_sandbox_context(/*additional_permissions*/ None, turn_environment);
     let fs = turn_environment.environment.get_filesystem();
     match fs.get_metadata(&path_uri, Some(&sandbox)).await {
         Ok(_) => Ok(true),
@@ -2040,8 +2040,8 @@ async fn read_selected_file(
             turn_environment.cwd(),
         ))
     })?;
-    let sandbox = turn
-        .file_system_sandbox_context(/*additional_permissions*/ None, turn_environment.cwd());
+    let sandbox =
+        turn.file_system_sandbox_context(/*additional_permissions*/ None, turn_environment);
     let fs = turn_environment.environment.get_filesystem();
     fs.read_file_text(&path_uri, Some(&sandbox))
         .await
@@ -2088,8 +2088,8 @@ async fn read_selected_file_after_update(
             turn_environment.cwd(),
         ))
     })?;
-    let sandbox = turn
-        .file_system_sandbox_context(/*additional_permissions*/ None, turn_environment.cwd());
+    let sandbox =
+        turn.file_system_sandbox_context(/*additional_permissions*/ None, turn_environment);
     let fs = turn_environment.environment.get_filesystem();
     fs.write_file(
         &path_uri,

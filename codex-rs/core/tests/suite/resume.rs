@@ -548,6 +548,7 @@ async fn resume_repairs_duplicate_tool_outputs_from_rollout() -> Result<()> {
     for item in poisoned_items {
         let line = RolloutLine {
             timestamp: "2026-01-01T00:00:00.000Z".to_string(),
+            ordinal: None,
             item,
         };
         appended.push_str(&serde_json::to_string(&line)?);

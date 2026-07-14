@@ -1121,6 +1121,7 @@ async fn resume_drops_legacy_review_marker_ids_from_requests() {
     let rollout = vec![
         RolloutLine {
             timestamp: "2024-01-01T00:00:00.000Z".to_string(),
+            ordinal: None,
             item: RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
                     session_id: thread_id.into(),
@@ -1138,6 +1139,7 @@ async fn resume_drops_legacy_review_marker_ids_from_requests() {
         },
         RolloutLine {
             timestamp: "2024-01-01T00:00:01.000Z".to_string(),
+            ordinal: None,
             item: RolloutItem::ResponseItem(ResponseItem::Message {
                 id: Some("review_rollout_user".to_string()),
                 role: "user".to_string(),
@@ -1150,6 +1152,7 @@ async fn resume_drops_legacy_review_marker_ids_from_requests() {
         },
         RolloutLine {
             timestamp: "2024-01-01T00:00:02.000Z".to_string(),
+            ordinal: None,
             item: RolloutItem::ResponseItem(ResponseItem::Message {
                 id: Some("review_rollout_assistant".to_string()),
                 role: "assistant".to_string(),
