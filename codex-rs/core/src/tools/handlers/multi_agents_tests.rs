@@ -543,7 +543,7 @@ async fn spawn_agent_fork_context_rejects_child_model_overrides() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
+async fn multi_agent_v2_spawn_fork_turns_all_normalizes_agent_type_override() {
     let (mut session, mut turn) = make_session_and_context().await;
     let role_name = install_role_with_model_override(&mut turn).await;
     let manager = thread_manager();
@@ -564,10 +564,12 @@ async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
         ..turn
     };
 
-    let err = SpawnAgentHandlerV2::default()
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let output = SpawnAgentHandlerV2::default()
         .handle(invocation(
-            Arc::new(session),
-            Arc::new(turn),
+            session.clone(),
+            turn.clone(),
             "spawn_agent",
             function_payload(json!({
                 "message": "inspect this repo",
@@ -577,15 +579,34 @@ async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
             })),
         ))
         .await
-        .err()
-        .expect("fork_turns=all should reject agent_type overrides");
+        .expect("fork_turns=all should normalize when agent_type is overridden");
+    let (content, _) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
 
     assert_eq!(
-        err,
-        FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without a full-history fork.".to_string(),
-        )
+        result,
+        json!({
+            "task_name": "/root/fork_context_v2",
+            "warning": "fork_turns=\"all\" was normalized to \"none\" because agent_type, model, and reasoning_effort overrides require a new thread; the spawned agent received only the supplied message, not parent history."
+        })
     );
+    let agent_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "fork_context_v2")
+        .await
+        .expect("spawned task name should resolve");
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+
+    assert_eq!(snapshot.model, "gpt-5-role-override");
+    assert_eq!(snapshot.model_provider_id, "ollama");
+    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Minimal));
 }
 
 #[tokio::test]

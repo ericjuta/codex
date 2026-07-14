@@ -12,6 +12,8 @@ use crate::tools::handlers::multi_agents_v2::message_tool::message_content;
 use codex_protocol::AgentPath;
 use codex_tools::ToolSpec;
 
+const FULL_HISTORY_OVERRIDE_WARNING: &str = "fork_turns=\"all\" was normalized to \"none\" because agent_type, model, and reasoning_effort overrides require a new thread; the spawned agent received only the supplied message, not parent history.";
+
 #[derive(Default)]
 pub(crate) struct Handler {
     options: SpawnAgentToolOptions,
@@ -50,12 +52,18 @@ async fn handle_spawn_agent(
     } = invocation;
     let arguments = function_arguments(payload)?;
     let args: SpawnAgentArgs = parse_arguments(&arguments)?;
-    let fork_mode = args.fork_mode()?;
+    let fork_resolution = args.fork_mode()?;
+    let fork_mode = fork_resolution.mode;
     let role_name = args
         .agent_type
         .as_deref()
         .map(str::trim)
         .filter(|role| !role.is_empty());
+    let model_name = args
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty());
 
     let message = message_content(args.message)?;
     let session_source = turn.session_source.clone();
@@ -66,17 +74,13 @@ async fn handle_spawn_agent(
         config.service_tier = Some(service_tier.clone());
     }
     if matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory)) {
-        reject_full_fork_spawn_overrides(
-            role_name,
-            args.model.as_deref(),
-            args.reasoning_effort.clone(),
-        )?;
+        reject_full_fork_spawn_overrides(role_name, model_name, args.reasoning_effort.clone())?;
     } else {
         apply_requested_spawn_agent_model_overrides(
             &session,
             turn.as_ref(),
             &mut config,
-            args.model.as_deref(),
+            model_name,
             args.reasoning_effort.clone(),
         )
         .await?;
@@ -163,14 +167,16 @@ async fn handle_spawn_agent(
         &[("role", role_tag), ("version", "v2")],
     );
     let task_name = String::from(new_agent_path);
+    let warning = fork_resolution.warning;
 
     let hide_agent_metadata = turn.config.multi_agent_v2.hide_spawn_agent_metadata;
     if hide_agent_metadata {
-        Ok(SpawnAgentResult::HiddenMetadata { task_name })
+        Ok(SpawnAgentResult::HiddenMetadata { task_name, warning })
     } else {
         Ok(SpawnAgentResult::WithNickname {
             task_name,
             nickname,
+            warning,
         })
     }
 }
@@ -194,8 +200,13 @@ struct SpawnAgentArgs {
     fork_context: Option<bool>,
 }
 
+struct SpawnAgentForkResolution {
+    mode: Option<SpawnAgentForkMode>,
+    warning: Option<String>,
+}
+
 impl SpawnAgentArgs {
-    fn fork_mode(&self) -> Result<Option<SpawnAgentForkMode>, FunctionCallError> {
+    fn fork_mode(&self) -> Result<SpawnAgentForkResolution, FunctionCallError> {
         if self.fork_context.is_some() {
             return Err(FunctionCallError::RespondToModel(
                 "fork_context is not supported in MultiAgentV2; use fork_turns instead".to_string(),
@@ -216,10 +227,22 @@ impl SpawnAgentArgs {
         });
 
         if fork_turns.eq_ignore_ascii_case("none") {
-            return Ok(None);
+            return Ok(SpawnAgentForkResolution {
+                mode: None,
+                warning: None,
+            });
         }
         if fork_turns.eq_ignore_ascii_case("all") {
-            return Ok(Some(SpawnAgentForkMode::FullHistory));
+            if self.has_child_config_override() {
+                return Ok(SpawnAgentForkResolution {
+                    mode: None,
+                    warning: Some(FULL_HISTORY_OVERRIDE_WARNING.to_string()),
+                });
+            }
+            return Ok(SpawnAgentForkResolution {
+                mode: Some(SpawnAgentForkMode::FullHistory),
+                warning: None,
+            });
         }
 
         let last_n_turns = fork_turns.parse::<usize>().map_err(|_| {
@@ -233,7 +256,10 @@ impl SpawnAgentArgs {
             ));
         }
 
-        Ok(Some(SpawnAgentForkMode::LastNTurns(last_n_turns)))
+        Ok(SpawnAgentForkResolution {
+            mode: Some(SpawnAgentForkMode::LastNTurns(last_n_turns)),
+            warning: None,
+        })
     }
 
     fn has_child_config_override(&self) -> bool {
@@ -256,9 +282,13 @@ pub(crate) enum SpawnAgentResult {
     WithNickname {
         task_name: String,
         nickname: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        warning: Option<String>,
     },
     HiddenMetadata {
         task_name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        warning: Option<String>,
     },
 }
 

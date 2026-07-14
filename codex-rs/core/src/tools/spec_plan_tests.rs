@@ -1430,7 +1430,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
     let spawn_agent_description = spawn_agent.description.as_str();
     assert!(!spawn_agent_description.contains("max_concurrent_threads_per_session"));
     assert!(spawn_agent_description.contains(
-        "Note that passing `fork_turns=\"none\"` will not pass any surrounding context to the spawned subagent"
+        "If `all` is combined with an override, the handler normalizes it to `none` and returns a warning"
     ));
 
     let direct_model_only = probe(|turn| {

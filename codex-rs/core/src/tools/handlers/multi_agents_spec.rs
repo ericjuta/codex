@@ -16,6 +16,7 @@ const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str =
     "Model override for the new agent. Omit unless an explicit override is needed.";
 const SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION: &str =
     "Service tier override for the new agent. Omit unless explicitly requested.";
+const SPAWN_AGENT_FORK_TURNS_DESCRIPTION: &str = "Optional number of turns to fork. Defaults to `all`, or `none` when agent_type, model, or reasoning_effort is set. Use `none`, `all`, or a positive integer string such as `3`. Full-history forks inherit the parent agent type, model, and reasoning effort; combining `all` with any of those overrides is normalized to `none` and reported in the tool result.";
 const MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT_DESCRIPTION: usize = 5;
 const MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION: usize = 64;
 
@@ -381,6 +382,10 @@ fn spawn_agent_output_schema_v2(hide_agent_metadata: bool) -> Value {
                 "task_name": {
                     "type": "string",
                     "description": "Canonical task name for the spawned agent."
+                },
+                "warning": {
+                    "type": "string",
+                    "description": "Adjustment made to the requested spawn options, when applicable."
                 }
             },
             "required": ["task_name"],
@@ -398,6 +403,10 @@ fn spawn_agent_output_schema_v2(hide_agent_metadata: bool) -> Value {
             "nickname": {
                 "type": ["string", "null"],
                 "description": "User-facing nickname for the spawned agent when available."
+            },
+            "warning": {
+                "type": "string",
+                "description": "Adjustment made to the requested spawn options, when applicable."
             }
         },
         "required": ["task_name", "nickname"],
@@ -607,16 +616,11 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
         ),
         (
             "fork_turns".to_string(),
-            JsonSchema::string(Some(
-                "Optional number of turns to fork. Defaults to `all`, or `none` when agent_type, model, or reasoning_effort is set. Use `none`, `all`, or a positive integer string such as `3` to fork only the most recent turns."
-                    .to_string(),
-            )),
+            JsonSchema::string(Some(SPAWN_AGENT_FORK_TURNS_DESCRIPTION.to_string())),
         ),
         (
             "model".to_string(),
-            JsonSchema::string(Some(
-                SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION.to_string(),
-            )),
+            JsonSchema::string(Some(SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION.to_string())),
         ),
         (
             "reasoning_effort".to_string(),
@@ -727,7 +731,7 @@ Only call this tool for a concrete, bounded subtask that can run independently a
 It will be able to send you and other running agents messages, and its final answer will be provided to you when it finishes.
 The new agent's canonical task name will be provided to it along with the message.
 
-Note that passing `fork_turns="none"` will not pass any surrounding context to the spawned subagent, which may cause the agent to lack the context it needs to complete its task, whereas `fork_turns="all"` will provide the subagent with all surrounding context."#
+Use `fork_turns="none"` for a new thread with no surrounding context, `fork_turns="all"` for full parent history, or a positive integer for recent turns. Full-history forks inherit the parent agent type, model, and reasoning effort. When setting any of those overrides, omit `fork_turns` (it defaults to `none`) or use `none` or a positive integer. If `all` is combined with an override, the handler normalizes it to `none` and returns a warning in the tool result."#
     );
 
     if let Some(usage_hint_text) = usage_hint_text {

@@ -67,6 +67,9 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         .expect("spawn_agent should use object params");
     assert!(description.contains("Spawns an agent to work on the specified task."));
     assert!(description.contains("The spawned agent will have the same tools as you"));
+    assert!(description.contains(
+        "If `all` is combined with an override, the handler normalizes it to `none` and returns a warning"
+    ));
     assert!(!description.contains("max_concurrent_threads_per_session"));
     assert!(description.contains(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE));
     assert!(
@@ -86,6 +89,12 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         Some(true)
     );
     assert!(properties.contains_key("fork_turns"));
+    assert_eq!(
+        properties
+            .get("fork_turns")
+            .and_then(|schema| schema.description.as_deref()),
+        Some(SPAWN_AGENT_FORK_TURNS_DESCRIPTION)
+    );
     assert!(!properties.contains_key("items"));
     assert!(!properties.contains_key("fork_context"));
     assert_eq!(
@@ -108,9 +117,11 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         parameters.required.as_ref(),
         Some(&vec!["task_name".to_string(), "message".to_string()])
     );
+    let output_schema = output_schema.expect("spawn_agent output schema");
+    assert_eq!(output_schema["required"], json!(["task_name", "nickname"]));
     assert_eq!(
-        output_schema.expect("spawn_agent output schema")["required"],
-        json!(["task_name", "nickname"])
+        output_schema["properties"]["warning"]["type"],
+        json!("string")
     );
 }
 
