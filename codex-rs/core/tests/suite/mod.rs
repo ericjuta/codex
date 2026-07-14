@@ -93,6 +93,7 @@ mod permissions_messages;
 mod personality;
 mod personality_migration;
 mod plugins;
+mod prompt_cache_key;
 mod prompt_caching;
 mod prompt_debug_tests;
 mod quota_exceeded;

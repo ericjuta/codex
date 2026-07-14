@@ -472,10 +472,10 @@ impl ModelClient {
         self
     }
 
-    fn prompt_cache_key(&self) -> String {
+    fn prompt_cache_key(&self, responses_metadata: &CodexResponsesMetadata) -> String {
         self.prompt_cache_key_override
             .clone()
-            .unwrap_or_else(|| self.state.thread_id.to_string())
+            .unwrap_or_else(|| responses_metadata.session_id.clone())
     }
 
     fn prompt_cache_key_scope(&self) -> &'static str {
@@ -907,7 +907,7 @@ impl ModelClient {
             &prompt.output_schema,
             prompt.output_schema_strict,
         );
-        let prompt_cache_key = Some(self.prompt_cache_key());
+        let prompt_cache_key = Some(self.prompt_cache_key(responses_metadata));
         let service_tier = model_info.service_tier_for_request(service_tier);
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
@@ -1493,7 +1493,7 @@ impl ModelClientSession {
                 .observe_request(
                     &request,
                     &self.client.state.provider.info().name,
-                    &self.client.prompt_cache_key(),
+                    &self.client.prompt_cache_key(responses_metadata),
                     self.client.prompt_cache_key_scope(),
                     request_class(
                         &request,
@@ -1710,7 +1710,7 @@ impl ModelClientSession {
                 .observe_request(
                     &prepared_request,
                     &self.client.state.provider.info().name,
-                    &self.client.prompt_cache_key(),
+                    &self.client.prompt_cache_key(responses_metadata),
                     self.client.prompt_cache_key_scope(),
                     request_class(&request, warmup, pending_retry.retry_after_unauthorized),
                     transport,
