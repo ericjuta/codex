@@ -49,9 +49,7 @@ use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
-use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::AgentMessageInputContent;
-use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -181,6 +179,7 @@ use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+
 use uuid::Uuid;
 
 use codex_protocol::mcp::CallToolResult as McpCallToolResult;
@@ -1114,6 +1113,10 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
     }
 
     impl crate::tools::sandboxing::ToolRuntime<(), ()> for ProbeToolRuntime {
+        fn workspace_roots<'a>(&self, _req: &'a ()) -> &'a [PathUri] {
+            &[]
+        }
+
         async fn run(
             &mut self,
             _req: &(),
@@ -2957,52 +2960,6 @@ async fn session_configured_reports_permission_profile_for_external_sandbox() ->
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn session_permission_profile_rebinds_runtime_workspace_roots() -> anyhow::Result<()> {
-    let codex_home = tempfile::TempDir::new()?;
-    let cwd = tempfile::TempDir::new()?;
-    let old_root = test_path_buf("/workspace/old").abs();
-    let new_root = test_path_buf("/workspace/new").abs();
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .harness_overrides(crate::config::ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            default_permissions: Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
-            additional_writable_roots: vec![old_root.to_path_buf()],
-            ..Default::default()
-        })
-        .build()
-        .await?;
-
-    let session_permission_profile_state = session_permission_profile_state_from_config(&config)?;
-    let stored_file_system_policy = session_permission_profile_state
-        .permission_profile()
-        .file_system_sandbox_policy();
-    assert!(
-        !stored_file_system_policy
-            .can_write_path_with_cwd(old_root.as_path(), config.cwd.as_path()),
-        "session permission profile state should keep runtime workspace roots symbolic"
-    );
-
-    let mut session_configuration = make_session_configuration_for_tests().await;
-    session_configuration.environments =
-        TurnEnvironmentSelections::new(config.cwd.clone(), Vec::new());
-    session_configuration.workspace_roots = config.workspace_roots.clone();
-    session_configuration.permission_profile_state = session_permission_profile_state;
-
-    let initial_policy = session_configuration.file_system_sandbox_policy();
-    assert!(initial_policy.can_write_path_with_cwd(old_root.as_path(), config.cwd.as_path()));
-
-    let updated = session_configuration.apply(&SessionSettingsUpdate {
-        workspace_roots: Some(vec![new_root.clone()]),
-        ..Default::default()
-    })?;
-    let updated_policy = updated.file_system_sandbox_policy();
-    assert!(updated_policy.can_write_path_with_cwd(new_root.as_path(), updated.cwd().as_path()));
-    assert!(!updated_policy.can_write_path_with_cwd(old_root.as_path(), updated.cwd().as_path()));
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     mount_sse_once(
@@ -3783,7 +3740,6 @@ async fn set_rate_limits_retains_previous_credits() {
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), Vec::new()),
-        workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
@@ -3890,7 +3846,6 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), Vec::new()),
-        workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
@@ -4427,7 +4382,6 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), Vec::new()),
-        workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
@@ -4585,7 +4539,9 @@ async fn session_configuration_apply_preserves_profile_file_system_policy_on_cwd
         )
         .expect("set permission profile");
     let expected_file_system_sandbox_policy = file_system_sandbox_policy
-        .materialize_project_roots_with_workspace_roots(&session_configuration.workspace_roots);
+        .materialize_project_roots_with_workspace_roots(
+            &session_configuration.primary_workspace_roots(),
+        );
 
     let updated = session_configuration
         .apply(&SessionSettingsUpdate {
@@ -4647,7 +4603,9 @@ async fn session_configuration_apply_permission_profile_preserves_existing_deny_
         .expect("permission profile update should succeed");
 
     let mut expected_file_system_policy = requested_file_system_policy
-        .materialize_project_roots_with_workspace_roots(&session_configuration.workspace_roots);
+        .materialize_project_roots_with_workspace_roots(
+            &session_configuration.primary_workspace_roots(),
+        );
     expected_file_system_policy.glob_scan_max_depth = Some(2);
     expected_file_system_policy.entries.push(deny_entry);
     assert_eq!(
@@ -4701,94 +4659,6 @@ async fn session_configuration_apply_permission_profile_accepts_direct_write_roo
             exclude_slash_tmp: true,
         }
     );
-}
-
-#[tokio::test]
-async fn session_configuration_apply_rebinds_symbolic_profile_to_updated_workspace_roots() {
-    let mut session_configuration = make_session_configuration_for_tests().await;
-    let old_root = tempfile::tempdir().expect("create old root");
-    let new_root = tempfile::tempdir().expect("create new root");
-    let profile_root = tempfile::tempdir().expect("create profile root");
-    let old_root = old_root.path().abs();
-    let new_root = new_root.path().abs();
-    let profile_root = profile_root.path().abs();
-    session_configuration.workspace_roots = vec![old_root.clone()];
-
-    let file_system_sandbox_policy =
-        FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-            path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
-            },
-            access: FileSystemAccessMode::Write,
-        }]);
-    let permission_profile = PermissionProfile::from_runtime_permissions(
-        &file_system_sandbox_policy,
-        NetworkSandboxPolicy::Restricted,
-    );
-
-    let updated = session_configuration
-        .apply(&SessionSettingsUpdate {
-            workspace_roots: Some(vec![new_root.clone()]),
-            permission_profile: Some(permission_profile),
-            active_permission_profile: Some(ActivePermissionProfile::new("dev")),
-            profile_workspace_roots: Some(vec![profile_root.clone()]),
-            ..Default::default()
-        })
-        .expect("permission profile update should succeed");
-
-    let updated_policy = updated.file_system_sandbox_policy();
-    assert!(updated_policy.can_write_path_with_cwd(new_root.as_path(), updated.cwd().as_path()));
-    assert!(!updated_policy.can_write_path_with_cwd(old_root.as_path(), updated.cwd().as_path()));
-    assert_eq!(
-        updated.active_permission_profile(),
-        Some(ActivePermissionProfile::new("dev"))
-    );
-    assert_eq!(updated.profile_workspace_roots(), &[profile_root]);
-}
-
-#[tokio::test]
-async fn session_configuration_apply_retargets_implicit_workspace_root_on_cwd_update() {
-    let mut session_configuration = make_session_configuration_for_tests().await;
-    let old_root = tempfile::tempdir().expect("create old root");
-    let new_root = tempfile::tempdir().expect("create new root");
-    let extra_root = tempfile::tempdir().expect("create extra root");
-    let old_root = old_root.path().abs();
-    let new_root = new_root.path().abs();
-    let extra_root = extra_root.path().abs();
-    session_configuration.environments =
-        TurnEnvironmentSelections::new(old_root.clone(), Vec::new());
-    session_configuration.workspace_roots = vec![old_root.clone(), extra_root.clone()];
-
-    let file_system_sandbox_policy =
-        FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-            path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
-            },
-            access: FileSystemAccessMode::Write,
-        }]);
-    let permission_profile = PermissionProfile::from_runtime_permissions(
-        &file_system_sandbox_policy,
-        NetworkSandboxPolicy::Restricted,
-    );
-    session_configuration
-        .set_permission_profile_for_tests(permission_profile)
-        .expect("set permission profile");
-
-    let updated = session_configuration
-        .apply(&SessionSettingsUpdate {
-            environments: Some(TurnEnvironmentSelections::new(new_root.clone(), Vec::new())),
-            ..Default::default()
-        })
-        .expect("cwd-only update should succeed");
-
-    assert_eq!(
-        updated.workspace_roots,
-        vec![new_root.clone(), extra_root.clone()]
-    );
-    let updated_policy = updated.file_system_sandbox_policy();
-    assert!(updated_policy.can_write_path_with_cwd(new_root.as_path(), updated.cwd().as_path()));
-    assert!(updated_policy.can_write_path_with_cwd(extra_root.as_path(), updated.cwd().as_path()));
-    assert!(!updated_policy.can_write_path_with_cwd(old_root.as_path(), updated.cwd().as_path()));
 }
 
 #[tokio::test]
@@ -4989,60 +4859,6 @@ enabled = false
             .outcome()
             .is_skill_enabled(child_skill),
         false
-    );
-}
-
-#[tokio::test]
-async fn session_configuration_apply_retargets_legacy_workspace_root_on_cwd_update() {
-    let mut session_configuration = make_session_configuration_for_tests().await;
-    let workspace = tempfile::tempdir().expect("create temp dir");
-    let original_cwd = workspace.path().join("repo-a").abs();
-    let project_root = workspace.path().join("repo-b").abs();
-    session_configuration.environments =
-        TurnEnvironmentSelections::new(original_cwd.clone(), Vec::new());
-    session_configuration.workspace_roots = vec![session_configuration.cwd().clone()];
-    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: Vec::new(),
-        network_access: false,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    };
-    let file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-        &sandbox_policy,
-        session_configuration.cwd(),
-    );
-    session_configuration
-        .set_permission_profile_for_tests(
-            PermissionProfile::from_runtime_permissions_with_enforcement(
-                SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-                &file_system_sandbox_policy,
-                NetworkSandboxPolicy::from(&sandbox_policy),
-            ),
-        )
-        .expect("set permission profile");
-
-    let updated = session_configuration
-        .apply(&SessionSettingsUpdate {
-            environments: Some(TurnEnvironmentSelections::new(
-                project_root.clone(),
-                Vec::new(),
-            )),
-            ..Default::default()
-        })
-        .expect("cwd-only update should succeed");
-
-    assert_eq!(updated.workspace_roots, vec![project_root.clone()]);
-    assert!(
-        updated
-            .file_system_sandbox_policy()
-            .can_write_path_with_cwd(project_root.as_path(), updated.cwd().as_path()),
-        "cwd-only update should keep the new cwd writable"
-    );
-    assert!(
-        !updated
-            .file_system_sandbox_policy()
-            .can_write_path_with_cwd(original_cwd.as_path(), updated.cwd().as_path()),
-        "cwd-only update should not keep the old implicit cwd writable"
     );
 }
 
@@ -5298,7 +5114,6 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), Vec::new()),
-        workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
@@ -5430,7 +5245,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), default_environments),
-        workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
@@ -5684,7 +5498,6 @@ async fn make_session_with_config_and_rx(
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), default_environments),
-        workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
@@ -5792,7 +5605,6 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), default_environments),
-        workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
@@ -6242,6 +6054,7 @@ async fn request_permissions_tool_resolves_relative_paths_against_selected_envir
         "remote".to_string(),
         current_environment.environment,
         PathUri::from_abs_path(&environment_cwd),
+        Vec::new(),
         current_environment.shell,
     );
 
@@ -6874,6 +6687,7 @@ async fn primary_environment_uses_first_turn_environment() {
             "second".to_string(),
             Arc::clone(&first_environment.environment),
             second_cwd_uri.clone(),
+            Vec::new(),
             /*shell*/ None,
         ));
 
@@ -7562,7 +7376,6 @@ where
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), default_environments),
-        workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
@@ -8094,6 +7907,7 @@ async fn record_context_updates_emits_environment_item_for_cwd_changes() {
         environment.environment_id,
         environment.environment,
         PathUri::from_abs_path(&cwd),
+        Vec::new(),
         environment.shell,
     );
 
@@ -8153,6 +7967,7 @@ async fn record_context_updates_omits_environment_item_when_disabled() {
         environment.environment_id,
         environment.environment,
         PathUri::from_abs_path(&test_path_buf("/new-repo").abs()),
+        Vec::new(),
         environment.shell,
     );
 
@@ -8881,6 +8696,7 @@ async fn turn_context_item_stores_local_cwd() {
         "remote".to_string(),
         environment.environment,
         cwd,
+        Vec::new(),
         environment.shell,
     );
 
