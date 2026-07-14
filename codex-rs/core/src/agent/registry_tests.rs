@@ -332,10 +332,9 @@ fn committed_agent_metadata_is_indexed_by_path_and_thread_until_release() {
         .reserve_spawn_slot(/*max_threads*/ None)
         .expect("reserve slot");
     reservation.reserve_agent_path(&path).expect("reserve path");
-    let mut expected_metadata = AgentMetadata {
+    let expected_metadata = AgentMetadata {
         agent_id: Some(thread_id),
         agent_path: Some(path.clone()),
-        last_task_message: Some("initial task".to_string()),
         ..Default::default()
     };
     reservation.commit(expected_metadata.clone());
@@ -347,20 +346,7 @@ fn committed_agent_metadata_is_indexed_by_path_and_thread_until_release() {
     );
     assert_eq!(
         registry.spawned_agents_for_thread_ids(&[root_thread_id, ThreadId::new(), thread_id,]),
-        vec![expected_metadata.clone()]
-    );
-
-    registry.update_last_task_message(thread_id, "updated task".to_string());
-    expected_metadata.last_task_message = Some("updated task".to_string());
-    assert_eq!(
-        registry.agent_metadata_for_thread(thread_id),
-        Some(expected_metadata.clone())
-    );
-    registry.clear_last_task_message(thread_id);
-    expected_metadata.last_task_message = None;
-    assert_eq!(
-        registry.agent_metadata_for_thread(thread_id),
-        Some(expected_metadata)
+        vec![expected_metadata]
     );
 
     registry.release_spawned_thread(thread_id);

@@ -192,7 +192,7 @@ impl ToolOrchestrator {
                         tool_ctx.call_id.as_str(),
                         approval_ctx,
                         tool_ctx,
-                        /*evaluate_permission_request_hooks*/ false,
+                        /*evaluate_permission_request_hooks*/ true,
                         &otel,
                     )
                     .await?;
@@ -227,7 +227,7 @@ impl ToolOrchestrator {
                     tool_ctx.call_id.as_str(),
                     approval_ctx,
                     tool_ctx,
-                    /*evaluate_permission_request_hooks*/ !strict_auto_review,
+                    /*evaluate_permission_request_hooks*/ true,
                     &otel,
                 )
                 .await?;
@@ -425,7 +425,7 @@ impl ToolOrchestrator {
                         &permission_request_run_id,
                         approval_ctx,
                         tool_ctx,
-                        /*evaluate_permission_request_hooks*/ !strict_auto_review,
+                        /*evaluate_permission_request_hooks*/ true,
                         &otel,
                     )
                     .await?;

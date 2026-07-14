@@ -172,42 +172,6 @@ impl AgentRegistry {
             .collect()
     }
 
-    pub(crate) fn update_last_task_message(&self, thread_id: ThreadId, last_task_message: String) {
-        let mut active_agents = self
-            .active_agents
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let ActiveAgents {
-            agent_tree,
-            agent_keys_by_id,
-            ..
-        } = &mut *active_agents;
-        let Some(key) = agent_keys_by_id.get(&thread_id) else {
-            return;
-        };
-        if let Some(metadata) = agent_tree.get_mut(key) {
-            metadata.last_task_message = Some(last_task_message);
-        }
-    }
-
-    pub(crate) fn clear_last_task_message(&self, thread_id: ThreadId) {
-        let mut active_agents = self
-            .active_agents
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let ActiveAgents {
-            agent_tree,
-            agent_keys_by_id,
-            ..
-        } = &mut *active_agents;
-        let Some(key) = agent_keys_by_id.get(&thread_id) else {
-            return;
-        };
-        if let Some(metadata) = agent_tree.get_mut(key) {
-            metadata.last_task_message = None;
-        }
-    }
-
     fn register_spawned_thread(&self, agent_metadata: AgentMetadata) {
         let Some(thread_id) = agent_metadata.agent_id else {
             return;
