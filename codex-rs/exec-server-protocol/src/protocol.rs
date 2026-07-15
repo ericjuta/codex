@@ -4,8 +4,10 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_file_system::FileSystemSandboxContext;
 pub use codex_file_system::WalkOptions;
 pub use codex_file_system::WalkOutcome;
+use codex_hashline_transaction::ExactBytesDigest;
 use codex_hashline_transaction::FileMutation;
 use codex_hashline_transaction::PlanPreview;
+use codex_hashline_transaction::TransactionId;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_shell_command::shell_detect::DetectedShell;
@@ -39,6 +41,8 @@ pub const FS_WALK_METHOD: &str = "fs/walk";
 pub const FS_REMOVE_METHOD: &str = "fs/remove";
 pub const FS_COPY_METHOD: &str = "fs/copy";
 pub const HASHLINE_TRANSACTION_PLAN_METHOD: &str = "hashlineTransaction/plan";
+pub const HASHLINE_TRANSACTION_EXECUTE_METHOD: &str = "hashlineTransaction/execute";
+pub const HASHLINE_TRANSACTION_RECOVER_METHOD: &str = "hashlineTransaction/recover";
 /// Maximum serialized JSON-RPC response size for Hashline transaction planning.
 pub const HASHLINE_TRANSACTION_MAX_RESPONSE_BYTES: u64 = 256 * 1024;
 /// Reserved bytes for the integer request id and JSON-RPC/result wrappers.
@@ -51,6 +55,8 @@ pub const HASHLINE_TRANSACTION_INVALID_REQUEST_ERROR_CODE: i64 = -32602;
 pub const HASHLINE_TRANSACTION_UNSUPPORTED_ERROR_CODE: i64 = -32020;
 /// Executor observations changed and the transaction can be planned again.
 pub const HASHLINE_TRANSACTION_CONFLICT_ERROR_CODE: i64 = -32021;
+/// Durable state exists and the selected executor must run recovery before retrying.
+pub const HASHLINE_TRANSACTION_RECOVERY_REQUIRED_ERROR_CODE: i64 = -32022;
 /// The executor failed while planning a valid transaction request.
 pub const HASHLINE_TRANSACTION_EXECUTOR_ERROR_CODE: i64 = -32603;
 /// JSON-RPC request method for executor-side HTTP requests.
@@ -277,6 +283,119 @@ pub struct HashlineTransactionPlanParams {
 #[serde(rename_all = "camelCase")]
 pub struct HashlineTransactionPlanResponse {
     pub preview: PlanPreview,
+}
+
+/// Commit action executed wholly by the selected executor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "type"
+)]
+pub enum HashlineTransactionExecuteAction {
+    Commit,
+    CommitPreviewed {
+        expected_plan_digest: ExactBytesDigest,
+    },
+}
+
+/// Hashline transaction commit request executed wholly by the selected executor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HashlineTransactionExecuteParams {
+    pub environment_id: String,
+    pub root: PathUri,
+    pub action: HashlineTransactionExecuteAction,
+    pub mutations: Vec<FileMutation>,
+    pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+/// Bounded executor failure projection. Adapters must truncate the message before serialization.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HashlineTransactionFailure {
+    pub kind: HashlineTransactionFailureKind,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HashlineTransactionFailureKind {
+    FileSystem,
+    Journal,
+    Recovery,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "type"
+)]
+pub enum HashlineTransactionExecutionOutcome {
+    Committed,
+    RolledBack { failure: HashlineTransactionFailure },
+}
+
+/// Bounded receipt for one executor-side Hashline transaction attempt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HashlineTransactionExecuteResponse {
+    pub preview: PlanPreview,
+    pub transaction_id: TransactionId,
+    pub outcome: HashlineTransactionExecutionOutcome,
+}
+
+/// Structured JSON-RPC error data returned when a commit leaves durable recovery state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HashlineTransactionRecoveryRequiredData {
+    pub transaction_id: TransactionId,
+    pub plan_digest: ExactBytesDigest,
+    pub failure: HashlineTransactionFailure,
+    pub recovery_failure: HashlineTransactionFailure,
+}
+
+/// Root-scoped explicit recovery request executed wholly by the selected executor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HashlineTransactionRecoverParams {
+    pub environment_id: String,
+    pub root: PathUri,
+    pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+/// One bounded root-recovery attempt without exposing an executor-native transaction key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "type"
+)]
+pub enum HashlineTransactionRecoveryAttempt {
+    Committed {
+        transaction_id: TransactionId,
+        plan_digest: ExactBytesDigest,
+    },
+    RolledBack {
+        transaction_id: TransactionId,
+        plan_digest: ExactBytesDigest,
+    },
+    Unavailable {
+        failure: HashlineTransactionFailure,
+    },
+    RecoveryRequired {
+        transaction_id: TransactionId,
+        failure: HashlineTransactionFailure,
+        record_failure: Option<HashlineTransactionFailure>,
+    },
+}
+
+/// Bounded root-scoped recovery response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HashlineTransactionRecoverResponse {
+    pub attempts: Vec<HashlineTransactionRecoveryAttempt>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -603,10 +722,16 @@ mod tests {
     use super::ExecExitedNotification;
     use super::ExecParams;
     use super::FsReadFileParams;
+    use super::HashlineTransactionExecuteAction;
+    use super::HashlineTransactionFailure;
+    use super::HashlineTransactionFailureKind;
+    use super::HashlineTransactionRecoveryAttempt;
     use super::HttpRequestParams;
     use super::ProcessId;
     use super::ShellInfo;
     use codex_file_system::FileSystemSandboxContext;
+    use codex_hashline_transaction::ExactBytesDigest;
+    use codex_hashline_transaction::TransactionId;
     use codex_network_proxy::ManagedNetworkSandboxContext;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_path_uri::PathUri;
@@ -756,5 +881,52 @@ mod tests {
         .expect("legacy exited notification should deserialize");
 
         assert_eq!(notification.sandbox_denied, None);
+    }
+    #[test]
+    fn hashline_commit_and_recovery_contracts_are_typed_and_camel_case() {
+        let digest = ExactBytesDigest::new(b"plan");
+        let action = HashlineTransactionExecuteAction::CommitPreviewed {
+            expected_plan_digest: digest,
+        };
+        let action_json = serde_json::to_value(&action).expect("serialize commit action");
+        assert_eq!(
+            action_json,
+            serde_json::json!({
+                "type": "commitPreviewed",
+                "expectedPlanDigest": digest.to_string(),
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<HashlineTransactionExecuteAction>(action_json)
+                .expect("deserialize commit action"),
+            action
+        );
+
+        let attempt = HashlineTransactionRecoveryAttempt::RecoveryRequired {
+            transaction_id: TransactionId("transaction-1".to_string()),
+            failure: HashlineTransactionFailure {
+                kind: HashlineTransactionFailureKind::Recovery,
+                message: "path was disturbed".to_string(),
+            },
+            record_failure: None,
+        };
+        let attempt_json = serde_json::to_value(&attempt).expect("serialize recovery attempt");
+        assert_eq!(
+            attempt_json,
+            serde_json::json!({
+                "type": "recoveryRequired",
+                "transactionId": "transaction-1",
+                "failure": {
+                    "kind": "recovery",
+                    "message": "path was disturbed",
+                },
+                "recordFailure": null,
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<HashlineTransactionRecoveryAttempt>(attempt_json)
+                .expect("deserialize recovery attempt"),
+            attempt
+        );
     }
 }
