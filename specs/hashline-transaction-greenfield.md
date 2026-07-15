@@ -65,6 +65,7 @@ Non-goals for the first version:
 - [x] (2026-07-15 07:31Z) Resolve independent review findings for file identity, path races, executor capabilities, recovery semantics, and path types.
 - [x] (2026-07-15 08:26Z) Establish the separate crate, executor-owned read-only planning boundary, complete transaction capability traits, and exact-byte identity/metadata evidence types.
 - [x] (2026-07-15 08:42Z) Add the typed mixed-operation planner core, conflict-free canonicalization, exact-byte before/after evidence, hard planning limits, and deterministic plan digests without exposing mutation capabilities.
+- [x] (2026-07-15 08:48Z) Cover alias conflicts, file preconditions, identity and metadata digest binding, preview digest matching, invalid edit lists, unsupported kinds, hard links, and every current planner limit in Cargo and Bazel tests.
 - [ ] Implement the typed planner as a separate crate with no filesystem writes.
 - [ ] Implement the staged executor, durable journal, rollback, and startup recovery.
 - [ ] Add the core tool adapter, remote-environment capability boundary, and bounded responses.
