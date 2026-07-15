@@ -27,6 +27,8 @@ use codex_utils_path_uri::PathUri;
 
 use super::NativePlanningFileSystem;
 
+#[path = "hashline_transaction_fs_linux_coordination.rs"]
+mod coordination;
 #[path = "hashline_transaction_fs_linux_evidence.rs"]
 mod evidence;
 #[path = "hashline_transaction_fs_linux_semantics.rs"]
@@ -40,6 +42,7 @@ use evidence::metadata_snapshot;
 use semantics::ensure_byte_exact_directory;
 
 const READ_BLOCK_BYTES: usize = 64 * 1024;
+const TRANSACTION_SIDECAR_NAME: &[u8] = b".codex-hashline-transactions";
 
 #[derive(Clone, Debug)]
 pub struct NativeRoot {
@@ -272,6 +275,15 @@ fn relative_components(
         return Err(invalid_model_path(
             model_path,
             "path resolves to the selected root",
+        ));
+    }
+    if components
+        .first()
+        .is_some_and(|component| component.as_bytes() == TRANSACTION_SIDECAR_NAME)
+    {
+        return Err(invalid_model_path(
+            model_path,
+            "path uses the reserved Hashline transaction sidecar name",
         ));
     }
     Ok(components)
