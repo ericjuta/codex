@@ -70,7 +70,8 @@ Non-goals for the first version:
 - [x] (2026-07-15 09:34Z) Add canonical model-visible previews, fixed-width SHA-256 wire digests, dual raw/serialized response budgeting, and escape-heavy truncation regressions.
 - [x] (2026-07-15 10:16Z) Complete the typed no-write planner and prove its executor-owned Linux adapter with handle-relative no-follow traversal, stable evidence, bounded reads, directory-chain race detection, and fail-closed path-semantics negotiation.
 - [x] (2026-07-15 11:24Z) Expose preview-only planning through the selected local or remote environment, bind the canonical environment identity at the `Environment` facade, keep executor handles and full file images local, route restricted requests through the filesystem helper sandbox, bound every RPC response/error path, and prove both paths without writes.
-- [ ] Implement the staged executor, durable journal, rollback, and startup recovery.
+- [x] (2026-07-15 12:16Z) Implement the versioned bounded journal, staged executor, guarded per-path commit, reverse ordinary-error rollback, terminal cleanup receipts, and evidence-preserving `RecoveryRequired` state behind the complete transaction capability.
+- [ ] Implement engine-owned startup recovery and restart convergence from every durable transition.
 - [ ] Add the core tool adapter and remote commit/recovery capability boundary.
 - [ ] Run focused, fault-injection, cross-platform, and integration validation.
 - [ ] Record implementation outcomes, review findings, rollout evidence, and residual risks.
@@ -742,6 +743,18 @@ feature must not delete unresolved journals or backups.
   response-bound, typed-error, and helper-routing fixes.
   Remaining: keep the RPC unexposed to the model until the durable executor and gated
   tool adapter are complete.
+- Outcome: the shared engine now executes a fully planned transaction through canonical
+  locking, final deep revalidation, same-filesystem staging/backups, write-ahead mutation
+  progress, parent sync, reverse rollback, cleanup, and terminal journal receipts.
+  Evidence: commits `d589476c42`, `d0717d7137`, and `1d99c97f9c`; 35 passing
+  `codex-hashline-transaction` tests including six deterministic failure scenarios; 17
+  passing Hashline executor-boundary tests; and a findings-only durability review with no
+  remaining P1/P2 findings. The tests prove rollback or evidence-preserving quarantine for
+  stale final validation, forward mutation failure, inverse mutation failure, and journal
+  failure immediately before and after visible mutation.
+  Remaining: the production Linux surface still implements planning only. Add engine-owned
+  restart recovery plus a fail-closed native mutation/storage adapter before exposing commit
+  through the environment RPC or model tool surface.
 
 ## Artifacts and Notes
 
