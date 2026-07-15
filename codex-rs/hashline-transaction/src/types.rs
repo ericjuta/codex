@@ -17,6 +17,7 @@ const DEFAULT_MAX_PREVIEW_BYTES: u64 = 64 * 1024;
 const DEFAULT_MAX_RESPONSE_BYTES: u64 = 256 * 1024;
 const DEFAULT_MAX_MODEL_PATH_BYTES: u64 = 4096;
 const DEFAULT_MAX_EXECUTOR_KEY_BYTES: u64 = 4096;
+const DEFAULT_MAX_JOURNAL_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +51,7 @@ pub struct TransactionLimits {
     pub max_response_bytes: u64,
     pub max_model_path_bytes: u64,
     pub max_executor_key_bytes: u64,
+    pub max_journal_bytes: u64,
 }
 
 impl Default for TransactionLimits {
@@ -65,6 +67,7 @@ impl Default for TransactionLimits {
             max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
             max_model_path_bytes: DEFAULT_MAX_MODEL_PATH_BYTES,
             max_executor_key_bytes: DEFAULT_MAX_EXECUTOR_KEY_BYTES,
+            max_journal_bytes: DEFAULT_MAX_JOURNAL_BYTES,
         }
     }
 }

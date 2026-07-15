@@ -2,6 +2,7 @@
 
 mod capability;
 mod edits;
+mod journal;
 mod limits;
 mod observation;
 mod planner;
@@ -13,7 +14,6 @@ pub use capability::DurablePathKey;
 pub use capability::DurableTransactionKey;
 pub use capability::ExecutorRootIdentity;
 pub use capability::GuardedMutation;
-pub use capability::JournalState;
 pub use capability::MutationOutcome;
 pub use capability::PlanningFileSystem;
 pub use capability::RecoveryOutcome;
@@ -25,6 +25,17 @@ pub use capability::TransactionId;
 pub use capability::TransactionMutation;
 pub use capability::TransactionRecovery;
 pub use capability::TransactionStorage;
+pub use journal::DurableFileEvidence;
+pub use journal::FileEvidence;
+pub use journal::JournalBytes;
+pub use journal::JournalError;
+pub use journal::JournalMutation;
+pub use journal::JournalOperation;
+pub use journal::JournalRecord;
+pub use journal::JournalState;
+pub use journal::MutationProgress;
+pub use journal::StorageRequirements;
+pub use journal::TRANSACTION_JOURNAL_SCHEMA_VERSION;
 pub use observation::ExactBytesDigest;
 pub use observation::ExecutorFileIdentity;
 pub use observation::FileKind;
@@ -67,3 +78,7 @@ mod edits_tests;
 #[cfg(test)]
 #[path = "preview_tests.rs"]
 mod preview_tests;
+
+#[cfg(test)]
+#[path = "journal_tests.rs"]
+mod journal_tests;

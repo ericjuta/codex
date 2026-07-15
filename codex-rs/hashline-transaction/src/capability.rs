@@ -9,6 +9,9 @@ use thiserror::Error;
 use crate::MetadataSnapshot;
 use crate::ObservationLimit;
 use crate::ObservedPath;
+use crate::journal::DurableFileEvidence;
+use crate::journal::JournalBytes;
+use crate::journal::StorageRequirements;
 
 /// Error reported by an executor-owned transaction filesystem capability.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -114,18 +117,6 @@ pub struct DurableTransactionKey {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TransactionId(pub String);
 
-/// Durable transaction state persisted before the corresponding visible operation.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum JournalState {
-    Prepared,
-    Applying,
-    RollingBack,
-    Committed,
-    RolledBack,
-    RecoveryRequired,
-}
-
 /// Request to stage one exact after-image on the destination filesystem.
 #[derive(Debug)]
 pub struct StageFileRequest<'a, P> {
@@ -198,12 +189,12 @@ pub trait TransactionStorage: TransactionCoordination {
     type StagedFile: Debug + Send + Sync;
     type Backup: Debug + Send + Sync;
     type Journal: Debug + Send + Sync;
-    type JournalRecord: Debug + Send + Sync;
 
     fn allocate_storage(
         &self,
         lease: &Self::Lease,
         transaction_id: &TransactionId,
+        requirements: StorageRequirements,
     ) -> impl Future<Output = Result<Self::Storage, TransactionFileSystemError>> + Send;
 
     fn stage_file(
@@ -219,6 +210,21 @@ pub trait TransactionStorage: TransactionCoordination {
         expected: &ObservedPath,
     ) -> impl Future<Output = Result<Self::Backup, TransactionFileSystemError>> + Send;
 
+    fn staged_file_evidence(
+        &self,
+        staged: &Self::StagedFile,
+    ) -> Result<DurableFileEvidence, TransactionFileSystemError>;
+
+    fn backup_evidence(
+        &self,
+        backup: &Self::Backup,
+    ) -> Result<DurableFileEvidence, TransactionFileSystemError>;
+
+    fn durable_root_key(
+        &self,
+        root: &Self::Root,
+    ) -> Result<DurablePathKey, TransactionFileSystemError>;
+
     fn durable_path_key(
         &self,
         path: &Self::ResolvedPath,
@@ -227,8 +233,7 @@ pub trait TransactionStorage: TransactionCoordination {
     fn persist_journal(
         &self,
         storage: &Self::Storage,
-        record: &Self::JournalRecord,
-        state: JournalState,
+        journal: &JournalBytes,
     ) -> impl Future<Output = Result<Self::Journal, TransactionFileSystemError>> + Send;
 
     fn sync_staged_file(
@@ -236,9 +241,19 @@ pub trait TransactionStorage: TransactionCoordination {
         staged: &Self::StagedFile,
     ) -> impl Future<Output = Result<(), TransactionFileSystemError>> + Send;
 
+    fn sync_backup(
+        &self,
+        backup: &Self::Backup,
+    ) -> impl Future<Output = Result<(), TransactionFileSystemError>> + Send;
+
     fn sync_journal(
         &self,
         journal: &Self::Journal,
+    ) -> impl Future<Output = Result<(), TransactionFileSystemError>> + Send;
+
+    fn sync_storage(
+        &self,
+        storage: &Self::Storage,
     ) -> impl Future<Output = Result<(), TransactionFileSystemError>> + Send;
 
     fn cleanup_storage(
