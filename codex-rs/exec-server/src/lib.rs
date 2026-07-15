@@ -12,6 +12,7 @@ mod fs_helper_main;
 mod fs_sandbox;
 mod hashline_transaction_fs;
 mod hashline_transaction_plan;
+mod hashline_transaction_result;
 mod local_file_system;
 mod local_process;
 mod noise_channel;
