@@ -9,7 +9,9 @@ use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecutorFileSystem;
 use crate::RemoveOptions;
+use crate::hashline_transaction_execute::execute_direct as execute_hashline_transaction_direct;
 use crate::hashline_transaction_plan::plan_direct as plan_hashline_transaction_direct;
+use crate::hashline_transaction_recover::recover_direct as recover_hashline_transaction_direct;
 use crate::local_file_system::DirectFileSystem;
 use crate::protocol::FS_CANONICALIZE_METHOD;
 use crate::protocol::FS_COPY_METHOD;
@@ -39,9 +41,15 @@ use crate::protocol::FsWalkParams;
 use crate::protocol::FsWalkResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
+use crate::protocol::HASHLINE_TRANSACTION_EXECUTE_METHOD;
 use crate::protocol::HASHLINE_TRANSACTION_PLAN_METHOD;
+use crate::protocol::HASHLINE_TRANSACTION_RECOVER_METHOD;
+use crate::protocol::HashlineTransactionExecuteParams;
+use crate::protocol::HashlineTransactionExecuteResponse;
 use crate::protocol::HashlineTransactionPlanParams;
 use crate::protocol::HashlineTransactionPlanResponse;
+use crate::protocol::HashlineTransactionRecoverParams;
+use crate::protocol::HashlineTransactionRecoverResponse;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 use crate::rpc::not_found;
@@ -71,12 +79,16 @@ pub(crate) enum FsHelperRequest {
     Copy(FsCopyParams),
     #[serde(rename = "hashlineTransaction/plan")]
     HashlineTransactionPlan(HashlineTransactionPlanParams),
+    #[serde(rename = "hashlineTransaction/execute")]
+    HashlineTransactionExecute(HashlineTransactionExecuteParams),
+    #[serde(rename = "hashlineTransaction/recover")]
+    HashlineTransactionRecover(HashlineTransactionRecoverParams),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", content = "payload", rename_all = "camelCase")]
 pub(crate) enum FsHelperResponse {
-    Ok(FsHelperPayload),
+    Ok(Box<FsHelperPayload>),
     Error(JSONRPCErrorError),
 }
 
@@ -103,6 +115,10 @@ pub(crate) enum FsHelperPayload {
     Copy(FsCopyResponse),
     #[serde(rename = "hashlineTransaction/plan")]
     HashlineTransactionPlan(HashlineTransactionPlanResponse),
+    #[serde(rename = "hashlineTransaction/execute")]
+    HashlineTransactionExecute(HashlineTransactionExecuteResponse),
+    #[serde(rename = "hashlineTransaction/recover")]
+    HashlineTransactionRecover(HashlineTransactionRecoverResponse),
 }
 
 impl FsHelperPayload {
@@ -118,6 +134,8 @@ impl FsHelperPayload {
             Self::Remove(_) => FS_REMOVE_METHOD,
             Self::Copy(_) => FS_COPY_METHOD,
             Self::HashlineTransactionPlan(_) => HASHLINE_TRANSACTION_PLAN_METHOD,
+            Self::HashlineTransactionExecute(_) => HASHLINE_TRANSACTION_EXECUTE_METHOD,
+            Self::HashlineTransactionRecover(_) => HASHLINE_TRANSACTION_RECOVER_METHOD,
         }
     }
 
@@ -207,6 +225,29 @@ impl FsHelperPayload {
             Self::HashlineTransactionPlan(response) => Ok(response),
             other => Err(unexpected_response(
                 HASHLINE_TRANSACTION_PLAN_METHOD,
+                other.operation(),
+            )),
+        }
+    }
+    pub(crate) fn expect_hashline_transaction_execute(
+        self,
+    ) -> Result<HashlineTransactionExecuteResponse, JSONRPCErrorError> {
+        match self {
+            Self::HashlineTransactionExecute(response) => Ok(response),
+            other => Err(unexpected_response(
+                HASHLINE_TRANSACTION_EXECUTE_METHOD,
+                other.operation(),
+            )),
+        }
+    }
+
+    pub(crate) fn expect_hashline_transaction_recover(
+        self,
+    ) -> Result<HashlineTransactionRecoverResponse, JSONRPCErrorError> {
+        match self {
+            Self::HashlineTransactionRecover(response) => Ok(response),
+            other => Err(unexpected_response(
+                HASHLINE_TRANSACTION_RECOVER_METHOD,
                 other.operation(),
             )),
         }
@@ -339,6 +380,16 @@ pub(crate) async fn run_direct_request(
                 .await
                 .map(FsHelperPayload::HashlineTransactionPlan)
         }
+        FsHelperRequest::HashlineTransactionExecute(params) => {
+            execute_hashline_transaction_direct(params)
+                .await
+                .map(FsHelperPayload::HashlineTransactionExecute)
+        }
+        FsHelperRequest::HashlineTransactionRecover(params) => {
+            recover_hashline_transaction_direct(params)
+                .await
+                .map(FsHelperPayload::HashlineTransactionRecover)
+        }
     }
 }
 
@@ -395,9 +446,9 @@ mod tests {
             assert_eq!(request_path, expected_path);
             assert!(request_path.starts_with("file:"));
 
-            let response = serde_json::to_value(FsHelperResponse::Ok(
+            let response = serde_json::to_value(FsHelperResponse::Ok(Box::new(
                 FsHelperPayload::Canonicalize(FsCanonicalizeResponse { path }),
-            ))?;
+            )))?;
             assert_eq!(
                 response,
                 json!({

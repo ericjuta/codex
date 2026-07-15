@@ -31,9 +31,13 @@ use crate::protocol::FsReadFileParams;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsWalkParams;
 use crate::protocol::FsWriteFileParams;
+use crate::protocol::HASHLINE_TRANSACTION_EXECUTE_METHOD;
 use crate::protocol::HASHLINE_TRANSACTION_PLAN_METHOD;
+use crate::protocol::HASHLINE_TRANSACTION_RECOVER_METHOD;
 use crate::protocol::HTTP_REQUEST_METHOD;
+use crate::protocol::HashlineTransactionExecuteParams;
 use crate::protocol::HashlineTransactionPlanParams;
+use crate::protocol::HashlineTransactionRecoverParams;
 use crate::protocol::HttpRequestParams;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
@@ -173,6 +177,18 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         HASHLINE_TRANSACTION_PLAN_METHOD,
         |handler: Arc<ExecServerHandler>, params: HashlineTransactionPlanParams| async move {
             handler.hashline_transaction_plan(params).await
+        },
+    );
+    router.request_with_integer_id(
+        HASHLINE_TRANSACTION_EXECUTE_METHOD,
+        |handler: Arc<ExecServerHandler>, params: HashlineTransactionExecuteParams| async move {
+            handler.hashline_transaction_execute(params).await
+        },
+    );
+    router.request_with_integer_id(
+        HASHLINE_TRANSACTION_RECOVER_METHOD,
+        |handler: Arc<ExecServerHandler>, params: HashlineTransactionRecoverParams| async move {
+            handler.hashline_transaction_recover(params).await
         },
     );
     router

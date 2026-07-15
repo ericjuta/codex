@@ -31,12 +31,20 @@ use super::NativePlanningFileSystem;
 mod coordination;
 #[path = "hashline_transaction_fs_linux_evidence.rs"]
 mod evidence;
+#[path = "hashline_transaction_fs_linux_mutation.rs"]
+mod mutation;
+#[path = "hashline_transaction_fs_linux_recovery.rs"]
+mod recovery;
+#[path = "hashline_transaction_fs_linux_recovery_io.rs"]
+mod recovery_io;
+#[path = "hashline_transaction_fs_linux_recovery_scan.rs"]
+mod recovery_scan;
 #[path = "hashline_transaction_fs_linux_semantics.rs"]
 mod semantics;
-#[path = "hashline_transaction_fs_linux_storage_io.rs"]
-mod storage_io;
 #[path = "hashline_transaction_fs_linux_storage.rs"]
 mod storage;
+#[path = "hashline_transaction_fs_linux_storage_io.rs"]
+mod storage_io;
 
 use evidence::canonical_path_key;
 use evidence::file_kind;
@@ -184,6 +192,14 @@ fn resolve(
     model_path: &str,
 ) -> Result<NativeResolvedPath, TransactionFileSystemError> {
     let components = relative_components(root, model_path)?;
+    resolve_components(root, &components, model_path)
+}
+
+fn resolve_components(
+    root: &NativeRoot,
+    components: &[OsString],
+    model_path: &str,
+) -> Result<NativeResolvedPath, TransactionFileSystemError> {
     let Some((final_component, parents)) = components.split_last() else {
         return Err(invalid_model_path(
             model_path,

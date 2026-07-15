@@ -14,7 +14,9 @@ use tokio_util::task::TaskTracker;
 use crate::ExecServerRuntimePaths;
 use crate::client::http_client::PendingReqwestHttpBodyStream;
 use crate::client::http_client::ReqwestHttpRequestRunner;
+use crate::hashline_transaction_execute::HashlineTransactionExecutor;
 use crate::hashline_transaction_plan::HashlineTransactionPlanner;
+use crate::hashline_transaction_recover::HashlineTransactionRecoverer;
 use crate::protocol::EnvironmentInfo;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
@@ -42,8 +44,12 @@ use crate::protocol::FsWalkParams;
 use crate::protocol::FsWalkResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
+use crate::protocol::HashlineTransactionExecuteParams;
+use crate::protocol::HashlineTransactionExecuteResponse;
 use crate::protocol::HashlineTransactionPlanParams;
 use crate::protocol::HashlineTransactionPlanResponse;
+use crate::protocol::HashlineTransactionRecoverParams;
+use crate::protocol::HashlineTransactionRecoverResponse;
 use crate::protocol::HttpRequestParams;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
@@ -71,7 +77,9 @@ pub(crate) struct ExecServerHandler {
     background_task_shutdown: CancellationToken,
     background_tasks: TaskTracker,
     file_system: FileSystemHandler,
+    hashline_transaction_executor: HashlineTransactionExecutor,
     hashline_transaction: HashlineTransactionPlanner,
+    hashline_transaction_recoverer: HashlineTransactionRecoverer,
     runtime_paths: ExecServerRuntimePaths,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
@@ -91,7 +99,11 @@ impl ExecServerHandler {
             background_task_shutdown: CancellationToken::new(),
             background_tasks: TaskTracker::new(),
             file_system: FileSystemHandler::new(runtime_paths.clone()),
+            hashline_transaction_executor: HashlineTransactionExecutor::new(runtime_paths.clone()),
             hashline_transaction: HashlineTransactionPlanner::new(runtime_paths.clone()),
+            hashline_transaction_recoverer: HashlineTransactionRecoverer::new(
+                runtime_paths.clone(),
+            ),
             runtime_paths,
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
@@ -348,6 +360,22 @@ impl ExecServerHandler {
     ) -> Result<HashlineTransactionPlanResponse, JSONRPCErrorError> {
         self.require_initialized_for("Hashline transaction planning")?;
         self.hashline_transaction.plan(params).await
+    }
+
+    pub(crate) async fn hashline_transaction_execute(
+        &self,
+        params: HashlineTransactionExecuteParams,
+    ) -> Result<HashlineTransactionExecuteResponse, JSONRPCErrorError> {
+        self.require_initialized_for("Hashline transaction execution")?;
+        self.hashline_transaction_executor.execute(params).await
+    }
+
+    pub(crate) async fn hashline_transaction_recover(
+        &self,
+        params: HashlineTransactionRecoverParams,
+    ) -> Result<HashlineTransactionRecoverResponse, JSONRPCErrorError> {
+        self.require_initialized_for("Hashline transaction recovery")?;
+        self.hashline_transaction_recoverer.recover(params).await
     }
 
     fn require_initialized_for(

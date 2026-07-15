@@ -33,7 +33,7 @@ async fn run_main() -> Result<(), Box<dyn Error + Send + Sync>> {
     io::stdin().read_to_end(&mut input).await?;
     let request: FsHelperRequest = serde_json::from_slice(&input)?;
     let response = match run_direct_request(request).await {
-        Ok(payload) => FsHelperResponse::Ok(payload),
+        Ok(payload) => FsHelperResponse::Ok(Box::new(payload)),
         Err(error) => FsHelperResponse::Error(error),
     };
     let mut stdout = io::stdout();

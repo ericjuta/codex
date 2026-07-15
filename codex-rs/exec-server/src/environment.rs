@@ -30,7 +30,9 @@ use tokio_util::task::AbortOnDropHandle;
 
 #[path = "environment_hashline_transaction.rs"]
 mod hashline_transaction;
+pub use hashline_transaction::HashlineTransactionExecuteRequest;
 pub use hashline_transaction::HashlineTransactionPlanRequest;
+pub use hashline_transaction::HashlineTransactionRecoverRequest;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 pub const CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR: &str =

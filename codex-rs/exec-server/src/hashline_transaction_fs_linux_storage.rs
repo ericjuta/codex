@@ -4,7 +4,9 @@ use std::fs::File;
 use std::io;
 use std::io::Write;
 use std::num::NonZeroU64;
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
@@ -25,6 +27,7 @@ use codex_hashline_transaction::TransactionStorage;
 
 use super::NativeResolvedPath;
 use super::NativeRoot;
+use super::file_kind;
 use super::observe;
 use super::run_blocking;
 use super::storage_io::apply_staged_metadata;
@@ -34,6 +37,7 @@ use super::storage_io::changed_since_planning;
 use super::storage_io::create_directory;
 use super::storage_io::create_exclusive_file;
 use super::storage_io::open_internal_directory;
+use super::storage_io::open_internal_file_read_write;
 use super::storage_io::open_or_create_sidecar;
 use super::storage_io::platform_error;
 use super::storage_io::push_key_part;
@@ -75,7 +79,7 @@ pub struct NativeStagedFile {
     pub(super) parent: Arc<File>,
     pub(super) name: OsString,
     pub(super) file: Arc<File>,
-    evidence: DurableFileEvidence,
+    pub(super) evidence: DurableFileEvidence,
 }
 
 #[derive(Clone, Debug)]
@@ -83,7 +87,7 @@ pub struct NativeBackup {
     pub(super) parent: Arc<File>,
     pub(super) name: OsString,
     pub(super) file: Arc<File>,
-    evidence: DurableFileEvidence,
+    pub(super) evidence: DurableFileEvidence,
 }
 
 #[derive(Clone, Debug)]
@@ -219,10 +223,7 @@ impl TransactionStorage for NativeTransactionFileSystem {
         run_blocking("sync staged transaction file", move || sync_file(&file)).await
     }
 
-    async fn sync_backup(
-        &self,
-        backup: &Self::Backup,
-    ) -> Result<(), TransactionFileSystemError> {
+    async fn sync_backup(&self, backup: &Self::Backup) -> Result<(), TransactionFileSystemError> {
         let file = Arc::clone(&backup.file);
         run_blocking("sync transaction backup", move || sync_file(&file)).await
     }
@@ -255,6 +256,70 @@ impl TransactionStorage for NativeTransactionFileSystem {
     }
 }
 
+/// Reopens validated durable storage while recovery owns the transaction lease.
+pub(super) fn reopen_storage(
+    root: NativeRoot,
+    transaction_id: TransactionId,
+) -> Result<NativeStorage, TransactionFileSystemError> {
+    validate_transaction_id(&transaction_id)?;
+    let sidecar = Arc::new(open_or_create_sidecar(&root)?);
+    let transaction_name = OsStr::new(&transaction_id.0);
+    let directory = Arc::new(open_internal_directory(&sidecar, transaction_name)?);
+    validate_internal_directory(&root, &directory)?;
+    let staged_directory = Arc::new(open_internal_directory(
+        &directory,
+        OsStr::from_bytes(STAGED_DIRECTORY_NAME),
+    )?);
+    let backup_directory = Arc::new(open_internal_directory(
+        &directory,
+        OsStr::from_bytes(BACKUP_DIRECTORY_NAME),
+    )?);
+    validate_internal_directory(&root, &staged_directory)?;
+    validate_internal_directory(&root, &backup_directory)?;
+    let reservation = open_internal_file_read_write(
+        &directory,
+        OsStr::from_bytes(RESERVATION_FILE_NAME),
+        "open transaction reservation",
+    )?;
+    let reservation_metadata = reservation
+        .metadata()
+        .map_err(|error| platform_error("inspect transaction reservation", error))?;
+    let root_metadata = root
+        .directory
+        .metadata()
+        .map_err(|error| platform_error("inspect transaction root", error))?;
+    if file_kind(&reservation_metadata) != FileKind::File
+        || reservation_metadata.nlink() != 1
+        || reservation_metadata.dev() != root_metadata.dev()
+        || reservation_metadata.uid() != unsafe { libc::geteuid() }
+        || reservation_metadata.mode() & 0o077 != 0
+    {
+        return Err(storage_error(
+            "transaction reservation is not a private same-filesystem regular file",
+        ));
+    }
+    let requirements = StorageRequirements {
+        staged_bytes: u64::MAX,
+        backup_bytes: u64::MAX,
+        journal_bytes: u64::MAX,
+    };
+    Ok(NativeStorage {
+        root,
+        sidecar,
+        directory,
+        staged_directory,
+        backup_directory,
+        _reservation: Arc::new(reservation),
+        transaction_id,
+        requirements,
+        budget: Arc::new(Mutex::new(StorageBudget {
+            staged_remaining: u64::MAX,
+            backup_remaining: u64::MAX,
+        })),
+        next_artifact: Arc::new(AtomicU64::new(0)),
+    })
+}
+
 fn allocate_storage(
     root: NativeRoot,
     transaction_id: TransactionId,
@@ -273,8 +338,16 @@ fn allocate_storage(
     create_directory(&sidecar, transaction_name, "allocate transaction storage")?;
     let directory = Arc::new(open_internal_directory(&sidecar, transaction_name)?);
     validate_internal_directory(&root, &directory)?;
-    create_directory(&directory, OsStr::from_bytes(STAGED_DIRECTORY_NAME), "create staged directory")?;
-    create_directory(&directory, OsStr::from_bytes(BACKUP_DIRECTORY_NAME), "create backup directory")?;
+    create_directory(
+        &directory,
+        OsStr::from_bytes(STAGED_DIRECTORY_NAME),
+        "create staged directory",
+    )?;
+    create_directory(
+        &directory,
+        OsStr::from_bytes(BACKUP_DIRECTORY_NAME),
+        "create backup directory",
+    )?;
     let staged_directory = Arc::new(open_internal_directory(
         &directory,
         OsStr::from_bytes(STAGED_DIRECTORY_NAME),
@@ -290,6 +363,7 @@ fn allocate_storage(
         OsStr::from_bytes(RESERVATION_FILE_NAME),
         "reserve transaction capacity",
     )?);
+    lock_storage(&reservation)?;
     reserve_capacity(&reservation, reserved_bytes)?;
     reservation
         .sync_all()
@@ -333,10 +407,13 @@ fn stage_file(
         .lock()
         .map_err(|_| storage_error("transaction storage budget lock is poisoned"))?;
     if byte_count > budget.staged_remaining {
-        return Err(storage_error("staged bytes exceed the reserved transaction budget"));
+        return Err(storage_error(
+            "staged bytes exceed the reserved transaction budget",
+        ));
     }
     let name = artifact_name("staged", &storage.next_artifact);
-    let mut file = create_exclusive_file(&storage.staged_directory, &name, "stage transaction file")?;
+    let mut file =
+        create_exclusive_file(&storage.staged_directory, &name, "stage transaction file")?;
     file.write_all(contents)
         .map_err(|error| platform_error("write staged transaction file", error))?;
     apply_staged_metadata(&file, metadata)?;
@@ -380,7 +457,8 @@ fn backup_file(
     }
     let byte_count = observed.contents.len() as u64;
     let name = artifact_name("backup", &storage.next_artifact);
-    let mut file = create_exclusive_file(&storage.backup_directory, &name, "backup transaction file")?;
+    let mut file =
+        create_exclusive_file(&storage.backup_directory, &name, "backup transaction file")?;
     file.write_all(&observed.contents)
         .map_err(|error| platform_error("write transaction backup", error))?;
     apply_staged_metadata(&file, Some(&expected.metadata))?;
@@ -399,7 +477,9 @@ fn persist_journal(
     bytes: &[u8],
 ) -> Result<NativeJournal, TransactionFileSystemError> {
     if bytes.len() as u64 > storage.requirements.journal_bytes {
-        return Err(storage_error("journal bytes exceed the reserved transaction budget"));
+        return Err(storage_error(
+            "journal bytes exceed the reserved transaction budget",
+        ));
     }
     let temporary_name = artifact_name("journal-tmp", &storage.next_artifact);
     let mut file = create_exclusive_file(
@@ -454,16 +534,29 @@ fn sync_storage(storage: &NativeStorage) -> Result<(), TransactionFileSystemErro
 fn cleanup_artifacts(storage: &NativeStorage) -> Result<(), TransactionFileSystemError> {
     remove_directory_contents(&storage.staged_directory)?;
     remove_directory_contents(&storage.backup_directory)?;
-    match unlink_at(
-        &storage.directory,
-        OsStr::from_bytes(RESERVATION_FILE_NAME),
-    ) {
-        Ok(()) => {}
-        Err(TransactionFileSystemError::Platform { reason, .. })
-            if reason == io::Error::from_raw_os_error(libc::ENOENT).to_string() => {}
-        Err(error) => return Err(error),
-    }
+    storage
+        ._reservation
+        .set_len(0)
+        .map_err(|error| platform_error("release transaction reservation", error))?;
+    storage
+        ._reservation
+        .sync_all()
+        .map_err(|error| platform_error("sync transaction reservation", error))?;
     sync_storage(storage)
+}
+
+fn lock_storage(file: &File) -> Result<(), TransactionFileSystemError> {
+    loop {
+        // SAFETY: `file` owns a live descriptor and `NativeStorage` retains it for the
+        // transaction lifetime, so the lock is released only after commit or recovery exits.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(platform_error("lock transaction storage", error));
+        }
+    }
 }
 
 #[cfg(test)]

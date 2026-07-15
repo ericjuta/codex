@@ -49,6 +49,8 @@ pub const HASHLINE_TRANSACTION_MAX_RESPONSE_BYTES: u64 = 256 * 1024;
 pub const HASHLINE_TRANSACTION_RPC_RESPONSE_OVERHEAD_BYTES: u64 = 128;
 /// Maximum UTF-8 error message size returned by Hashline transaction planning.
 pub const HASHLINE_TRANSACTION_MAX_ERROR_MESSAGE_BYTES: usize = 4 * 1024;
+/// Maximum root-scoped recovery attempts returned by one RPC.
+pub const HASHLINE_TRANSACTION_MAX_RECOVERY_ATTEMPTS: u64 = 64;
 /// The transaction request is malformed or violates a planning invariant.
 pub const HASHLINE_TRANSACTION_INVALID_REQUEST_ERROR_CODE: i64 = -32602;
 /// The selected executor does not provide the requested transaction capability.

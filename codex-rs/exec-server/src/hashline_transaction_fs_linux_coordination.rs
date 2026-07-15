@@ -35,6 +35,22 @@ impl NativeLease {
     pub(super) fn root(&self) -> &NativeRoot {
         &self.root
     }
+    pub(super) fn require_path(
+        &self,
+        path: &NativeResolvedPath,
+        operation: &'static str,
+    ) -> Result<(), TransactionFileSystemError> {
+        if self.root_identity != path.root_identity || !self.covered_paths.contains(&path.key) {
+            return Err(TransactionFileSystemError::Platform {
+                operation,
+                reason: format!(
+                    "path `{}` is not covered by the retained transaction lease",
+                    path.model_path
+                ),
+            });
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]

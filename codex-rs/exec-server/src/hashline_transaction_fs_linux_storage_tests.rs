@@ -1,6 +1,9 @@
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use codex_hashline_transaction::FileEvidence;
 use codex_hashline_transaction::JournalBytes;
@@ -12,6 +15,7 @@ use codex_hashline_transaction::StorageRequirements;
 use codex_hashline_transaction::TransactionCoordination;
 use codex_hashline_transaction::TransactionFileSystemError;
 use codex_hashline_transaction::TransactionId;
+use codex_hashline_transaction::TransactionRecovery;
 use codex_hashline_transaction::TransactionStorage;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -25,6 +29,65 @@ fn root_uri(temp: &TempDir) -> PathUri {
     let root = AbsolutePathBuf::from_absolute_path_checked(temp.path())
         .unwrap_or_else(|error| panic!("temporary directory should be absolute: {error}"));
     PathUri::from_abs_path(&root)
+}
+
+#[tokio::test]
+async fn recovery_waits_for_the_active_transaction_reservation() {
+    let temp = tempfile::tempdir().expect("create transaction root");
+    let storage = allocate(
+        &temp,
+        "txn-recovery-lock",
+        StorageRequirements {
+            staged_bytes: 8,
+            backup_bytes: 8,
+            journal_bytes: 64,
+        },
+    )
+    .await;
+    let file_system = file_system(&temp);
+    let key = file_system
+        .durable_transaction_key(&storage)
+        .expect("read durable transaction key");
+    let root = root_uri(&temp);
+    let (started_tx, started_rx) = mpsc::sync_channel(/*bound*/ 1);
+    let (acquired_tx, acquired_rx) = mpsc::sync_channel(/*bound*/ 1);
+    let worker = thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("create recovery worker runtime");
+        let result = runtime.block_on(async move {
+            let recovery_file_system =
+                NativeTransactionFileSystem::new("local-test-environment".to_string(), root);
+            started_tx.send(()).expect("report recovery start");
+            let recovered_storage = recovery_file_system
+                .lock_recovery_storage(&key)
+                .await
+                .map_err(|error| error.to_string())?;
+            drop(recovered_storage);
+            Ok::<(), String>(())
+        });
+        acquired_tx.send(result).expect("report recovery result");
+    });
+
+    started_rx
+        .recv_timeout(Duration::from_secs(/*secs*/ 5))
+        .expect("recovery worker should start");
+    assert!(
+        matches!(
+            acquired_rx.recv_timeout(Duration::from_millis(/*millis*/ 250)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "recovery must wait while the active transaction owns its reservation"
+    );
+    drop(storage);
+    assert_eq!(
+        acquired_rx
+            .recv_timeout(Duration::from_secs(/*secs*/ 5))
+            .expect("recovery should acquire after active transaction release"),
+        Ok(())
+    );
+    worker.join().expect("join recovery worker");
 }
 
 fn file_system(temp: &TempDir) -> NativeTransactionFileSystem {
@@ -105,7 +168,11 @@ async fn allocates_owner_only_storage_and_rejects_duplicate_or_invalid_ids() {
         }
     ));
     let invalid = file_system
-        .allocate_storage(&lease, &TransactionId("../escape".to_string()), requirements)
+        .allocate_storage(
+            &lease,
+            &TransactionId("../escape".to_string()),
+            requirements,
+        )
         .await
         .expect_err("invalid transaction ID must fail");
     assert!(matches!(
@@ -203,7 +270,10 @@ async fn stages_and_backs_up_exact_bytes_with_bounded_capacity() {
             expected.kind,
         )
     );
-    assert_eq!(backup_evidence.identity.namespace, expected.identity.namespace);
+    assert_eq!(
+        backup_evidence.identity.namespace,
+        expected.identity.namespace
+    );
     assert_eq!(
         fs::read(
             temp.path()
@@ -226,10 +296,7 @@ async fn stages_and_backs_up_exact_bytes_with_bounded_capacity() {
         .sync_staged_file(&staged)
         .await
         .expect("sync staged file");
-    file_system
-        .sync_backup(&backup)
-        .await
-        .expect("sync backup");
+    file_system.sync_backup(&backup).await.expect("sync backup");
     file_system
         .sync_storage(&storage)
         .await
@@ -300,9 +367,7 @@ async fn atomically_replaces_journal_and_cleanup_preserves_it() {
         .await
         .expect("sync journal");
 
-    let transaction_directory = temp
-        .path()
-        .join(".codex-hashline-transactions/txn-journal");
+    let transaction_directory = temp.path().join(".codex-hashline-transactions/txn-journal");
     assert_eq!(
         fs::read(transaction_directory.join("journal")).expect("read current journal"),
         b"second"
@@ -311,9 +376,11 @@ async fn atomically_replaces_journal_and_cleanup_preserves_it() {
         .expect("enumerate transaction directory")
         .map(|entry| entry.expect("read transaction entry").file_name())
         .collect::<Vec<OsString>>();
-    assert!(!names
-        .iter()
-        .any(|name| name.to_string_lossy().starts_with("journal-tmp-")));
+    assert!(
+        !names
+            .iter()
+            .any(|name| name.to_string_lossy().starts_with("journal-tmp-"))
+    );
 
     file_system
         .cleanup_artifacts(&storage)
@@ -324,7 +391,12 @@ async fn atomically_replaces_journal_and_cleanup_preserves_it() {
         fs::read(transaction_directory.join("journal")).expect("journal should remain"),
         b"second"
     );
-    assert!(!transaction_directory.join("reservation").exists());
+    assert_eq!(
+        fs::metadata(transaction_directory.join("reservation"))
+            .expect("reservation receipt should remain")
+            .len(),
+        0
+    );
     assert_eq!(
         fs::read_dir(transaction_directory.join("staged"))
             .expect("enumerate staged directory")

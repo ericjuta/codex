@@ -320,7 +320,7 @@ async fn run_command(
     }
     let response: FsHelperResponse = serde_json::from_slice(&output.stdout).map_err(json_error)?;
     match response {
-        FsHelperResponse::Ok(payload) => Ok(payload),
+        FsHelperResponse::Ok(payload) => Ok(*payload),
         FsHelperResponse::Error(error) => Err(error),
     }
 }

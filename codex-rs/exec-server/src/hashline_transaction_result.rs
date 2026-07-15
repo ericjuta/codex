@@ -23,6 +23,8 @@ use codex_hashline_transaction::RecoveryFailure;
 use codex_hashline_transaction::RecoveryOutcome;
 use codex_hashline_transaction::TransactionFileSystemError;
 
+const RECOVERY_FAILURE_MESSAGE_BYTES: usize = 1024;
+
 pub(crate) fn execution_response(
     preview: PlanPreview,
     result: ExecutionResult,
@@ -101,13 +103,22 @@ pub(crate) fn recovery_response(
             }) => HashlineTransactionRecoveryAttempt::RecoveryRequired {
                 transaction_id,
                 failure: recovery_failure(&failure),
-                record_failure: record_failure
-                    .as_ref()
-                    .map(recovery_failure),
+                record_failure: record_failure.as_ref().map(recovery_failure),
             },
         })
         .collect();
     HashlineTransactionRecoverResponse { attempts }
+}
+
+pub(crate) fn recovery_gate_error(attempts: Vec<RecoveryAttempt>) -> Option<JSONRPCErrorError> {
+    if attempts.iter().all(|attempt| attempt.result.is_ok()) {
+        return None;
+    }
+    Some(rpc_error(
+        HASHLINE_TRANSACTION_RECOVERY_REQUIRED_ERROR_CODE,
+        "unfinished transaction requires executor recovery".to_string(),
+        serde_json::to_value(recovery_response(attempts)).ok(),
+    ))
 }
 
 pub(crate) fn recovery_scan_error(failure: RecoveryFailure) -> JSONRPCErrorError {
@@ -148,7 +159,7 @@ fn recovery_failure(failure: &RecoveryFailure) -> HashlineTransactionFailure {
     };
     HashlineTransactionFailure {
         kind,
-        message: bounded_message(failure.to_string()),
+        message: bounded_message_to(failure.to_string(), RECOVERY_FAILURE_MESSAGE_BYTES),
     }
 }
 
@@ -185,12 +196,16 @@ fn rpc_error(code: i64, message: String, data: Option<serde_json::Value>) -> JSO
 }
 
 fn bounded_message(message: String) -> String {
+    bounded_message_to(message, HASHLINE_TRANSACTION_MAX_ERROR_MESSAGE_BYTES)
+}
+
+fn bounded_message_to(message: String, max_bytes: usize) -> String {
     const TRUNCATION_MARKER: &str = "...[truncated]";
-    if message.len() <= HASHLINE_TRANSACTION_MAX_ERROR_MESSAGE_BYTES {
+    if message.len() <= max_bytes {
         return message;
     }
 
-    let mut end = HASHLINE_TRANSACTION_MAX_ERROR_MESSAGE_BYTES - TRUNCATION_MARKER.len();
+    let mut end = max_bytes - TRUNCATION_MARKER.len();
     while !message.is_char_boundary(end) {
         end -= 1;
     }

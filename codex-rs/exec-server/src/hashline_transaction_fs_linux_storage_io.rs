@@ -35,7 +35,7 @@ use super::open_component;
 use super::storage::NativeStorage;
 
 const MAX_TRANSACTION_ID_BYTES: usize = 128;
-const ARTIFACT_KEY_NAMESPACE: &str = "linux-hashline-artifact-v1";
+pub(super) const ARTIFACT_KEY_NAMESPACE: &str = "linux-hashline-artifact-v1";
 
 pub(super) fn open_or_create_sidecar(
     root: &NativeRoot,
@@ -134,10 +134,24 @@ pub(super) fn create_exclusive_file(
     Ok(unsafe { File::from_raw_fd(descriptor) })
 }
 
-pub(super) fn reserve_capacity(
-    file: &File,
-    bytes: i64,
-) -> Result<(), TransactionFileSystemError> {
+pub(super) fn open_internal_file_read_write(
+    parent: &File,
+    name: &OsStr,
+    operation: &'static str,
+) -> Result<File, TransactionFileSystemError> {
+    let name = c_string(name, operation)?;
+    let flags = libc::O_RDWR | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK;
+    // SAFETY: `name` is NUL-terminated, `parent` owns a live descriptor, and a successful
+    // descriptor is transferred exactly once into `File`.
+    let descriptor = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+    if descriptor < 0 {
+        return Err(platform_error(operation, io::Error::last_os_error()));
+    }
+    // SAFETY: `openat` returned a new owned descriptor.
+    Ok(unsafe { File::from_raw_fd(descriptor) })
+}
+
+pub(super) fn reserve_capacity(file: &File, bytes: i64) -> Result<(), TransactionFileSystemError> {
     loop {
         // SAFETY: `file` owns a writable descriptor and the offset/length are nonnegative.
         let result = unsafe { libc::posix_fallocate(file.as_raw_fd(), 0, bytes) };
@@ -252,22 +266,44 @@ fn decode_metadata(
         });
     }
     if metadata.value.len() != 28 {
-        return Err(TransactionFileSystemError::Unsupported {
-            capability: "restore Linux transaction metadata",
-            reason: "Linux metadata snapshot has invalid width".to_string(),
-        });
+        return Err(invalid_metadata_width());
     }
-    let mode = u32::from_le_bytes(metadata.value[0..4].try_into().expect("fixed metadata width"));
-    let uid = u32::from_le_bytes(metadata.value[4..8].try_into().expect("fixed metadata width"));
-    let gid = u32::from_le_bytes(metadata.value[8..12].try_into().expect("fixed metadata width"));
-    let seconds =
-        i64::from_le_bytes(metadata.value[12..20].try_into().expect("fixed metadata width"));
-    let nanoseconds =
-        i64::from_le_bytes(metadata.value[20..28].try_into().expect("fixed metadata width"));
+    let decode_u32 = |range: std::ops::Range<usize>| -> Result<u32, TransactionFileSystemError> {
+        let bytes: [u8; 4] = metadata
+            .value
+            .get(range)
+            .ok_or_else(invalid_metadata_width)?
+            .try_into()
+            .map_err(|_| invalid_metadata_width())?;
+        Ok(u32::from_le_bytes(bytes))
+    };
+    let decode_i64 = |range: std::ops::Range<usize>| -> Result<i64, TransactionFileSystemError> {
+        let bytes: [u8; 8] = metadata
+            .value
+            .get(range)
+            .ok_or_else(invalid_metadata_width)?
+            .try_into()
+            .map_err(|_| invalid_metadata_width())?;
+        Ok(i64::from_le_bytes(bytes))
+    };
+    let mode = decode_u32(0..4)?;
+    let uid = decode_u32(4..8)?;
+    let gid = decode_u32(8..12)?;
+    let seconds = decode_i64(12..20)?;
+    let nanoseconds = decode_i64(20..28)?;
     if !(0..1_000_000_000).contains(&nanoseconds) {
-        return Err(storage_error("metadata modification nanoseconds are invalid"));
+        return Err(storage_error(
+            "metadata modification nanoseconds are invalid",
+        ));
     }
     Ok((mode, uid, gid, seconds, nanoseconds))
+}
+
+fn invalid_metadata_width() -> TransactionFileSystemError {
+    TransactionFileSystemError::Unsupported {
+        capability: "restore Linux transaction metadata",
+        reason: "Linux metadata snapshot has invalid width".to_string(),
+    }
 }
 
 fn artifact_key(
@@ -352,10 +388,7 @@ pub(super) fn rename_at(
     }
 }
 
-pub(super) fn unlink_at(
-    parent: &File,
-    name: &OsStr,
-) -> Result<(), TransactionFileSystemError> {
+pub(super) fn unlink_at(parent: &File, name: &OsStr) -> Result<(), TransactionFileSystemError> {
     let name = c_string(name, "remove transaction artifact")?;
     // SAFETY: `name` is NUL-terminated and `parent` owns a live descriptor.
     let result = unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0) };
@@ -419,10 +452,7 @@ pub(super) fn remove_directory_contents(
         .map_err(|error| platform_error("sync transaction artifact directory", error))
 }
 
-fn c_string(
-    name: &OsStr,
-    operation: &'static str,
-) -> Result<CString, TransactionFileSystemError> {
+fn c_string(name: &OsStr, operation: &'static str) -> Result<CString, TransactionFileSystemError> {
     CString::new(name.as_bytes()).map_err(|_| TransactionFileSystemError::Platform {
         operation,
         reason: "internal transaction path contains NUL".to_string(),

@@ -85,10 +85,16 @@ use crate::protocol::FsWalkParams;
 use crate::protocol::FsWalkResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
+use crate::protocol::HASHLINE_TRANSACTION_EXECUTE_METHOD;
 use crate::protocol::HASHLINE_TRANSACTION_PLAN_METHOD;
+use crate::protocol::HASHLINE_TRANSACTION_RECOVER_METHOD;
 use crate::protocol::HTTP_REQUEST_BODY_DELTA_METHOD;
+use crate::protocol::HashlineTransactionExecuteParams;
+use crate::protocol::HashlineTransactionExecuteResponse;
 use crate::protocol::HashlineTransactionPlanParams;
 use crate::protocol::HashlineTransactionPlanResponse;
+use crate::protocol::HashlineTransactionRecoverParams;
+use crate::protocol::HashlineTransactionRecoverResponse;
 use crate::protocol::HttpRequestBodyDeltaNotification;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
@@ -467,6 +473,20 @@ impl LazyRemoteExecServerClient {
     ) -> Result<HashlineTransactionPlanResponse, ExecServerError> {
         self.get().await?.hashline_transaction_plan(params).await
     }
+
+    pub(crate) async fn hashline_transaction_execute(
+        &self,
+        params: HashlineTransactionExecuteParams,
+    ) -> Result<HashlineTransactionExecuteResponse, ExecServerError> {
+        self.get().await?.hashline_transaction_execute(params).await
+    }
+
+    pub(crate) async fn hashline_transaction_recover(
+        &self,
+        params: HashlineTransactionRecoverParams,
+    ) -> Result<HashlineTransactionRecoverResponse, ExecServerError> {
+        self.get().await?.hashline_transaction_recover(params).await
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -740,6 +760,22 @@ impl ExecServerClient {
         params: HashlineTransactionPlanParams,
     ) -> Result<HashlineTransactionPlanResponse, ExecServerError> {
         self.call(HASHLINE_TRANSACTION_PLAN_METHOD, &params).await
+    }
+
+    pub(crate) async fn hashline_transaction_execute(
+        &self,
+        params: HashlineTransactionExecuteParams,
+    ) -> Result<HashlineTransactionExecuteResponse, ExecServerError> {
+        self.call(HASHLINE_TRANSACTION_EXECUTE_METHOD, &params)
+            .await
+    }
+
+    pub(crate) async fn hashline_transaction_recover(
+        &self,
+        params: HashlineTransactionRecoverParams,
+    ) -> Result<HashlineTransactionRecoverResponse, ExecServerError> {
+        self.call(HASHLINE_TRANSACTION_RECOVER_METHOD, &params)
+            .await
     }
 
     pub(crate) async fn start_process(
