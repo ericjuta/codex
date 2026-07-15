@@ -86,7 +86,14 @@ impl SelectedExecutorPluginMcpContributor {
         };
         let metadata = match plugin {
             Some(plugin) => {
-                let servers = self.mcp_provider.load(&plugin).await.unwrap_or_else(|err| {
+                // MCP server declarations and app connector declarations are separate
+                // executor-owned files. Read them together so a remote environment only
+                // pays for the slower read instead of both reads back-to-back.
+                let (servers, connector_declarations) = tokio::join!(
+                    self.mcp_provider.load(&plugin),
+                    self.connector_provider.load(&plugin)
+                );
+                let servers = servers.unwrap_or_else(|err| {
                     tracing::warn!(
                         selected_root = selected_root.id,
                         error = %err,
@@ -94,10 +101,7 @@ impl SelectedExecutorPluginMcpContributor {
                     );
                     Vec::new()
                 });
-                let connector_ids = self
-                    .connector_provider
-                    .load(&plugin)
-                    .await
+                let connector_ids = connector_declarations
                     .unwrap_or_else(|err| {
                         tracing::warn!(
                             selected_root = selected_root.id,
