@@ -124,3 +124,7 @@ mod executor_test_recovery;
 #[cfg(test)]
 #[path = "executor_tests.rs"]
 mod executor_tests;
+
+#[cfg(test)]
+#[path = "recovery_tests.rs"]
+mod recovery_tests;
