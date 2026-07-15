@@ -128,3 +128,19 @@ mod executor_tests;
 #[cfg(test)]
 #[path = "recovery_tests.rs"]
 mod recovery_tests;
+
+#[cfg(test)]
+#[path = "recovery_before_apply_tests.rs"]
+mod recovery_before_apply_tests;
+
+#[cfg(test)]
+#[path = "recovery_scan_tests.rs"]
+mod recovery_scan_tests;
+
+#[cfg(test)]
+#[path = "recovery_storage_tests.rs"]
+mod recovery_storage_tests;
+
+#[cfg(test)]
+#[path = "recovery_terminal_tests.rs"]
+mod recovery_terminal_tests;
