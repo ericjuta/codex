@@ -2969,6 +2969,7 @@ dependencies = [
  "codex-api",
  "codex-exec-server-protocol",
  "codex-file-system",
+ "codex-hashline-transaction",
  "codex-http-client",
  "codex-network-proxy",
  "codex-otel",
