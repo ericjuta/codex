@@ -15,6 +15,7 @@ mod recovered;
 mod recovery;
 mod recovery_rollback;
 mod recovery_verify;
+mod request_executor;
 mod rollback;
 mod types;
 
@@ -77,6 +78,8 @@ pub use recovery::RecoveryOutcome;
 pub use recovery::RecoveryResult;
 pub use recovery::recover_pending;
 pub use recovery::recover_transaction;
+pub use request_executor::ExecuteRequestError;
+pub use request_executor::execute_request;
 pub use types::ExpectedFile;
 pub use types::FileEdit;
 pub use types::FileMutation;
@@ -144,3 +147,7 @@ mod recovery_storage_tests;
 #[cfg(test)]
 #[path = "recovery_terminal_tests.rs"]
 mod recovery_terminal_tests;
+
+#[cfg(test)]
+#[path = "request_executor_tests.rs"]
+mod request_executor_tests;
