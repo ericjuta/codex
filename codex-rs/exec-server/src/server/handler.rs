@@ -14,6 +14,7 @@ use tokio_util::task::TaskTracker;
 use crate::ExecServerRuntimePaths;
 use crate::client::http_client::PendingReqwestHttpBodyStream;
 use crate::client::http_client::ReqwestHttpRequestRunner;
+use crate::hashline_transaction_plan::HashlineTransactionPlanner;
 use crate::protocol::EnvironmentInfo;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
@@ -41,6 +42,8 @@ use crate::protocol::FsWalkParams;
 use crate::protocol::FsWalkResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
+use crate::protocol::HashlineTransactionPlanParams;
+use crate::protocol::HashlineTransactionPlanResponse;
 use crate::protocol::HttpRequestParams;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
@@ -68,6 +71,7 @@ pub(crate) struct ExecServerHandler {
     background_task_shutdown: CancellationToken,
     background_tasks: TaskTracker,
     file_system: FileSystemHandler,
+    hashline_transaction: HashlineTransactionPlanner,
     runtime_paths: ExecServerRuntimePaths,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
@@ -87,6 +91,7 @@ impl ExecServerHandler {
             background_task_shutdown: CancellationToken::new(),
             background_tasks: TaskTracker::new(),
             file_system: FileSystemHandler::new(runtime_paths.clone()),
+            hashline_transaction: HashlineTransactionPlanner::new(runtime_paths.clone()),
             runtime_paths,
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
@@ -335,6 +340,14 @@ impl ExecServerHandler {
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.copy(params).await
+    }
+
+    pub(crate) async fn hashline_transaction_plan(
+        &self,
+        params: HashlineTransactionPlanParams,
+    ) -> Result<HashlineTransactionPlanResponse, JSONRPCErrorError> {
+        self.require_initialized_for("Hashline transaction planning")?;
+        self.hashline_transaction.plan(params).await
     }
 
     fn require_initialized_for(

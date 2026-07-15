@@ -165,6 +165,8 @@ fn preview_projects_every_operation_without_executor_handles_or_full_images() {
     assert!(preview.preview_truncated);
 
     let serialized = serde_json::to_string(&preview).unwrap();
+    let decoded = serde_json::from_str::<PlanPreview>(&serialized).unwrap();
+    assert_eq!(decoded, preview);
     assert!(!serialized.contains("native:"));
     assert!(!serialized.contains("opened-root-handle"));
     assert!(!serialized.contains("after-secret"));

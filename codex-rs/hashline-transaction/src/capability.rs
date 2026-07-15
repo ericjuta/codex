@@ -24,6 +24,8 @@ pub enum TransactionFileSystemError {
     InvalidModelPath { path: String, reason: String },
     #[error("transaction path `{path}` traverses a symbolic link")]
     SymbolicLink { path: String },
+    #[error("transaction path `{path}` changed while planning")]
+    ChangedDuringPlanning { path: String },
     #[error("transaction filesystem operation `{operation}` failed: {reason}")]
     Platform {
         operation: &'static str,

@@ -1,4 +1,3 @@
-
 use std::ffi::CString;
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -480,9 +479,8 @@ fn platform_error(operation: &'static str, error: io::Error) -> TransactionFileS
 }
 
 fn changed_during_planning(path: &str) -> TransactionFileSystemError {
-    TransactionFileSystemError::Platform {
-        operation: "observe path",
-        reason: format!("path `{path}` changed while transaction planning was in progress"),
+    TransactionFileSystemError::ChangedDuringPlanning {
+        path: path.to_string(),
     }
 }
 

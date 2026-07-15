@@ -28,6 +28,10 @@ use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
 use tokio_util::task::AbortOnDropHandle;
 
+#[path = "environment_hashline_transaction.rs"]
+mod hashline_transaction;
+pub use hashline_transaction::HashlineTransactionPlanRequest;
+
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 pub const CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR: &str =
     "CODEX_EXEC_SERVER_NOISE_REGISTRY_URL";
@@ -203,7 +207,10 @@ impl EnvironmentManager {
                 )));
             }
             if environment_map
-                .insert(id.clone(), Arc::new(environment))
+                .insert(
+                    id.clone(),
+                    Arc::new(environment.with_environment_id(id.clone())),
+                )
                 .is_some()
             {
                 return Err(ExecServerError::Protocol(format!(
@@ -311,13 +318,16 @@ impl EnvironmentManager {
                 "remote environment requires an exec-server url".to_string(),
             ));
         };
-        let environment = Arc::new(Environment::remote_with_transport(
-            ExecServerTransportParams::websocket_url(
-                exec_server_url,
-                connect_timeout.unwrap_or(DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT),
-            ),
-            self.local_runtime_paths.clone(),
-        ));
+        let environment = Arc::new(
+            Environment::remote_with_transport(
+                ExecServerTransportParams::websocket_url(
+                    exec_server_url,
+                    connect_timeout.unwrap_or(DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT),
+                ),
+                self.local_runtime_paths.clone(),
+            )
+            .with_environment_id(environment_id.clone()),
+        );
         environment.start_connecting();
         self.environments
             .write()
@@ -346,10 +356,13 @@ impl EnvironmentManager {
                 "failed to generate Noise harness identity: {error}"
             ))
         })?;
-        let environment = Arc::new(Environment::remote_with_transport(
-            ExecServerTransportParams::NoiseRendezvous { provider, identity },
-            self.local_runtime_paths.clone(),
-        ));
+        let environment = Arc::new(
+            Environment::remote_with_transport(
+                ExecServerTransportParams::NoiseRendezvous { provider, identity },
+                self.local_runtime_paths.clone(),
+            )
+            .with_environment_id(environment_id.clone()),
+        );
         environment.start_connecting();
         self.environments
             .write()
@@ -412,6 +425,7 @@ fn optional_environment_value(name: &str) -> Option<String> {
 /// paths used by filesystem helpers.
 #[derive(Clone)]
 pub struct Environment {
+    environment_id: String,
     exec_server_url: Option<String>,
     remote_client: Option<LazyRemoteExecServerClient>,
     // Dropping the environment stops unfinished background startup work.
@@ -426,6 +440,7 @@ impl Environment {
     /// Builds a test-only local environment without configured sandbox helper paths.
     pub fn default_for_tests() -> Self {
         Self {
+            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
             exec_server_url: None,
             remote_client: None,
             startup_task: Arc::new(Mutex::new(None)),
@@ -440,6 +455,7 @@ impl Environment {
 impl std::fmt::Debug for Environment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Environment")
+            .field("environment_id", &self.environment_id)
             .field("exec_server_url", &self.exec_server_url)
             .finish_non_exhaustive()
     }
@@ -483,6 +499,7 @@ impl Environment {
 
     pub(crate) fn local(local_runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
+            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
             exec_server_url: None,
             remote_client: None,
             startup_task: Arc::new(Mutex::new(None)),
@@ -528,6 +545,7 @@ impl Environment {
             Arc::new(RemoteFileSystem::new(client.clone()));
 
         Self {
+            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             exec_server_url,
             remote_client: Some(client.clone()),
             startup_task: Arc::new(Mutex::new(None)),
@@ -540,6 +558,16 @@ impl Environment {
 
     pub fn is_remote(&self) -> bool {
         self.remote_client.is_some()
+    }
+
+    /// Returns the manager-owned identity used in executor-bound transaction digests.
+    pub fn environment_id(&self) -> &str {
+        &self.environment_id
+    }
+
+    fn with_environment_id(mut self, environment_id: String) -> Self {
+        self.environment_id = environment_id;
+        self
     }
 
     /// Returns the remote exec-server URL when this environment is remote.
@@ -878,7 +906,9 @@ mod tests {
             manager.default_environment_ids(),
             vec!["devbox".to_string(), LOCAL_ENVIRONMENT_ID.to_string()]
         );
-        assert!(manager.default_environment().expect("default").is_remote());
+        let default_environment = manager.default_environment().expect("default");
+        assert!(default_environment.is_remote());
+        assert_eq!(default_environment.environment_id(), "devbox");
     }
 
     #[tokio::test]

@@ -31,7 +31,9 @@ use crate::protocol::FsReadFileParams;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsWalkParams;
 use crate::protocol::FsWriteFileParams;
+use crate::protocol::HASHLINE_TRANSACTION_PLAN_METHOD;
 use crate::protocol::HTTP_REQUEST_METHOD;
+use crate::protocol::HashlineTransactionPlanParams;
 use crate::protocol::HttpRequestParams;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
@@ -165,6 +167,12 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         FS_COPY_METHOD,
         |handler: Arc<ExecServerHandler>, params: FsCopyParams| async move {
             handler.fs_copy(params).await
+        },
+    );
+    router.request_with_integer_id(
+        HASHLINE_TRANSACTION_PLAN_METHOD,
+        |handler: Arc<ExecServerHandler>, params: HashlineTransactionPlanParams| async move {
+            handler.hashline_transaction_plan(params).await
         },
     );
     router

@@ -3,6 +3,7 @@ use std::io::Write;
 use std::str;
 
 use codex_utils_path_uri::PathUri;
+use serde::Deserialize;
 use serde::Serialize;
 
 use crate::CanonicalPathKey;
@@ -15,7 +16,7 @@ use crate::TransactionLimits;
 use crate::limits::check_limit;
 
 /// Bounded UTF-8 content included in a model-visible transaction preview.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewText {
     pub text: String,
@@ -23,7 +24,7 @@ pub struct PreviewText {
 }
 
 /// Model-visible description of one planned filesystem mutation.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum MutationPreview {
     Create {
@@ -52,7 +53,7 @@ pub enum MutationPreview {
 }
 
 /// Bounded, serializable projection of an executor-owned transaction plan.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanPreview {
     pub environment_id: String,

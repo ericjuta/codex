@@ -4,6 +4,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_file_system::FileSystemSandboxContext;
 pub use codex_file_system::WalkOptions;
 pub use codex_file_system::WalkOutcome;
+use codex_hashline_transaction::FileMutation;
+use codex_hashline_transaction::PlanPreview;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_shell_command::shell_detect::DetectedShell;
@@ -36,6 +38,21 @@ pub const FS_READ_DIRECTORY_METHOD: &str = "fs/readDirectory";
 pub const FS_WALK_METHOD: &str = "fs/walk";
 pub const FS_REMOVE_METHOD: &str = "fs/remove";
 pub const FS_COPY_METHOD: &str = "fs/copy";
+pub const HASHLINE_TRANSACTION_PLAN_METHOD: &str = "hashlineTransaction/plan";
+/// Maximum serialized JSON-RPC response size for Hashline transaction planning.
+pub const HASHLINE_TRANSACTION_MAX_RESPONSE_BYTES: u64 = 256 * 1024;
+/// Reserved bytes for the integer request id and JSON-RPC/result wrappers.
+pub const HASHLINE_TRANSACTION_RPC_RESPONSE_OVERHEAD_BYTES: u64 = 128;
+/// Maximum UTF-8 error message size returned by Hashline transaction planning.
+pub const HASHLINE_TRANSACTION_MAX_ERROR_MESSAGE_BYTES: usize = 4 * 1024;
+/// The transaction request is malformed or violates a planning invariant.
+pub const HASHLINE_TRANSACTION_INVALID_REQUEST_ERROR_CODE: i64 = -32602;
+/// The selected executor does not provide the requested transaction capability.
+pub const HASHLINE_TRANSACTION_UNSUPPORTED_ERROR_CODE: i64 = -32020;
+/// Executor observations changed and the transaction can be planned again.
+pub const HASHLINE_TRANSACTION_CONFLICT_ERROR_CODE: i64 = -32021;
+/// The executor failed while planning a valid transaction request.
+pub const HASHLINE_TRANSACTION_EXECUTOR_ERROR_CODE: i64 = -32603;
 /// JSON-RPC request method for executor-side HTTP requests.
 pub const HTTP_REQUEST_METHOD: &str = "http/request";
 /// JSON-RPC notification method for streamed executor HTTP response bodies.
@@ -243,6 +260,23 @@ pub struct TerminateParams {
 #[serde(rename_all = "camelCase")]
 pub struct TerminateResponse {
     pub running: bool,
+}
+
+/// Preview-only Hashline transaction request executed wholly by the selected executor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HashlineTransactionPlanParams {
+    pub environment_id: String,
+    pub root: PathUri,
+    pub mutations: Vec<FileMutation>,
+    pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+/// Bounded no-handle projection of an executor-owned Hashline transaction plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HashlineTransactionPlanResponse {
+    pub preview: PlanPreview,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

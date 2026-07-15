@@ -61,6 +61,12 @@ enum RpcCallTimeout {
     After(Duration),
 }
 
+#[derive(Clone, Copy)]
+enum RequestIdRequirement {
+    Any,
+    Integer,
+}
+
 #[derive(Debug)]
 pub(crate) enum RpcClientEvent {
     Notification(JSONRPCNotification),
@@ -148,10 +154,46 @@ where
         F: Fn(Arc<S>, P) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<R, JSONRPCErrorError>> + Send + 'static,
     {
+        self.request_with_id_requirement(method, RequestIdRequirement::Any, handler);
+    }
+
+    pub(crate) fn request_with_integer_id<P, R, F, Fut>(&mut self, method: &'static str, handler: F)
+    where
+        P: DeserializeOwned + Send + 'static,
+        R: Serialize + Send + 'static,
+        F: Fn(Arc<S>, P) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R, JSONRPCErrorError>> + Send + 'static,
+    {
+        self.request_with_id_requirement(method, RequestIdRequirement::Integer, handler);
+    }
+
+    fn request_with_id_requirement<P, R, F, Fut>(
+        &mut self,
+        method: &'static str,
+        request_id_requirement: RequestIdRequirement,
+        handler: F,
+    ) where
+        P: DeserializeOwned + Send + 'static,
+        R: Serialize + Send + 'static,
+        F: Fn(Arc<S>, P) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R, JSONRPCErrorError>> + Send + 'static,
+    {
         self.request_routes.insert(
             method,
             Box::new(move |state, request| {
                 let request_id = request.id;
+                if matches!(request_id_requirement, RequestIdRequirement::Integer)
+                    && !matches!(&request_id, RequestId::Integer(_))
+                {
+                    return Box::pin(async move {
+                        Some(RpcServerOutboundMessage::Error {
+                            request_id: RequestId::Integer(-1),
+                            error: invalid_request(format!(
+                                "`{method}` requires an integer JSON-RPC request id"
+                            )),
+                        })
+                    }) as BoxFuture<_>;
+                }
                 let params = request.params;
                 let response =
                     decode_request_params::<P>(params).map(|params| handler(state, params));
@@ -172,7 +214,7 @@ where
                         },
                         Err(error) => RpcServerOutboundMessage::Error { request_id, error },
                     })
-                })
+                }) as BoxFuture<_>
             }),
         );
     }
@@ -672,6 +714,7 @@ mod tests {
 
     use codex_exec_server_protocol::JSONRPCMessage;
     use codex_exec_server_protocol::JSONRPCNotification;
+    use codex_exec_server_protocol::JSONRPCRequest;
     use codex_exec_server_protocol::JSONRPCResponse;
     use codex_exec_server_protocol::RequestId;
     use opentelemetry::trace::TracerProvider as _;
@@ -690,6 +733,9 @@ mod tests {
     use super::MAX_IN_FLIGHT_REGULAR_CALLS;
     use super::RpcCallError;
     use super::RpcClient;
+    use super::RpcRouter;
+    use super::RpcServerOutboundMessage;
+    use super::encode_server_message;
     use crate::connection::JsonRpcConnection;
     use crate::connection::JsonRpcConnectionEvent;
     use crate::connection::JsonRpcTransport;
@@ -728,6 +774,43 @@ mod tests {
         if let Err(err) = writer.write_all(format!("{encoded}\n").as_bytes()).await {
             panic!("failed to write JSON-RPC line: {err}");
         }
+    }
+
+    #[tokio::test]
+    async fn integer_request_route_rejects_string_ids_without_echoing_them() {
+        let mut router = RpcRouter::<()>::new();
+        router.request_with_integer_id("bounded", |_, _: ()| async { Ok(()) });
+        let (_, route) = router
+            .request_route("bounded")
+            .expect("integer request route");
+        let outbound = route(
+            Arc::new(()),
+            JSONRPCRequest {
+                id: RequestId::String("x".repeat(256 * 1024)),
+                method: "bounded".to_string(),
+                params: None,
+                trace: None,
+            },
+        )
+        .await
+        .expect("invalid request response");
+        let wire = serde_json::to_vec(
+            &encode_server_message(outbound.clone()).expect("encode server response"),
+        )
+        .expect("serialize server response");
+
+        let RpcServerOutboundMessage::Error { request_id, error } = outbound else {
+            panic!("expected invalid request response");
+        };
+        assert_eq!(
+            (request_id, error.code, error.message),
+            (
+                RequestId::Integer(-1),
+                -32600,
+                "`bounded` requires an integer JSON-RPC request id".to_string(),
+            )
+        );
+        assert!(wire.len() < 256);
     }
 
     #[tokio::test]

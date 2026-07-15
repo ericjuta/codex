@@ -85,7 +85,10 @@ use crate::protocol::FsWalkParams;
 use crate::protocol::FsWalkResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
+use crate::protocol::HASHLINE_TRANSACTION_PLAN_METHOD;
 use crate::protocol::HTTP_REQUEST_BODY_DELTA_METHOD;
+use crate::protocol::HashlineTransactionPlanParams;
+use crate::protocol::HashlineTransactionPlanResponse;
 use crate::protocol::HttpRequestBodyDeltaNotification;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
@@ -457,6 +460,13 @@ impl LazyRemoteExecServerClient {
     pub(crate) async fn environment_info(&self) -> Result<EnvironmentInfo, ExecServerError> {
         self.get().await?.environment_info().await
     }
+
+    pub(crate) async fn hashline_transaction_plan(
+        &self,
+        params: HashlineTransactionPlanParams,
+    ) -> Result<HashlineTransactionPlanResponse, ExecServerError> {
+        self.get().await?.hashline_transaction_plan(params).await
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -723,6 +733,13 @@ impl ExecServerClient {
 
     pub async fn fs_copy(&self, params: FsCopyParams) -> Result<FsCopyResponse, ExecServerError> {
         self.call(FS_COPY_METHOD, &params).await
+    }
+
+    pub(crate) async fn hashline_transaction_plan(
+        &self,
+        params: HashlineTransactionPlanParams,
+    ) -> Result<HashlineTransactionPlanResponse, ExecServerError> {
+        self.call(HASHLINE_TRANSACTION_PLAN_METHOD, &params).await
     }
 
     pub(crate) async fn start_process(

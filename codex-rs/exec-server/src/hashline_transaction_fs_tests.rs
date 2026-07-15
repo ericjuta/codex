@@ -321,13 +321,12 @@ async fn detects_a_replaced_path_even_when_bytes_match() {
         .observe(&resolved, observation_limit(1024))
         .await
         .expect_err("identity replacement must fail");
-    assert!(matches!(
+    assert_eq!(
         error,
-        TransactionFileSystemError::Platform {
-            operation: "observe path",
-            reason,
-        } if reason.contains("changed while transaction planning")
-    ));
+        TransactionFileSystemError::ChangedDuringPlanning {
+            path: "file.txt".to_string(),
+        }
+    );
 }
 
 #[tokio::test]
@@ -357,13 +356,12 @@ async fn detects_a_parent_directory_moved_outside_the_root() {
         .observe(&resolved, observation_limit(1024))
         .await
         .expect_err("detached parent must fail");
-    assert!(matches!(
+    assert_eq!(
         error,
-        TransactionFileSystemError::Platform {
-            operation: "observe path",
-            reason,
-        } if reason.contains("changed while transaction planning")
-    ));
+        TransactionFileSystemError::ChangedDuringPlanning {
+            path: "inside/file.txt".to_string(),
+        }
+    );
 }
 
 #[tokio::test]
@@ -384,13 +382,12 @@ async fn detects_an_absent_leaf_that_appears_before_observation() {
         .observe(&resolved, observation_limit(1024))
         .await
         .expect_err("appearing path must fail");
-    assert!(matches!(
+    assert_eq!(
         error,
-        TransactionFileSystemError::Platform {
-            operation: "observe path",
-            reason,
-        } if reason.contains("changed while transaction planning")
-    ));
+        TransactionFileSystemError::ChangedDuringPlanning {
+            path: "new.txt".to_string(),
+        }
+    );
 }
 
 #[tokio::test]

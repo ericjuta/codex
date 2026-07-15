@@ -9,6 +9,7 @@ use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecutorFileSystem;
 use crate::RemoveOptions;
+use crate::hashline_transaction_plan::plan_direct as plan_hashline_transaction_direct;
 use crate::local_file_system::DirectFileSystem;
 use crate::protocol::FS_CANONICALIZE_METHOD;
 use crate::protocol::FS_COPY_METHOD;
@@ -38,6 +39,9 @@ use crate::protocol::FsWalkParams;
 use crate::protocol::FsWalkResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
+use crate::protocol::HASHLINE_TRANSACTION_PLAN_METHOD;
+use crate::protocol::HashlineTransactionPlanParams;
+use crate::protocol::HashlineTransactionPlanResponse;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 use crate::rpc::not_found;
@@ -65,6 +69,8 @@ pub(crate) enum FsHelperRequest {
     Remove(FsRemoveParams),
     #[serde(rename = "fs/copy")]
     Copy(FsCopyParams),
+    #[serde(rename = "hashlineTransaction/plan")]
+    HashlineTransactionPlan(HashlineTransactionPlanParams),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -95,6 +101,8 @@ pub(crate) enum FsHelperPayload {
     Remove(FsRemoveResponse),
     #[serde(rename = "fs/copy")]
     Copy(FsCopyResponse),
+    #[serde(rename = "hashlineTransaction/plan")]
+    HashlineTransactionPlan(HashlineTransactionPlanResponse),
 }
 
 impl FsHelperPayload {
@@ -109,6 +117,7 @@ impl FsHelperPayload {
             Self::Walk(_) => FS_WALK_METHOD,
             Self::Remove(_) => FS_REMOVE_METHOD,
             Self::Copy(_) => FS_COPY_METHOD,
+            Self::HashlineTransactionPlan(_) => HASHLINE_TRANSACTION_PLAN_METHOD,
         }
     }
 
@@ -188,6 +197,18 @@ impl FsHelperPayload {
         match self {
             Self::Copy(response) => Ok(response),
             other => Err(unexpected_response(FS_COPY_METHOD, other.operation())),
+        }
+    }
+
+    pub(crate) fn expect_hashline_transaction_plan(
+        self,
+    ) -> Result<HashlineTransactionPlanResponse, JSONRPCErrorError> {
+        match self {
+            Self::HashlineTransactionPlan(response) => Ok(response),
+            other => Err(unexpected_response(
+                HASHLINE_TRANSACTION_PLAN_METHOD,
+                other.operation(),
+            )),
         }
     }
 }
@@ -312,6 +333,11 @@ pub(crate) async fn run_direct_request(
                 .await
                 .map_err(map_fs_error)?;
             Ok(FsHelperPayload::Copy(FsCopyResponse {}))
+        }
+        FsHelperRequest::HashlineTransactionPlan(params) => {
+            plan_hashline_transaction_direct(params)
+                .await
+                .map(FsHelperPayload::HashlineTransactionPlan)
         }
     }
 }
