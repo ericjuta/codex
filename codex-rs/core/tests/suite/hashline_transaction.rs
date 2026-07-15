@@ -163,6 +163,44 @@ async fn preview_is_executor_neutral_bounded_and_never_writes_mixed_mutations() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn immediate_commit_executes_through_the_model_tool() -> anyhow::Result<()> {
+    let harness = TestCodexHarness::with_auto_env_builder(test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::HashlineTransactions)
+            .expect("Hashline transaction feature should be available");
+    }))
+    .await?;
+    let call_id = "hashline-transaction-commit";
+    let arguments = json!({
+        "action": { "type": "commit" },
+        "mutations": [{
+            "type": "create",
+            "path": "committed.txt",
+            "contents": "committed contents\n",
+        }],
+    });
+    let response_mock = mount_preview(harness.server(), call_id, &arguments).await;
+
+    harness.submit("commit a Hashline transaction").await?;
+
+    let output: Value = serde_json::from_str(
+        &response_mock
+            .last_request()
+            .expect("final response request")
+            .function_call_output_text(call_id)
+            .expect("transaction commit output"),
+    )?;
+    assert_eq!(output["outcome"]["type"], "committed");
+    assert_eq!(output["preview"]["summary"]["creates"], 1);
+    assert_eq!(
+        harness.read_file_text("committed.txt").await?,
+        "committed contents\n"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn preview_forwards_the_turn_sandbox() -> anyhow::Result<()> {
     skip_if_target_windows!(
         Ok(()),

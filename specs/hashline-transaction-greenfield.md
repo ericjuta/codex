@@ -1,15 +1,16 @@
 # Design Recoverable Hashline File Transactions
 
 - Branch: feat/hashline-transaction-foundation
-- Status: In Progress
+- Status: Implemented on Linux; cross-platform validation pending
 - Owner(s): Codex
 - Created: 2026-07-15
-- Last Updated: 2026-07-15 15:00Z
+- Last Updated: 2026-07-15 17:53Z
 - Links: [Current Hashline integration](../codex-rs/docs/hashline_tool_integration_spec.md) | [Prior Hashline hardening](hashline-audit-hardening.md)
 
 This ExecPlan is the source of truth for a greenfield Hashline transaction
-design. It specifies the target contract and staged implementation plan; this
-spec commit does not change runtime behavior.
+design and implementation record. The Linux runtime is available behind the
+disabled-by-default `hashline_transactions` feature while other platforms fail
+capability negotiation closed.
 
 ## Purpose / Big Picture
 
@@ -73,9 +74,9 @@ Non-goals for the first version:
 - [x] (2026-07-15 12:16Z) Implement the versioned bounded journal, staged executor, guarded per-path commit, reverse ordinary-error rollback, terminal cleanup receipts, and evidence-preserving `RecoveryRequired` state behind the complete transaction capability.
 - [x] (2026-07-15 14:43Z) Implement engine-owned startup recovery and restart convergence from every durable transition.
 - [x] (2026-07-15 14:58Z) Add the disabled-by-default core preview adapter with selected-environment routing, sandbox propagation, an 8 KiB model-output cap, mixed-operation no-write coverage, and preserved RPC compatibility.
-- [ ] Add immediate commit, previewed commit, and the remote commit/recovery capability boundary.
-- [ ] Run focused, fault-injection, cross-platform, and integration validation.
-- [ ] Record implementation outcomes, review findings, rollout evidence, and residual risks.
+- [x] (2026-07-15 17:35Z) Add immediate commit, previewed commit, explicit recovery, automatic pre-commit recovery, and the local/remote executor capability boundary.
+- [ ] Run cross-platform and Bazel validation; focused Linux fault-injection and integration validation is complete.
+- [x] (2026-07-15 17:36Z) Record Linux implementation outcomes, review findings, validation evidence, and residual cross-platform/receipt-retention risks.
 
 ## Surprises & Discoveries
 
@@ -695,9 +696,10 @@ feature must not delete unresolved journals or backups.
   Owner/next step: Linux planning feasibility is proven for ext-family and tmpfs;
   implement native macOS/Windows semantics and complete mutation/recovery
   capabilities while all other environments continue to fail negotiation.
-- Open question: should a remote executor recover pending journals automatically at
-  startup or only before the next transaction in the same root?
-  Owner/next step: milestone 2 failure-mode prototype.
+- Decision: scan and converge unfinished journals automatically before every commit in
+  the same root, and also expose an explicit bounded root-scoped recovery RPC. Preview
+  remains non-mutating and does not trigger recovery. Reservation locks serialize an
+  active transaction with recovery across executor instances.
 - Open question: should successful transaction receipts persist across restarts for
   `AlreadyCommitted`, and for how long?
   Owner/next step: define retention and privacy bounds before journal schema review.
@@ -724,14 +726,13 @@ feature must not delete unresolved journals or backups.
   are separated explicitly.
   Remaining: prove mutation, durability, and recovery capabilities and add native
   macOS/Windows planning adapters.
-- Outcome: the no-write planner now has one real executor-owned implementation
-  instead of only fake capability tests.
-  Evidence: NativePlanningFileSystem, 13 focused Linux adapter tests, and the current
-  passing 334-test codex-exec-server suite. Bazel lock regeneration passes; the
+- Outcome: the Linux executor now has a complete handle-relative planning, mutation,
+  durable storage, and restart-recovery implementation instead of only fake capability tests.
+  Evidence: NativeTransactionFileSystem, focused Linux adapter tests, and the current
+  passing 357-test codex-exec-server suite. Bazel lock regeneration passes; the
   Bazel unit target remains blocked during repository fetch by the pre-existing
   aws-lc-sys_memcmp_check.patch mismatch.
-  Remaining: implement mutation, durability, and recovery primitives and add native
-  macOS/Windows adapters.
+  Remaining: add native macOS/Windows adapters and repeat fault-injection validation there.
 - Outcome: selected local and remote environments now expose the same typed,
   preview-only planning API without sending executor capabilities across the wire.
   Evidence: `Environment::plan_hashline_transaction`, the
@@ -757,9 +758,9 @@ feature must not delete unresolved journals or backups.
   Compatibility boundary: schema 3 is the first durable on-disk journal surface; no production
   schema-2 journal was ever exposed, so recovery intentionally rejects older schemas rather
   than migrating unverified records.
-  Remaining: the production Linux surface still implements planning only. Add a fail-closed
-  native mutation/storage adapter before exposing commit through the environment RPC or model
-  tool surface.
+  Linux completion: native mutation/storage/recovery is fail-closed, automatically converges
+  unfinished root journals before a new commit, and retains a durable terminal receipt.
+  Remaining: define receipt retention and add native macOS/Windows implementations.
 - Outcome: the experimental `hashline_transactions` feature now exposes a preview-only
   `hashline.transaction` tool without changing the existing Hashline namespace or defaults.
   The model adapter routes through the selected environment and turn sandbox, emits valid JSON
@@ -767,8 +768,21 @@ feature must not delete unresolved journals or backups.
   Evidence: focused `codex-core` Hashline transaction tests pass 5/5, including mixed
   create/update/delete/move no-write state comparison, oversized output, denied-path sandbox,
   and explicit remote selection; `codex-hashline-transaction` passes 58/58 and
-  `codex-features` passes 56/56. Remaining: commit and recovery are intentionally absent from
-  the model tool until the native mutation/storage capability is complete.
+  `codex-features` passes 56/56. The same feature now exposes immediate and preview-digest-bound
+  commit; explicit recovery remains an executor RPC while every model-triggered commit runs the
+  automatic root recovery gate first.
+
+- Outcome: the native Linux commit surface now stages same-filesystem after-images and backups,
+  persists and syncs bounded schema-3 journals, applies handle-relative guarded mutations, and
+  reopens durable evidence without following symlinks after restart. A crash between cleanup and
+  the final `Complete` receipt converges before the next commit; corrupt or tampered evidence
+  blocks that commit with typed recovery-required data.
+  Evidence: executor milestone `554c00aacf`; 62/62 shared-engine tests, 12/12 protocol tests,
+  357/357 executor tests, six focused core transaction tests, a remote commit/recovery integration
+  test, scan-bound tests, and a cross-instance reservation-lock test. The restart test found and
+  fixed a read-only recovered reservation descriptor that initially prevented cleanup convergence.
+  Remaining: macOS/Windows capability implementations, Bazel validation, terminal-receipt
+  retention policy, and production burn-in/observability.
 
 ## Artifacts and Notes
 
@@ -798,3 +812,7 @@ property that can be retrofitted onto arbitrary direct reads of unrelated paths.
 - 2026-07-15: Added the opt-in preview-only core tool. Review hardening preserved the existing
   RPC digest-field spelling, made auto-environment coverage executor-neutral, proved sandbox
   forwarding and mixed-operation no-write behavior, and added an 8 KiB model-visible cap.
+- 2026-07-15: Completed the Linux mutation, durable storage, bounded recovery scan, tamper-safe
+  reopen, automatic pre-commit convergence, explicit recovery RPC, remote environment routing,
+  and model-facing immediate/previewed commit surfaces. Validation covers restart, tamper,
+  bounds, cross-instance serialization, local model execution, and remote executor execution.

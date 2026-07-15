@@ -10,7 +10,24 @@ pub(super) fn transaction_tool_spec(multi_environment: bool) -> ResponsesApiTool
     let mut properties = BTreeMap::from([
         (
             "action".to_string(),
-            tagged_object("preview", BTreeMap::new(), Vec::new()),
+            JsonSchema::one_of(
+                vec![
+                    tagged_object("preview", BTreeMap::new(), Vec::new()),
+                    tagged_object("commit", BTreeMap::new(), Vec::new()),
+                    tagged_object(
+                        "commitPreviewed",
+                        BTreeMap::from([(
+                            "expectedPlanDigest".to_string(),
+                            JsonSchema::string(Some(
+                                "Plan digest returned by the preview that must still match."
+                                    .to_string(),
+                            )),
+                        )]),
+                        vec!["expectedPlanDigest".to_string()],
+                    ),
+                ],
+                Some("Preview, commit immediately, or commit only a matching preview.".to_string()),
+            ),
         ),
         (
             "root".to_string(),
@@ -40,7 +57,7 @@ pub(super) fn transaction_tool_spec(multi_environment: bool) -> ResponsesApiTool
     }
     ResponsesApiTool {
         name: TOOL_NAME.to_string(),
-        description: "Plan a bounded, no-write multi-file Hashline transaction. This gated preview surface does not commit changes."
+        description: "Plan or recoverably commit a bounded multi-file Hashline transaction inside the selected environment."
             .to_string(),
         strict: false,
         defer_loading: None,

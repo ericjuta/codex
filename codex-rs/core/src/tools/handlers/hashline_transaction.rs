@@ -1,3 +1,6 @@
+use codex_exec_server::HashlineTransactionExecuteAction;
+use codex_exec_server::HashlineTransactionExecuteRequest;
+use codex_exec_server::HashlineTransactionExecuteResponse;
 use codex_exec_server::HashlineTransactionPlanRequest;
 use codex_hashline_transaction::ExactBytesDigest;
 use codex_hashline_transaction::ExpectedFile;
@@ -26,13 +29,76 @@ use crate::tools::registry::ToolExecutor;
 
 const NAMESPACE: &str = "hashline";
 pub(super) const TOOL_NAME: &str = "transaction";
-const MAX_MODEL_PREVIEW_BYTES: usize = 8 * 1024;
+const MAX_MODEL_TRANSACTION_BYTES: usize = 8 * 1024;
 
-fn serialize_preview(preview: &PlanPreview) -> Result<String, FunctionCallError> {
-    serde_json::to_string(preview).map_err(|error| {
+fn serialize_model_preview(
+    preview: &PlanPreview,
+    output_name: &'static str,
+    serialize: &mut impl FnMut(&PlanPreview) -> Result<String, serde_json::Error>,
+) -> Result<String, FunctionCallError> {
+    serialize(preview).map_err(|error| {
         FunctionCallError::RespondToModel(format!(
-            "failed to serialize hashline.transaction preview: {error}"
+            "failed to serialize hashline.transaction {output_name}: {error}"
         ))
+    })
+}
+
+fn bounded_preview_serialization(
+    preview: &mut PlanPreview,
+    output_name: &'static str,
+    mut serialize: impl FnMut(&PlanPreview) -> Result<String, serde_json::Error>,
+) -> Result<String, FunctionCallError> {
+    let mut output = serialize_model_preview(preview, output_name, &mut serialize)?;
+    if output.len() > MAX_MODEL_TRANSACTION_BYTES {
+        preview.preview_truncated = true;
+        for index in (0..preview.mutations.len()).rev() {
+            {
+                let content = match &mut preview.mutations[index] {
+                    MutationPreview::Create { content, .. }
+                    | MutationPreview::Update { content, .. }
+                    | MutationPreview::Delete { content, .. }
+                    | MutationPreview::Move { content, .. } => content,
+                };
+                preview.preview_bytes = preview
+                    .preview_bytes
+                    .saturating_sub(content.text.len() as u64);
+                if !content.text.is_empty() {
+                    content.text.clear();
+                    content.truncated = true;
+                }
+            }
+            output = serialize_model_preview(preview, output_name, &mut serialize)?;
+            if output.len() <= MAX_MODEL_TRANSACTION_BYTES {
+                break;
+            }
+        }
+        while output.len() > MAX_MODEL_TRANSACTION_BYTES && preview.mutations.pop().is_some() {
+            output = serialize_model_preview(preview, output_name, &mut serialize)?;
+        }
+    }
+    if output.len() > MAX_MODEL_TRANSACTION_BYTES {
+        Err(FunctionCallError::RespondToModel(format!(
+            "hashline.transaction {output_name} metadata exceeds the {MAX_MODEL_TRANSACTION_BYTES}-byte model output limit"
+        )))
+    } else {
+        Ok(output)
+    }
+}
+
+fn bounded_execution_output(
+    response: HashlineTransactionExecuteResponse,
+) -> Result<String, FunctionCallError> {
+    let HashlineTransactionExecuteResponse {
+        mut preview,
+        transaction_id,
+        outcome,
+    } = response;
+    bounded_preview_serialization(&mut preview, "commit result", |preview| {
+        serde_json::to_string(&serde_json::json!({
+            "preview": preview,
+            "transactionId": &transaction_id,
+            "outcome": &outcome,
+        }))
     })
 }
 
@@ -50,6 +116,10 @@ impl HashlineTransactionHandler {
 #[serde(rename_all = "camelCase", tag = "type")]
 enum ToolTransactionAction {
     Preview,
+    Commit,
+    CommitPreviewed {
+        expected_plan_digest: ExactBytesDigest,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -247,7 +317,6 @@ async fn handle_transaction(
         ));
     };
     let args: HashlineTransactionArgs = parse_arguments(&arguments)?;
-    let ToolTransactionAction::Preview = args.action;
     let Some(turn_environment) =
         resolve_tool_environment(&step_context.environments, args.environment_id.as_deref())?
     else {
@@ -266,56 +335,50 @@ async fn handle_transaction(
     };
     let sandbox =
         turn.file_system_sandbox_context(/*additional_permissions*/ None, turn_environment);
-    let mut response = turn_environment
-        .environment
-        .plan_hashline_transaction(HashlineTransactionPlanRequest {
-            root,
-            mutations: args.mutations.into_iter().map(Into::into).collect(),
-            sandbox: Some(sandbox),
-        })
-        .await
-        .map_err(|error| {
-            FunctionCallError::RespondToModel(format!(
-                "hashline.transaction preview failed: {error}"
-            ))
-        })?;
-    let mut output = serialize_preview(&response.preview)?;
-    if output.len() > MAX_MODEL_PREVIEW_BYTES {
-        response.preview.preview_truncated = true;
-        for index in (0..response.preview.mutations.len()).rev() {
-            {
-                let content = match &mut response.preview.mutations[index] {
-                    MutationPreview::Create { content, .. }
-                    | MutationPreview::Update { content, .. }
-                    | MutationPreview::Delete { content, .. }
-                    | MutationPreview::Move { content, .. } => content,
-                };
-                response.preview.preview_bytes = response
-                    .preview
-                    .preview_bytes
-                    .saturating_sub(content.text.len() as u64);
-                if !content.text.is_empty() {
-                    content.text.clear();
-                    content.truncated = true;
-                }
-            }
-            output = serialize_preview(&response.preview)?;
-            if output.len() <= MAX_MODEL_PREVIEW_BYTES {
-                break;
-            }
-        }
-        while output.len() > MAX_MODEL_PREVIEW_BYTES && response.preview.mutations.pop().is_some() {
-            output = serialize_preview(&response.preview)?;
-        }
-    }
-    if output.len() > MAX_MODEL_PREVIEW_BYTES {
-        Err(FunctionCallError::RespondToModel(format!(
-            "hashline.transaction preview metadata exceeds the {MAX_MODEL_PREVIEW_BYTES}-byte model output limit"
-        )))
+    let mutations = args.mutations.into_iter().map(Into::into).collect();
+    let execute_action = match args.action {
+        ToolTransactionAction::Preview => None,
+        ToolTransactionAction::Commit => Some(HashlineTransactionExecuteAction::Commit),
+        ToolTransactionAction::CommitPreviewed {
+            expected_plan_digest,
+        } => Some(HashlineTransactionExecuteAction::CommitPreviewed {
+            expected_plan_digest,
+        }),
+    };
+    let output = if let Some(action) = execute_action {
+        let response = turn_environment
+            .environment
+            .execute_hashline_transaction(HashlineTransactionExecuteRequest {
+                root,
+                mutations,
+                action,
+                sandbox: Some(sandbox),
+            })
+            .await
+            .map_err(|error| {
+                FunctionCallError::RespondToModel(format!(
+                    "hashline.transaction commit failed: {error}"
+                ))
+            })?;
+        bounded_execution_output(response)?
     } else {
-        Ok(boxed_tool_output(FunctionToolOutput::from_text(
-            output,
-            Some(true),
-        )))
-    }
+        let mut response = turn_environment
+            .environment
+            .plan_hashline_transaction(HashlineTransactionPlanRequest {
+                root,
+                mutations,
+                sandbox: Some(sandbox),
+            })
+            .await
+            .map_err(|error| {
+                FunctionCallError::RespondToModel(format!(
+                    "hashline.transaction preview failed: {error}"
+                ))
+            })?;
+        bounded_preview_serialization(&mut response.preview, "preview", serde_json::to_string)?
+    };
+    Ok(boxed_tool_output(FunctionToolOutput::from_text(
+        output,
+        Some(true),
+    )))
 }
