@@ -2,12 +2,14 @@ use std::fmt;
 use std::num::NonZeroU64;
 
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
 use sha2::Digest;
 use sha2::Sha256;
 
 /// SHA-256 digest of the exact bytes observed by the executor.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ExactBytesDigest([u8; 32]);
 
 impl ExactBytesDigest {
@@ -30,6 +32,49 @@ impl fmt::Display for ExactBytesDigest {
             write!(formatter, "{byte:02x}")?;
         }
         Ok(())
+    }
+}
+
+impl Serialize for ExactBytesDigest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for ExactBytesDigest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        decode_sha256_hex(&value)
+            .map(Self)
+            .ok_or_else(|| serde::de::Error::custom("expected exactly 64 hexadecimal characters"))
+    }
+}
+
+fn decode_sha256_hex(value: &str) -> Option<[u8; 32]> {
+    if value.len() != 64 {
+        return None;
+    }
+    let mut decoded = [0; 32];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        decoded[index] = decode_hex_nibble(pair[0])?
+            .checked_mul(16)?
+            .checked_add(decode_hex_nibble(pair[1])?)?;
+    }
+    Some(decoded)
+}
+
+fn decode_hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
     }
 }
 

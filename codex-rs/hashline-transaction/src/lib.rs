@@ -5,6 +5,7 @@ mod edits;
 mod limits;
 mod observation;
 mod planner;
+mod preview;
 mod types;
 
 pub use capability::CanonicalPathKey;
@@ -35,6 +36,10 @@ pub use observation::ObservedPath;
 pub use planner::PlanError;
 pub use planner::plan;
 pub use planner::plan_with_limits;
+pub use preview::MutationPreview;
+pub use preview::PlanPreview;
+pub use preview::PreviewText;
+pub use preview::build_preview;
 pub use types::ExpectedFile;
 pub use types::FileEdit;
 pub use types::FileMutation;
@@ -58,3 +63,7 @@ mod planner_tests;
 #[cfg(test)]
 #[path = "edits_tests.rs"]
 mod edits_tests;
+
+#[cfg(test)]
+#[path = "preview_tests.rs"]
+mod preview_tests;

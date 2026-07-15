@@ -13,6 +13,8 @@ const DEFAULT_MAX_EDIT_LINES: u64 = 65_536;
 const DEFAULT_MAX_INPUT_BYTES: u64 = 16 * 1024 * 1024;
 const DEFAULT_MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 const DEFAULT_MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
+const DEFAULT_MAX_PREVIEW_BYTES: u64 = 64 * 1024;
+const DEFAULT_MAX_RESPONSE_BYTES: u64 = 256 * 1024;
 const DEFAULT_MAX_MODEL_PATH_BYTES: u64 = 4096;
 const DEFAULT_MAX_EXECUTOR_KEY_BYTES: u64 = 4096;
 
@@ -44,6 +46,8 @@ pub struct TransactionLimits {
     pub max_input_bytes: u64,
     pub max_file_bytes: u64,
     pub max_total_bytes: u64,
+    pub max_preview_bytes: u64,
+    pub max_response_bytes: u64,
     pub max_model_path_bytes: u64,
     pub max_executor_key_bytes: u64,
 }
@@ -57,6 +61,8 @@ impl Default for TransactionLimits {
             max_input_bytes: DEFAULT_MAX_INPUT_BYTES,
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             max_total_bytes: DEFAULT_MAX_TOTAL_BYTES,
+            max_preview_bytes: DEFAULT_MAX_PREVIEW_BYTES,
+            max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
             max_model_path_bytes: DEFAULT_MAX_MODEL_PATH_BYTES,
             max_executor_key_bytes: DEFAULT_MAX_EXECUTOR_KEY_BYTES,
         }
@@ -154,12 +160,14 @@ pub struct PlannedTransaction<R, P> {
 pub enum PlannedMutation<P> {
     Create {
         path: P,
+        model_path: String,
         path_key: CanonicalPathKey,
         contents: Vec<u8>,
         after_digest: ExactBytesDigest,
     },
     Update {
         path: P,
+        model_path: String,
         path_key: CanonicalPathKey,
         before: ObservedFile,
         contents: Vec<u8>,
@@ -167,14 +175,17 @@ pub enum PlannedMutation<P> {
     },
     Delete {
         path: P,
+        model_path: String,
         path_key: CanonicalPathKey,
         before: ObservedFile,
     },
     Move {
         source: P,
+        model_source: String,
         source_key: CanonicalPathKey,
         before: ObservedFile,
         destination: P,
+        model_destination: String,
         destination_key: CanonicalPathKey,
         contents: Vec<u8>,
         after_digest: ExactBytesDigest,

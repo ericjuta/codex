@@ -58,6 +58,8 @@ pub enum PlanError {
     InvalidAnchor { path: String, reason: String },
     #[error("transaction edit text for `{path}` is invalid: {reason}")]
     InvalidEditText { path: String, reason: String },
+    #[error("transaction preview serialization failed: {reason}")]
+    PreviewSerialization { reason: String },
     #[error("previewed transaction digest does not match the current plan")]
     PlanDigestMismatch {
         expected: ExactBytesDigest,
@@ -208,6 +210,7 @@ impl<'a, F: PlanningFileSystem> PlanState<'a, F> {
                 let after_digest = ExactBytesDigest::new(&contents);
                 Ok(PlannedMutation::Create {
                     path: path.handle,
+                    model_path: path.model_path,
                     path_key: path.key,
                     contents,
                     after_digest,
@@ -236,6 +239,7 @@ impl<'a, F: PlanningFileSystem> PlanState<'a, F> {
                 let after_digest = ExactBytesDigest::new(&contents);
                 Ok(PlannedMutation::Update {
                     path: path.handle,
+                    model_path: path.model_path,
                     path_key: path.key,
                     before,
                     contents,
@@ -251,6 +255,7 @@ impl<'a, F: PlanningFileSystem> PlanState<'a, F> {
                 self.summary.deletes += 1;
                 Ok(PlannedMutation::Delete {
                     path: path.handle,
+                    model_path: path.model_path,
                     path_key: path.key,
                     before,
                 })
@@ -285,9 +290,11 @@ impl<'a, F: PlanningFileSystem> PlanState<'a, F> {
                 let after_digest = ExactBytesDigest::new(&contents);
                 Ok(PlannedMutation::Move {
                     source: source.handle,
+                    model_source: source.model_path,
                     source_key: source.key,
                     before,
                     destination: destination.handle,
+                    model_destination: destination.model_path,
                     destination_key: destination.key,
                     contents,
                     after_digest,
