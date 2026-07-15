@@ -54,3 +54,7 @@ mod tests;
 #[cfg(test)]
 #[path = "planner_tests.rs"]
 mod planner_tests;
+
+#[cfg(test)]
+#[path = "edits_tests.rs"]
+mod edits_tests;
