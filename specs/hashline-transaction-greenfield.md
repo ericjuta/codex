@@ -1,10 +1,10 @@
 # Design Recoverable Hashline File Transactions
 
-- Branch: main (spec-only; implementation branch TBD)
-- Status: Draft
+- Branch: feat/hashline-transaction-foundation
+- Status: In Progress
 - Owner(s): Codex
 - Created: 2026-07-15
-- Last Updated: 2026-07-15 07:31Z
+- Last Updated: 2026-07-15 11:24Z
 - Links: [Current Hashline integration](../codex-rs/docs/hashline_tool_integration_spec.md) | [Prior Hashline hardening](hashline-audit-hardening.md)
 
 This ExecPlan is the source of truth for a greenfield Hashline transaction
@@ -69,8 +69,9 @@ Non-goals for the first version:
 - [x] (2026-07-15 09:13Z) Add typed line-anchored edit compilation with exact BOM/EOL preservation, trusted hard-limit configuration, allocation/cardinality bounds, UTF-8 enforcement, and focused ordered-edit regressions.
 - [x] (2026-07-15 09:34Z) Add canonical model-visible previews, fixed-width SHA-256 wire digests, dual raw/serialized response budgeting, and escape-heavy truncation regressions.
 - [x] (2026-07-15 10:16Z) Complete the typed no-write planner and prove its executor-owned Linux adapter with handle-relative no-follow traversal, stable evidence, bounded reads, directory-chain race detection, and fail-closed path-semantics negotiation.
+- [x] (2026-07-15 11:24Z) Expose preview-only planning through the selected local or remote environment, bind the canonical environment identity at the `Environment` facade, keep executor handles and full file images local, route restricted requests through the filesystem helper sandbox, bound every RPC response/error path, and prove both paths without writes.
 - [ ] Implement the staged executor, durable journal, rollback, and startup recovery.
-- [ ] Add the core tool adapter, remote-environment capability boundary, and bounded responses.
+- [ ] Add the core tool adapter and remote commit/recovery capability boundary.
 - [ ] Run focused, fault-injection, cross-platform, and integration validation.
 - [ ] Record implementation outcomes, review findings, rollout evidence, and residual risks.
 
@@ -189,6 +190,22 @@ Non-goals for the first version:
   where directory lookup is proven byte-exact. Narrow capability negotiation is
   safer than silently treating macOS, Windows, network, or casefolded lookup
   semantics as POSIX byte equality.
+  Date/Author: 2026-07-15 / Codex
+- Decision: Use one preview-only `hashlineTransaction/plan` RPC and return the existing
+  bounded `PlanPreview`; do not put transaction actions, native handles, canonical
+  keys, full before/after images, or journal state on this wire surface.
+  Rationale: a structurally no-write request lets the selected executor own path and
+  filesystem semantics while preserving one typed planner contract for local and
+  remote environments. Restricted requests run inside the existing filesystem helper
+  sandbox, and future commit/recovery RPCs remain a separate capability decision.
+  Date/Author: 2026-07-15 / Codex
+- Decision: Bind the canonical environment identifier inside `Environment`, require
+  integer JSON-RPC request identifiers for the bounded planning method, cap error text
+  at 4 KiB, and expose stable invalid, unsupported, conflict, and executor categories.
+  Rationale: callers cannot spoof the selected environment label, adversarial string
+  identifiers cannot consume the response budget reserved for `PlanPreview`, and
+  filesystem races remain actionable conflicts instead of flattening into internal
+  executor errors. Malformed non-integer identifiers receive a small sentinel-ID error.
   Date/Author: 2026-07-15 / Codex
 
 ## Context and Orientation
@@ -707,12 +724,24 @@ feature must not delete unresolved journals or backups.
   macOS/Windows planning adapters.
 - Outcome: the no-write planner now has one real executor-owned implementation
   instead of only fake capability tests.
-  Evidence: NativePlanningFileSystem, 13 focused Linux adapter tests, and the
-  passing 326-test codex-exec-server suite. Bazel lock regeneration passes; the
+  Evidence: NativePlanningFileSystem, 13 focused Linux adapter tests, and the current
+  passing 334-test codex-exec-server suite. Bazel lock regeneration passes; the
   Bazel unit target remains blocked during repository fetch by the pre-existing
   aws-lc-sys_memcmp_check.patch mismatch.
-  Remaining: expose the same bounded planning semantics through the selected
-  remote executor without sending native handles across the protocol boundary.
+  Remaining: implement mutation, durability, and recovery primitives and add native
+  macOS/Windows adapters.
+- Outcome: selected local and remote environments now expose the same typed,
+  preview-only planning API without sending executor capabilities across the wire.
+  Evidence: `Environment::plan_hashline_transaction`, the
+  `hashlineTransaction/plan` RPC, filesystem-helper sandbox routing, 17 focused
+  Hashline/adapter tests, three helper-routing integration tests, an integer-ID
+  response-bound regression, 33 planner/protocol tests, and the full 334-test
+  `codex-exec-server` suite. Local, configured-runtime, and remote restricted paths all
+  return a bounded preview and leave the workspace unchanged. Two independent static
+  review passes report no remaining P1/P2 findings after environment identity,
+  response-bound, typed-error, and helper-routing fixes.
+  Remaining: keep the RPC unexposed to the model until the durable executor and gated
+  tool adapter are complete.
 
 ## Artifacts and Notes
 
@@ -732,3 +761,7 @@ property that can be retrofitted onto arbitrary direct reads of unrelated paths.
 - 2026-07-15: Addressed independent design review by adding stable file identity,
   metadata/link guards, handle-bound path safety, a complete environment transaction
   capability, manual-recovery semantics, and repository-compliant path types.
+- 2026-07-15: Implemented the preview-only selected-environment planning boundary,
+  including canonical environment identity, bounded integer-ID remote RPC, stable
+  error categories, and restricted filesystem-helper routing, without enabling a
+  model-facing tool or commit operation.
