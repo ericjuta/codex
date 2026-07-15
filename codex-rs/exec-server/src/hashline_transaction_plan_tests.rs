@@ -150,7 +150,7 @@ fn planning_errors_have_stable_categories() {
             capability: "planning",
             reason: "not available".to_string(),
         }),
-        PlanError::FileSystem(TransactionFileSystemError::ChangedDuringPlanning {
+        PlanError::FileSystem(TransactionFileSystemError::ChangedSincePlanning {
             path: "stale.txt".to_string(),
         }),
         PlanError::FileSystem(TransactionFileSystemError::Platform {

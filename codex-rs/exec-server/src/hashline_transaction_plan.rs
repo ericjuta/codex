@@ -107,7 +107,7 @@ fn map_plan_error(error: PlanError) -> JSONRPCErrorError {
             | TransactionFileSystemError::SymbolicLink { .. } => {
                 HASHLINE_TRANSACTION_INVALID_REQUEST_ERROR_CODE
             }
-            TransactionFileSystemError::ChangedDuringPlanning { .. } => {
+            TransactionFileSystemError::ChangedSincePlanning { .. } => {
                 HASHLINE_TRANSACTION_CONFLICT_ERROR_CODE
             }
             TransactionFileSystemError::Platform { .. } => HASHLINE_TRANSACTION_EXECUTOR_ERROR_CODE,

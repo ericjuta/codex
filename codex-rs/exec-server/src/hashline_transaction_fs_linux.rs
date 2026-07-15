@@ -479,7 +479,7 @@ fn platform_error(operation: &'static str, error: io::Error) -> TransactionFileS
 }
 
 fn changed_during_planning(path: &str) -> TransactionFileSystemError {
-    TransactionFileSystemError::ChangedDuringPlanning {
+    TransactionFileSystemError::ChangedSincePlanning {
         path: path.to_string(),
     }
 }

@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use crate::MetadataSnapshot;
 use crate::ObservationLimit;
+use crate::ObservedFile;
 use crate::ObservedPath;
 use crate::journal::DurableFileEvidence;
 use crate::journal::JournalBytes;
@@ -27,8 +28,8 @@ pub enum TransactionFileSystemError {
     InvalidModelPath { path: String, reason: String },
     #[error("transaction path `{path}` traverses a symbolic link")]
     SymbolicLink { path: String },
-    #[error("transaction path `{path}` changed while planning")]
-    ChangedDuringPlanning { path: String },
+    #[error("transaction path `{path}` changed since planning")]
+    ChangedSincePlanning { path: String },
     #[error("transaction filesystem operation `{operation}` failed: {reason}")]
     Platform {
         operation: &'static str,
@@ -134,20 +135,44 @@ pub enum GuardedMutation<'a, P, S, B> {
     },
     Replace {
         destination: &'a P,
-        expected: &'a ObservedPath,
+        expected: &'a ObservedFile,
         staged: &'a S,
         backup: &'a B,
     },
     Remove {
         source: &'a P,
-        expected: &'a ObservedPath,
+        expected: &'a ObservedFile,
         backup: &'a B,
     },
     Move {
         source: &'a P,
-        expected: &'a ObservedPath,
+        expected: &'a ObservedFile,
         destination: &'a P,
         staged: Option<&'a S>,
+        backup: &'a B,
+    },
+}
+
+/// One inverse mutation that must preserve any externally disturbed path.
+#[derive(Debug)]
+pub enum GuardedRollback<'a, P, S, B> {
+    RemoveCreated {
+        destination: &'a P,
+        staged: &'a S,
+    },
+    RestoreReplaced {
+        destination: &'a P,
+        staged: &'a S,
+        backup: &'a B,
+    },
+    RestoreRemoved {
+        source: &'a P,
+        backup: &'a B,
+    },
+    RestoreMove {
+        source: &'a P,
+        destination: &'a P,
+        staged: &'a S,
         backup: &'a B,
     },
 }
@@ -207,7 +232,7 @@ pub trait TransactionStorage: TransactionCoordination {
         &self,
         storage: &Self::Storage,
         source: &Self::ResolvedPath,
-        expected: &ObservedPath,
+        expected: &ObservedFile,
     ) -> impl Future<Output = Result<Self::Backup, TransactionFileSystemError>> + Send;
 
     fn staged_file_evidence(
@@ -230,6 +255,10 @@ pub trait TransactionStorage: TransactionCoordination {
         path: &Self::ResolvedPath,
     ) -> Result<DurablePathKey, TransactionFileSystemError>;
 
+    /// Atomically installs one complete, parseable journal record.
+    ///
+    /// Replacing an existing record must leave either the previous record or the supplied
+    /// record available after failure; implementations must never expose a partial record.
     fn persist_journal(
         &self,
         storage: &Self::Storage,
@@ -256,7 +285,11 @@ pub trait TransactionStorage: TransactionCoordination {
         storage: &Self::Storage,
     ) -> impl Future<Output = Result<(), TransactionFileSystemError>> + Send;
 
-    fn cleanup_storage(
+    /// Durably removes staged files and backups while preserving the journal record.
+    ///
+    /// A successful call makes the removal restart-stable. Incomplete journal records and
+    /// recovery evidence must not be removed by this operation.
+    fn cleanup_artifacts(
         &self,
         storage: &Self::Storage,
     ) -> impl Future<Output = Result<(), TransactionFileSystemError>> + Send;
@@ -264,11 +297,27 @@ pub trait TransactionStorage: TransactionCoordination {
 
 /// Handle-relative visible mutation portion of the transaction capability.
 pub trait TransactionMutation: TransactionStorage {
+    /// Applies one mutation only when the live paths still match its guarded evidence.
+    ///
+    /// Implementations must compare identity, contents, metadata, and link topology through
+    /// retained no-follow handles. A retry may return [`MutationOutcome::AlreadyApplied`] only
+    /// when the visible state is proven to be the exact staged result; unknown state fails.
     fn apply_guarded(
         &self,
         lease: &Self::Lease,
         journal: &Self::Journal,
         mutation: GuardedMutation<'_, Self::ResolvedPath, Self::StagedFile, Self::Backup>,
+    ) -> impl Future<Output = Result<MutationOutcome, TransactionFileSystemError>> + Send;
+
+    /// Restores one mutation only when the live paths are absent or match its staged result.
+    ///
+    /// Unknown or externally disturbed state must be preserved and reported as an error.
+    /// Repeated calls are idempotent when the exact backup result is already visible.
+    fn restore_guarded(
+        &self,
+        lease: &Self::Lease,
+        journal: &Self::Journal,
+        rollback: GuardedRollback<'_, Self::ResolvedPath, Self::StagedFile, Self::Backup>,
     ) -> impl Future<Output = Result<MutationOutcome, TransactionFileSystemError>> + Send;
 
     fn sync_parent(

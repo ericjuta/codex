@@ -323,7 +323,7 @@ async fn detects_a_replaced_path_even_when_bytes_match() {
         .expect_err("identity replacement must fail");
     assert_eq!(
         error,
-        TransactionFileSystemError::ChangedDuringPlanning {
+        TransactionFileSystemError::ChangedSincePlanning {
             path: "file.txt".to_string(),
         }
     );
@@ -358,7 +358,7 @@ async fn detects_a_parent_directory_moved_outside_the_root() {
         .expect_err("detached parent must fail");
     assert_eq!(
         error,
-        TransactionFileSystemError::ChangedDuringPlanning {
+        TransactionFileSystemError::ChangedSincePlanning {
             path: "inside/file.txt".to_string(),
         }
     );
@@ -384,7 +384,7 @@ async fn detects_an_absent_leaf_that_appears_before_observation() {
         .expect_err("appearing path must fail");
     assert_eq!(
         error,
-        TransactionFileSystemError::ChangedDuringPlanning {
+        TransactionFileSystemError::ChangedSincePlanning {
             path: "new.txt".to_string(),
         }
     );
