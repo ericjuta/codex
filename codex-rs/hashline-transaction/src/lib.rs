@@ -103,6 +103,10 @@ mod journal_tests;
 mod executor_test_support;
 
 #[cfg(test)]
+#[path = "executor_test_mutation.rs"]
+mod executor_test_mutation;
+
+#[cfg(test)]
 #[path = "executor_test_recovery.rs"]
 mod executor_test_recovery;
 

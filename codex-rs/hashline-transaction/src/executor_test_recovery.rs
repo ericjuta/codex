@@ -1,7 +1,11 @@
+use std::sync::Arc;
+
 use crate::DurableFileEvidence;
 use crate::DurablePathKey;
 use crate::DurableTransactionKey;
 use crate::FileEvidence;
+use crate::JournalBytes;
+use crate::JournalState;
 use crate::LoadedJournal;
 use crate::ObservationLimit;
 use crate::ObservedEvidence;
@@ -20,20 +24,56 @@ use super::executor_test_support::observe;
 use super::executor_test_support::platform;
 
 impl TransactionRecovery for TestFileSystem {
-    async fn pending_recovery(
-        &self,
-        _limit: RecoveryScanLimit,
-    ) -> Result<Vec<DurableTransactionKey>, TransactionFileSystemError> {
-        Ok(Vec::new())
+    fn recovery_environment_id(&self) -> Result<String, TransactionFileSystemError> {
+        Ok("test-environment".to_string())
     }
 
-    async fn open_recovery_storage(
+    async fn pending_recovery(
+        &self,
+        limit: RecoveryScanLimit,
+    ) -> Result<Vec<DurableTransactionKey>, TransactionFileSystemError> {
+        let state = self.state.lock().unwrap();
+        if let Some(keys) = &state.pending_recovery_override {
+            return Ok(keys.clone());
+        }
+        let mut current = std::collections::BTreeMap::new();
+        for record in &state.journals {
+            current.insert(record.transaction_id.0.clone(), record.state);
+        }
+        let max_transactions = usize::try_from(limit.max_transactions).unwrap_or(usize::MAX);
+        Ok(current
+            .into_iter()
+            .filter(|(_, state)| *state != JournalState::Complete)
+            .take(max_transactions)
+            .map(|(transaction_id, _)| TestFileSystem::transaction_key(&transaction_id))
+            .collect())
+    }
+
+    async fn lock_recovery_storage(
         &self,
         key: &DurableTransactionKey,
     ) -> Result<Self::Storage, TransactionFileSystemError> {
         let transaction_id = decode_transaction_key(key)?;
+        if !self
+            .state
+            .lock()
+            .unwrap()
+            .allocated_transactions
+            .contains(&transaction_id)
+        {
+            return Err(platform("lock recovery storage", "unknown transaction"));
+        }
+        let recovery_lock = self
+            .recovery_locks
+            .lock()
+            .unwrap()
+            .entry(transaction_id.clone())
+            .or_insert_with(|| Arc::new(futures::lock::Mutex::new(())))
+            .clone();
+        let recovery_lease = recovery_lock.lock_owned().await;
         Ok(TestStorage {
             transaction_id: TransactionId(transaction_id),
+            _recovery_lease: Some(recovery_lease),
         })
     }
 
@@ -50,8 +90,9 @@ impl TransactionRecovery for TestFileSystem {
             .rev()
             .find(|(_, record)| record.transaction_id == storage.transaction_id)
             .ok_or_else(|| platform("load journal", "missing journal"))?;
-        let bytes = record
-            .to_bounded_json(max_bytes)
+        let bytes = serde_json::to_vec(record)
+            .map_err(|error| platform("load journal", error.to_string()))?;
+        let bytes = JournalBytes::try_from_vec(bytes, max_bytes)
             .map_err(|error| platform("load journal", error.to_string()))?;
         Ok(LoadedJournal {
             journal: TestJournal {
@@ -79,7 +120,7 @@ impl TransactionRecovery for TestFileSystem {
 
     async fn reopen_staged_file(
         &self,
-        _storage: &Self::Storage,
+        storage: &Self::Storage,
         evidence: &DurableFileEvidence,
     ) -> Result<Self::StagedFile, TransactionFileSystemError> {
         let key = decode_key("test-artifact", &evidence.key)?;
@@ -91,6 +132,9 @@ impl TransactionRecovery for TestFileSystem {
             .get(&key)
             .cloned()
             .ok_or_else(|| platform("reopen staged", key.clone()))?;
+        if staged.transaction_id != storage.transaction_id {
+            return Err(changed(&key));
+        }
         if durable_evidence(&key, &staged.file) != *evidence {
             return Err(changed(&key));
         }
@@ -99,7 +143,7 @@ impl TransactionRecovery for TestFileSystem {
 
     async fn reopen_backup(
         &self,
-        _storage: &Self::Storage,
+        storage: &Self::Storage,
         evidence: &DurableFileEvidence,
     ) -> Result<Self::Backup, TransactionFileSystemError> {
         let key = decode_key("test-artifact", &evidence.key)?;
@@ -111,6 +155,9 @@ impl TransactionRecovery for TestFileSystem {
             .get(&key)
             .cloned()
             .ok_or_else(|| platform("reopen backup", key.clone()))?;
+        if backup.transaction_id != storage.transaction_id {
+            return Err(changed(&key));
+        }
         if durable_evidence(&key, &backup.file) != *evidence {
             return Err(changed(&key));
         }

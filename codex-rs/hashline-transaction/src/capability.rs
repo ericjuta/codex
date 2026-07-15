@@ -107,7 +107,7 @@ pub struct DurablePathKey {
 ///
 /// The key is meaningful only to the implementation named by `namespace`. It is
 /// deliberately not a path or URI and must never be interpreted by the app host.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DurableTransactionKey {
     pub namespace: String,
@@ -168,15 +168,18 @@ pub enum GuardedRollback<'a, P, S, B> {
     },
     RestoreReplaced {
         destination: &'a P,
+        expected: &'a FileEvidence,
         staged: &'a S,
         backup: &'a B,
     },
     RestoreRemoved {
         source: &'a P,
+        expected: &'a FileEvidence,
         backup: &'a B,
     },
     RestoreMove {
         source: &'a P,
+        expected: &'a FileEvidence,
         destination: &'a P,
         staged: &'a S,
         backup: &'a B,
@@ -228,6 +231,10 @@ pub trait TransactionStorage: TransactionCoordination {
     type Backup: Debug + Send + Sync;
     type Journal: Debug + Send + Sync;
 
+    /// Exclusively creates storage for a new collision-resistant transaction ID.
+    ///
+    /// An existing ID must fail without waiting for recovery ownership; allocation must never
+    /// acquire the existing-transaction lease used by [`TransactionRecovery::lock_recovery_storage`].
     fn allocate_storage(
         &self,
         lease: &Self::Lease,
@@ -327,10 +334,14 @@ pub trait TransactionMutation: TransactionStorage {
         mutation: GuardedMutation<'_, Self::ResolvedPath, Self::StagedFile, Self::Backup>,
     ) -> impl Future<Output = Result<MutationOutcome, TransactionFileSystemError>> + Send;
 
-    /// Restores one mutation only when the live paths are absent or match its staged result.
+    /// Restores one mutation only when the live paths match a legal before, after, or restored state.
     ///
-    /// Unknown or externally disturbed state must be preserved and reported as an error.
-    /// Repeated calls are idempotent when the exact backup result is already visible.
+    /// Implementations must return [`MutationOutcome::AlreadyApplied`] when the exact planned
+    /// before-image is still visible (and, for a move, its destination is absent), when a create
+    /// destination is already absent, or when the exact backup result is already visible. A staged
+    /// after-image may be replaced or removed to perform the rollback. Every comparison includes
+    /// identity, contents, metadata, and link topology; unknown or externally disturbed state must
+    /// be preserved and reported as an error.
     fn restore_guarded(
         &self,
         lease: &Self::Lease,
@@ -352,16 +363,25 @@ pub trait TransactionMutation: TransactionStorage {
 
 /// Restart enumeration and convergence portion of the transaction capability.
 pub trait TransactionRecovery: TransactionMutation {
+    /// Returns the stable environment identifier that durable journals must match.
+    fn recovery_environment_id(&self) -> Result<String, TransactionFileSystemError>;
+
+    /// Enumerates bounded durable transaction keys that are not known to be complete.
     fn pending_recovery(
         &self,
         limit: RecoveryScanLimit,
     ) -> impl Future<Output = Result<Vec<DurableTransactionKey>, TransactionFileSystemError>> + Send;
 
-    fn open_recovery_storage(
+    /// Acquires exclusive recovery ownership for one durable transaction.
+    ///
+    /// The returned storage handle must retain that ownership for its lifetime. Concurrent calls
+    /// for the same key must serialize before either caller can load the journal.
+    fn lock_recovery_storage(
         &self,
         key: &DurableTransactionKey,
     ) -> impl Future<Output = Result<Self::Storage, TransactionFileSystemError>> + Send;
 
+    /// Loads the latest durable journal generation while recovery ownership is held.
     fn load_journal(
         &self,
         storage: &Self::Storage,

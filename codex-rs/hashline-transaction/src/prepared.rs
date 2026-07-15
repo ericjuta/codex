@@ -94,25 +94,33 @@ impl<P, S, B> PreparedMutation<P, S, B> {
             },
             Self::Replace {
                 destination,
+                expected,
                 staged,
                 backup,
-                ..
             } => GuardedRollback::RestoreReplaced {
                 destination,
+                expected,
                 staged,
                 backup,
             },
-            Self::Remove { source, backup, .. } => {
-                GuardedRollback::RestoreRemoved { source, backup }
-            }
+            Self::Remove {
+                source,
+                expected,
+                backup,
+            } => GuardedRollback::RestoreRemoved {
+                source,
+                expected,
+                backup,
+            },
             Self::Move {
                 source,
+                expected,
                 destination,
                 staged,
                 backup,
-                ..
             } => GuardedRollback::RestoreMove {
                 source,
+                expected,
                 destination,
                 staged,
                 backup,
