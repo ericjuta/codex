@@ -91,3 +91,11 @@ mod preview_tests;
 #[cfg(test)]
 #[path = "journal_tests.rs"]
 mod journal_tests;
+
+#[cfg(test)]
+#[path = "executor_test_support.rs"]
+mod executor_test_support;
+
+#[cfg(test)]
+#[path = "executor_tests.rs"]
+mod executor_tests;
