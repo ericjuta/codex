@@ -15,6 +15,7 @@ use crate::tools::handlers::ExecCommandHandlerOptions;
 use crate::tools::handlers::GetContextRemainingHandler;
 use crate::tools::handlers::HashlineHandler;
 use crate::tools::handlers::HashlineToolKind;
+use crate::tools::handlers::HashlineTransactionHandler;
 use crate::tools::handlers::ListAvailablePluginsToInstallHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
@@ -799,6 +800,14 @@ fn add_file_edit_tools(
             HashlineToolKind::RenameFile,
             include_environment_id,
         ));
+    }
+
+    if turn_context
+        .config
+        .features
+        .enabled(Feature::HashlineTransactions)
+    {
+        planned_tools.add(HashlineTransactionHandler::new(include_environment_id));
     }
 
     if turn_context.model_info.apply_patch_tool_type.is_some() {

@@ -114,6 +114,8 @@ pub enum Feature {
     ApplyPatchStreamingEvents,
     /// Enable native Hashline file tools alongside existing edit tools.
     Hashline,
+    /// Expose the preview-only Hashline transaction planner.
+    HashlineTransactions,
     /// Hide direct apply_patch from model-visible tools when Hashline is enabled.
     HashlineOnly,
     /// Allow exec tools to request additional permissions while staying sandboxed.
@@ -961,6 +963,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Hashline,
         key: "hashline",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::HashlineTransactions,
+        key: "hashline_transactions",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

@@ -2710,6 +2710,7 @@ dependencies = [
  "codex-feedback",
  "codex-file-system",
  "codex-git-utils",
+ "codex-hashline-transaction",
  "codex-home",
  "codex-hooks",
  "codex-http-client",

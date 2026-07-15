@@ -734,6 +734,82 @@ async fn hashline_file_tools_require_an_environment() {
 }
 
 #[tokio::test]
+async fn hashline_transaction_preview_requires_its_explicit_feature_gate() {
+    let disabled = probe(|turn| {
+        update_config(turn, |config| {
+            config.hashline.enabled = true;
+        });
+    })
+    .await;
+    assert_eq!(
+        disabled.namespace_function_names("hashline"),
+        &[
+            "find_block".to_string(),
+            "patch".to_string(),
+            "read".to_string(),
+            "remove_file".to_string(),
+            "rename_file".to_string(),
+            "write".to_string(),
+        ]
+    );
+
+    let feature_only = probe(|turn| {
+        set_feature(turn, Feature::HashlineTransactions, /*enabled*/ true);
+    })
+    .await;
+    assert_eq!(
+        feature_only.namespace_function_names("hashline"),
+        &["transaction".to_string()]
+    );
+
+    let combined = probe(|turn| {
+        set_feature(turn, Feature::HashlineTransactions, /*enabled*/ true);
+        update_config(turn, |config| {
+            config.hashline.enabled = true;
+        });
+    })
+    .await;
+    assert_eq!(
+        combined.namespace_function_names("hashline"),
+        &[
+            "find_block".to_string(),
+            "patch".to_string(),
+            "read".to_string(),
+            "remove_file".to_string(),
+            "rename_file".to_string(),
+            "transaction".to_string(),
+            "write".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn hashline_transaction_preview_requires_an_environment_and_adds_its_id_when_needed() {
+    let no_environment = probe(|turn| {
+        turn.environments.turn_environments.clear();
+        set_feature(turn, Feature::HashlineTransactions, /*enabled*/ true);
+    })
+    .await;
+    assert_eq!(
+        no_environment.namespace_function_names("hashline"),
+        Vec::<String>::new().as_slice()
+    );
+
+    let multiple_environments = probe(|turn| {
+        duplicate_primary_environment(turn);
+        set_feature(turn, Feature::HashlineTransactions, /*enabled*/ true);
+    })
+    .await;
+    let transaction = multiple_environments.visible_spec("hashline").clone();
+    let transaction_json = serde_json::to_value(transaction).expect("tool spec should serialize");
+    assert!(
+        transaction_json
+            .pointer("/tools/0/parameters/properties/environment_id")
+            .is_some()
+    );
+}
+
+#[tokio::test]
 async fn hashline_only_code_mode_prompt_advertises_hashline_not_apply_patch() {
     let plan = probe(|turn| {
         set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
