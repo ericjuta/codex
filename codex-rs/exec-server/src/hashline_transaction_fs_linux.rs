@@ -33,6 +33,10 @@ mod coordination;
 mod evidence;
 #[path = "hashline_transaction_fs_linux_semantics.rs"]
 mod semantics;
+#[path = "hashline_transaction_fs_linux_storage_io.rs"]
+mod storage_io;
+#[path = "hashline_transaction_fs_linux_storage.rs"]
+mod storage;
 
 use evidence::canonical_path_key;
 use evidence::file_kind;

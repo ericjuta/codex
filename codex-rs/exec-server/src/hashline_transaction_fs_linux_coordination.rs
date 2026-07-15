@@ -25,9 +25,16 @@ use crate::hashline_transaction_fs::NativeTransactionFileSystem;
 
 #[derive(Debug)]
 pub struct NativeLease {
+    root: NativeRoot,
     root_identity: ExecutorRootIdentity,
     covered_paths: BTreeSet<CanonicalPathKey>,
     _locked_directories: Vec<LockedDirectory>,
+}
+
+impl NativeLease {
+    pub(super) fn root(&self) -> &NativeRoot {
+        &self.root
+    }
 }
 
 #[derive(Debug)]
@@ -144,6 +151,7 @@ fn acquire_path_locks(
         verify_directory_chain(path)?;
     }
     Ok(NativeLease {
+        root: root.clone(),
         root_identity: root.identity.clone(),
         covered_paths,
         _locked_directories: locked_directories,
