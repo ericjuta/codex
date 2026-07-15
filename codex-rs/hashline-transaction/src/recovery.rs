@@ -57,8 +57,15 @@ pub enum RecoveryFailure {
     TransactionKeyMismatch,
     #[error("journal environment does not match the recovery capability")]
     EnvironmentMismatch,
+    #[error("journal manifest changed while recovery waited for path locks")]
+    ManifestMismatch,
     #[error("transaction root identity changed before recovery could lock it")]
     RootIdentityMismatch,
+}
+
+enum ConvergenceFailure {
+    Unavailable(RecoveryFailure),
+    Current(RecoveryFailure),
 }
 
 impl From<ExecutionFailure> for RecoveryFailure {
@@ -136,7 +143,10 @@ pub async fn recover_transaction<F: TransactionFileSystem>(
             plan_digest,
             outcome,
         }),
-        Err(failure) => {
+        Err(ConvergenceFailure::Unavailable(failure)) => {
+            Err(RecoveryError::Unavailable { failure })
+        }
+        Err(ConvergenceFailure::Current(failure)) => {
             let record_failure = mark_recovery_required(file_system, &storage, &mut record, limits)
                 .await
                 .err();
@@ -157,17 +167,9 @@ async fn load_record<F: TransactionFileSystem>(
     validate_transaction_key(key, limits)?;
     let environment_id = file_system.recovery_environment_id()?;
     let storage = file_system.lock_recovery_storage(key).await?;
-    let loaded = file_system
-        .load_journal(&storage, limits.max_journal_bytes)
-        .await?;
-    let record = JournalRecord::from_bounded_json(&loaded.bytes, JournalReadLimits::from(limits))?;
-    if record.transaction_key != *key {
-        return Err(RecoveryFailure::TransactionKeyMismatch);
-    }
-    if record.environment_id != environment_id {
-        return Err(RecoveryFailure::EnvironmentMismatch);
-    }
-    Ok((storage, loaded.journal, record))
+    let (journal, record) = read_record(file_system, &storage, limits).await?;
+    require_record_context(&record, key, &environment_id)?;
+    Ok((storage, journal, record))
 }
 
 async fn converge<F: TransactionFileSystem>(
@@ -176,36 +178,103 @@ async fn converge<F: TransactionFileSystem>(
     journal: &mut F::Journal,
     record: &mut JournalRecord,
     limits: TransactionLimits,
-) -> Result<RecoveryOutcome, RecoveryFailure> {
-    let root = file_system.reopen_root(&record.root).await?;
-    require_root_identity(file_system, &root, record)?;
-    let entries = reopen_entries(file_system, &root, &record.mutations).await?;
-    let paths = ordered_lock_paths(file_system, &entries)?;
-    let lease = file_system.lock_paths(&root, &paths).await?;
-    require_root_identity(file_system, &root, record)?;
+) -> Result<RecoveryOutcome, ConvergenceFailure> {
+    let root = file_system
+        .reopen_root(&record.root)
+        .await
+        .map_err(RecoveryFailure::from)
+        .map_err(ConvergenceFailure::Unavailable)?;
+    require_root_identity(file_system, &root, record).map_err(ConvergenceFailure::Unavailable)?;
+    let entries = reopen_entries(file_system, &root, &record.mutations)
+        .await
+        .map_err(RecoveryFailure::from)
+        .map_err(ConvergenceFailure::Unavailable)?;
+    let paths = ordered_lock_paths(file_system, &entries)
+        .map_err(RecoveryFailure::from)
+        .map_err(ConvergenceFailure::Unavailable)?;
+    let lease = file_system
+        .lock_paths(&root, &paths)
+        .await
+        .map_err(RecoveryFailure::from)
+        .map_err(ConvergenceFailure::Unavailable)?;
+    refresh_record(file_system, storage, journal, record, limits)
+        .await
+        .map_err(ConvergenceFailure::Unavailable)?;
+    require_root_identity(file_system, &root, record).map_err(ConvergenceFailure::Current)?;
 
-    match record.recovery_target {
-        RecoveryTarget::Commit => {
-            verify_committed(file_system, &lease, &entries, limits).await?;
-            if record.state != JournalState::Complete {
-                finish_cleanup(file_system, storage, journal, record, limits).await?;
+    let outcome = async {
+        match record.recovery_target {
+            RecoveryTarget::Commit => {
+                verify_committed(file_system, &lease, &entries, limits).await?;
+                if record.state != JournalState::Complete {
+                    finish_cleanup(file_system, storage, journal, record, limits).await?;
+                }
+                Ok(RecoveryOutcome::Committed)
             }
-            Ok(RecoveryOutcome::Committed)
-        }
-        RecoveryTarget::Rollback => {
-            converge_to_rollback(
-                file_system,
-                &lease,
-                storage,
-                journal,
-                record,
-                &entries,
-                limits,
-            )
-            .await?;
-            Ok(RecoveryOutcome::RolledBack)
+            RecoveryTarget::Rollback => {
+                converge_to_rollback(
+                    file_system,
+                    &lease,
+                    storage,
+                    journal,
+                    record,
+                    &entries,
+                    limits,
+                )
+                .await?;
+                Ok(RecoveryOutcome::RolledBack)
+            }
         }
     }
+    .await;
+    outcome.map_err(ConvergenceFailure::Current)
+}
+
+async fn read_record<F: TransactionFileSystem>(
+    file_system: &F,
+    storage: &F::Storage,
+    limits: TransactionLimits,
+) -> Result<(F::Journal, JournalRecord), RecoveryFailure> {
+    let loaded = file_system
+        .load_journal(storage, limits.max_journal_bytes)
+        .await?;
+    let record = JournalRecord::from_bounded_json(&loaded.bytes, JournalReadLimits::from(limits))?;
+    Ok((loaded.journal, record))
+}
+
+async fn refresh_record<F: TransactionFileSystem>(
+    file_system: &F,
+    storage: &F::Storage,
+    journal: &mut F::Journal,
+    record: &mut JournalRecord,
+    limits: TransactionLimits,
+) -> Result<(), RecoveryFailure> {
+    let (latest_journal, latest_record) = read_record(file_system, storage, limits).await?;
+    require_record_context(
+        &latest_record,
+        &record.transaction_key,
+        &record.environment_id,
+    )?;
+    if latest_record.manifest_digest != record.manifest_digest {
+        return Err(RecoveryFailure::ManifestMismatch);
+    }
+    *journal = latest_journal;
+    *record = latest_record;
+    Ok(())
+}
+
+fn require_record_context(
+    record: &JournalRecord,
+    key: &DurableTransactionKey,
+    environment_id: &str,
+) -> Result<(), RecoveryFailure> {
+    if record.transaction_key != *key {
+        return Err(RecoveryFailure::TransactionKeyMismatch);
+    }
+    if record.environment_id != environment_id {
+        return Err(RecoveryFailure::EnvironmentMismatch);
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

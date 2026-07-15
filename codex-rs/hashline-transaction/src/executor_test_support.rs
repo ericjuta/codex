@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::num::NonZeroU64;
 use std::sync::Arc;
+use std::sync::Condvar;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use codex_utils_path_uri::PathUri;
 
@@ -40,6 +42,9 @@ use super::executor_test_mutation::restore;
 pub(super) struct TestFileSystem {
     pub(super) state: Arc<Mutex<TestState>>,
     pub(super) recovery_locks: Arc<Mutex<BTreeMap<String, Arc<futures::lock::Mutex<()>>>>>,
+    path_locks: Arc<Mutex<BTreeMap<String, Arc<futures::lock::Mutex<()>>>>>,
+    path_lock_attempts: Arc<(Mutex<usize>, Condvar)>,
+    persist_pause: Arc<(Mutex<PersistPause>, Condvar)>,
 }
 
 #[derive(Debug, Default)]
@@ -62,6 +67,14 @@ pub(super) struct TestState {
     crash_after_apply_at: Option<usize>,
     crash_after_restore_at: Option<usize>,
     crash_after_cleanup: bool,
+    pub(super) journal_load_calls: usize,
+}
+
+#[derive(Debug, Default)]
+struct PersistPause {
+    persist_call: Option<usize>,
+    reached: bool,
+    released: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -72,8 +85,10 @@ pub(super) enum TestEvent {
     Cleaned,
 }
 
-#[derive(Clone, Debug)]
-pub(super) struct TestLease;
+#[derive(Debug)]
+pub(super) struct TestLease {
+    _guards: Vec<futures::lock::OwnedMutexGuard<()>>,
+}
 
 #[derive(Debug)]
 pub(super) struct TestStorage {
@@ -116,6 +131,9 @@ impl TestFileSystem {
                 ..TestState::default()
             })),
             recovery_locks: Arc::new(Mutex::new(BTreeMap::new())),
+            path_locks: Arc::new(Mutex::new(BTreeMap::new())),
+            path_lock_attempts: Arc::new((Mutex::new(0), Condvar::new())),
+            persist_pause: Arc::new((Mutex::new(PersistPause::default()), Condvar::new())),
         }
     }
 
@@ -192,6 +210,49 @@ impl TestFileSystem {
     pub(super) fn set_pending_recovery(&self, keys: Vec<DurableTransactionKey>) {
         self.state.lock().unwrap().pending_recovery_override = Some(keys);
     }
+
+    pub(super) fn pause_after_persist_at(&self, call: usize) {
+        let mut pause = self.persist_pause.0.lock().unwrap();
+        *pause = PersistPause {
+            persist_call: Some(call),
+            ..PersistPause::default()
+        };
+    }
+
+    pub(super) fn wait_for_persist_pause(&self) {
+        let pause = self.persist_pause.0.lock().unwrap();
+        let (_pause, wait) = self
+            .persist_pause
+            .1
+            .wait_timeout_while(pause, Duration::from_secs(5), |pause| !pause.reached)
+            .unwrap();
+        assert!(
+            !wait.timed_out(),
+            "timed out waiting for journal persistence pause"
+        );
+    }
+
+    pub(super) fn resume_persist(&self) {
+        let mut pause = self.persist_pause.0.lock().unwrap();
+        pause.released = true;
+        self.persist_pause.1.notify_all();
+    }
+
+    pub(super) fn wait_for_path_lock_attempts(&self, minimum: usize) {
+        let attempts = self.path_lock_attempts.0.lock().unwrap();
+        let (_attempts, wait) = self
+            .path_lock_attempts
+            .1
+            .wait_timeout_while(attempts, Duration::from_secs(5), |attempts| {
+                *attempts < minimum
+            })
+            .unwrap();
+        assert!(!wait.timed_out(), "timed out waiting for path lock attempt");
+    }
+
+    pub(super) fn journal_load_calls(&self) -> usize {
+        self.state.lock().unwrap().journal_load_calls
+    }
 }
 
 pub(super) fn observed_file(contents: &[u8], identity: u8) -> ObservedFile {
@@ -257,15 +318,36 @@ impl TransactionCoordination for TestFileSystem {
 
     async fn lock_paths(
         &self,
-        _root: &Self::Root,
+        root: &Self::Root,
         paths: &[Self::ResolvedPath],
     ) -> Result<Self::Lease, TransactionFileSystemError> {
+        {
+            let mut attempts = self.path_lock_attempts.0.lock().unwrap();
+            *attempts += 1;
+            self.path_lock_attempts.1.notify_all();
+        }
+        let locks = {
+            let mut path_locks = self.path_locks.lock().unwrap();
+            paths
+                .iter()
+                .map(|path| {
+                    path_locks
+                        .entry(format!("{root}\0{path}"))
+                        .or_insert_with(|| Arc::new(futures::lock::Mutex::new(())))
+                        .clone()
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut guards = Vec::with_capacity(locks.len());
+        for lock in locks {
+            guards.push(lock.lock_owned().await);
+        }
         self.state
             .lock()
             .unwrap()
             .events
             .push(TestEvent::Locked(paths.to_vec()));
-        Ok(TestLease)
+        Ok(TestLease { _guards: guards })
     }
 
     async fn reobserve_locked(
@@ -446,10 +528,20 @@ impl TransactionStorage for TestFileSystem {
         _storage: &Self::Storage,
     ) -> Result<(), TransactionFileSystemError> {
         let mut state = self.state.lock().unwrap();
+        let persist_calls = state.persist_calls;
         if state.crash_after_persist_at == Some(state.persist_calls) {
             state.crash_after_persist_at = None;
             drop(state);
             panic!("injected crash after durable journal persist");
+        }
+        drop(state);
+        let mut pause = self.persist_pause.0.lock().unwrap();
+        if pause.persist_call == Some(persist_calls) {
+            pause.reached = true;
+            self.persist_pause.1.notify_all();
+            while !pause.released {
+                pause = self.persist_pause.1.wait(pause).unwrap();
+            }
         }
         Ok(())
     }

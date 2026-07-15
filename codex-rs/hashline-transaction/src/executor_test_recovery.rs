@@ -82,7 +82,8 @@ impl TransactionRecovery for TestFileSystem {
         storage: &Self::Storage,
         max_bytes: u64,
     ) -> Result<LoadedJournal<Self::Journal>, TransactionFileSystemError> {
-        let state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
+        state.journal_load_calls += 1;
         let (generation, record) = state
             .journals
             .iter()
