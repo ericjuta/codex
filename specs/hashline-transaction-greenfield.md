@@ -68,7 +68,7 @@ Non-goals for the first version:
 - [x] (2026-07-15 08:48Z) Cover alias conflicts, file preconditions, identity and metadata digest binding, preview digest matching, invalid edit lists, unsupported kinds, hard links, and every current planner limit in Cargo and Bazel tests.
 - [x] (2026-07-15 09:13Z) Add typed line-anchored edit compilation with exact BOM/EOL preservation, trusted hard-limit configuration, allocation/cardinality bounds, UTF-8 enforcement, and focused ordered-edit regressions.
 - [x] (2026-07-15 09:34Z) Add canonical model-visible previews, fixed-width SHA-256 wire digests, dual raw/serialized response budgeting, and escape-heavy truncation regressions.
-- [ ] Implement the typed planner as a separate crate with no filesystem writes.
+- [x] (2026-07-15 10:16Z) Complete the typed no-write planner and prove its executor-owned Linux adapter with handle-relative no-follow traversal, stable evidence, bounded reads, directory-chain race detection, and fail-closed path-semantics negotiation.
 - [ ] Implement the staged executor, durable journal, rollback, and startup recovery.
 - [ ] Add the core tool adapter, remote-environment capability boundary, and bounded responses.
 - [ ] Run focused, fault-injection, cross-platform, and integration validation.
@@ -107,6 +107,12 @@ Non-goals for the first version:
   durability contract needs.
   Evidence: current executor/apply-patch interfaces; the new tool must remain
   unavailable until one complete environment capability proves those semantics.
+- Observation: a raw relative-path key is unsafe on case-insensitive or
+  normalization-insensitive filesystems, and a retained final-parent handle is
+  insufficient if that parent can be detached from the opened root.
+  Evidence: focused adapter review; the Linux implementation now keys by retained
+  parent identity plus entry bytes, proves byte-exact directory lookup, retains
+  every root-to-parent edge, and revalidates both identity and lookup semantics.
 
 ## Decision Log
 
@@ -175,6 +181,14 @@ Non-goals for the first version:
   must truncate content rather than turn a bounded preview into an oversized
   response failure. Only a structural summary that cannot fit may fail the
   response-size check.
+  Date/Author: 2026-07-15 / Codex
+- Decision: Initially expose native transaction planning only on Linux ext-family
+  directories without FS_CASEFOLD_FL and on tmpfs; return deterministic
+  Unsupported errors for other Linux filesystems and non-Linux executors.
+  Rationale: parent-identity plus raw-entry-byte canonical keys are sound only
+  where directory lookup is proven byte-exact. Narrow capability negotiation is
+  safer than silently treating macOS, Windows, network, or casefolded lookup
+  semantics as POSIX byte equality.
   Date/Author: 2026-07-15 / Codex
 
 ## Context and Orientation
@@ -551,8 +565,10 @@ From the repository root:
 After each Rust milestone, from `codex-rs`:
 
     just test -p codex-hashline-transaction
+    just test -p codex-exec-server
     just test -p codex-core hashline_transaction --no-capture
     just fix -p codex-hashline-transaction
+    just fix -p codex-exec-server
     just fix -p codex-core
     just fmt
 
@@ -578,6 +594,9 @@ Automated validation:
 - integration tests for mixed operations, previewed commit, permission denial,
   identical-byte file replacement, metadata/link changes, path-component races,
   remote environments, foreign app/exec OSes, and bounded model-visible output;
+- executor capability tests for native/foreign path conversion, absent leaves,
+  traversal and symlink rejection, byte caps, hard links, identical-byte
+  replacement, detached parent directories, and unsupported lookup semantics;
 - existing Hashline and apply-patch suites remain green while both surfaces coexist;
 - `git diff --check`, final diff inspection, and final worktree status.
 
@@ -654,8 +673,9 @@ feature must not delete unresolved journals or backups.
   journals store only data required for deterministic recovery.
 - Open question: can every supported executor implement the complete
   `TransactionFileSystem` identity, handle, mutation, sync, and recovery contract?
-  Owner/next step: milestone 1 platform feasibility spike; unsupported environments
-  must fail capability negotiation before planning or mutation.
+  Owner/next step: Linux planning feasibility is proven for ext-family and tmpfs;
+  implement native macOS/Windows semantics and complete mutation/recovery
+  capabilities while all other environments continue to fail negotiation.
 - Open question: should a remote executor recover pending journals automatically at
   startup or only before the next transaction in the same root?
   Owner/next step: milestone 2 failure-mode prototype.
@@ -671,8 +691,8 @@ feature must not delete unresolved journals or backups.
 - Outcome: the greenfield contract and guarantee boundaries are specified without
   changing current runtime behavior.
   Evidence: this spec and the inspected current Hashline/apply-patch source and tests.
-  Remaining: all implementation, fault injection, cross-platform proof, rollout,
-  and final API review.
+  Remaining: durable execution, remote/tool integration, cross-platform adapters,
+  fault injection, rollout, and final API review.
 - Outcome: the design avoids adding the transaction subsystem directly to
   `codex-core` and avoids describing one apply-patch envelope as filesystem atomic.
   Evidence: crate boundary and atomicity decisions above.
@@ -683,7 +703,16 @@ feature must not delete unresolved journals or backups.
   path mutations require handle-relative no-follow capabilities; recovery includes
   a non-destructive manual state; model, protocol, native, and persistent path types
   are separated explicitly.
-  Remaining: prove each capability on supported platform/environment implementations.
+  Remaining: prove mutation, durability, and recovery capabilities and add native
+  macOS/Windows planning adapters.
+- Outcome: the no-write planner now has one real executor-owned implementation
+  instead of only fake capability tests.
+  Evidence: NativePlanningFileSystem, 13 focused Linux adapter tests, and the
+  passing 326-test codex-exec-server suite. Bazel lock regeneration passes; the
+  Bazel unit target remains blocked during repository fetch by the pre-existing
+  aws-lc-sys_memcmp_check.patch mismatch.
+  Remaining: expose the same bounded planning semantics through the selected
+  remote executor without sending native handles across the protocol boundary.
 
 ## Artifacts and Notes
 

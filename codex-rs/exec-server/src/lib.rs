@@ -84,6 +84,14 @@ pub use fs_helper_main::main as run_fs_helper_main;
 pub use hashline_transaction_fs::NativePlanningFileSystem;
 pub use local_file_system::LOCAL_FS;
 pub use local_file_system::LocalFileSystem;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "hashline_transaction_fs_tests.rs"]
+mod hashline_transaction_fs_tests;
+
+#[cfg(all(test, not(target_os = "linux")))]
+#[path = "hashline_transaction_fs_unsupported_tests.rs"]
+mod hashline_transaction_fs_unsupported_tests;
 pub use noise_channel::NoiseChannelError;
 pub use noise_channel::NoiseChannelIdentity;
 pub use noise_channel::NoiseChannelPublicKey;
