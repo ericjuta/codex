@@ -7,7 +7,6 @@ use thiserror::Error;
 
 use crate::CanonicalPathKey;
 use crate::ExactBytesDigest;
-use crate::FileEdit;
 use crate::FileKind;
 use crate::FileMutation;
 use crate::ObservationLimit;
@@ -21,6 +20,11 @@ use crate::TransactionAction;
 use crate::TransactionFileSystemError;
 use crate::TransactionLimits;
 use crate::TransactionRequest;
+use crate::edits::EditOutputLimit;
+use crate::edits::compile_edits;
+use crate::edits::validate_utf8;
+use crate::limits::check_limit;
+use crate::limits::validate_request_limits;
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum PlanError {
@@ -48,6 +52,12 @@ pub enum PlanError {
     HardLink { path: String, link_count: u64 },
     #[error("transaction edits for `{path}` require one replacement, or none for a move")]
     InvalidEdits { path: String },
+    #[error("transaction path `{path}` is not valid UTF-8 text")]
+    InvalidUtf8 { path: String },
+    #[error("transaction anchor for `{path}` is invalid: {reason}")]
+    InvalidAnchor { path: String, reason: String },
+    #[error("transaction edit text for `{path}` is invalid: {reason}")]
+    InvalidEditText { path: String, reason: String },
     #[error("previewed transaction digest does not match the current plan")]
     PlanDigestMismatch {
         expected: ExactBytesDigest,
@@ -192,6 +202,7 @@ impl<'a, F: PlanningFileSystem> PlanState<'a, F> {
                         path: path.model_path,
                     });
                 }
+                validate_utf8(&path.model_path, &contents)?;
                 self.charge_after(contents.len())?;
                 self.summary.creates += 1;
                 let after_digest = ExactBytesDigest::new(&contents);
@@ -211,7 +222,15 @@ impl<'a, F: PlanningFileSystem> PlanState<'a, F> {
                 let observed = self.observe(&path).await?;
                 let before =
                     self.require_file(&path.model_path, expected.exact_digest, observed)?;
-                let contents = compile_edits(&path.model_path, &before.contents, edits, false)?;
+                let contents = compile_edits(
+                    &path.model_path,
+                    &before.contents,
+                    edits,
+                    false,
+                    EditOutputLimit {
+                        max_bytes: self.limits.max_file_bytes,
+                    },
+                )?;
                 self.charge_after(contents.len())?;
                 self.summary.updates += 1;
                 let after_digest = ExactBytesDigest::new(&contents);
@@ -228,6 +247,7 @@ impl<'a, F: PlanningFileSystem> PlanState<'a, F> {
                 let observed = self.observe(&path).await?;
                 let before =
                     self.require_file(&path.model_path, expected.exact_digest, observed)?;
+                validate_utf8(&path.model_path, &before.contents)?;
                 self.summary.deletes += 1;
                 Ok(PlannedMutation::Delete {
                     path: path.handle,
@@ -251,7 +271,15 @@ impl<'a, F: PlanningFileSystem> PlanState<'a, F> {
                         path: destination.model_path,
                     });
                 }
-                let contents = compile_edits(&source.model_path, &before.contents, edits, true)?;
+                let contents = compile_edits(
+                    &source.model_path,
+                    &before.contents,
+                    edits,
+                    true,
+                    EditOutputLimit {
+                        max_bytes: self.limits.max_file_bytes,
+                    },
+                )?;
                 self.charge_after(contents.len())?;
                 self.summary.moves += 1;
                 let after_digest = ExactBytesDigest::new(&contents);
@@ -273,14 +301,16 @@ pub async fn plan<F: PlanningFileSystem>(
     file_system: &F,
     request: TransactionRequest,
 ) -> Result<PlannedTransaction<F::Root, F::ResolvedPath>, PlanError> {
-    if request.mutations.is_empty() {
-        return Err(PlanError::Empty);
-    }
-    check_limit(
-        "mutation count",
-        request.mutations.len() as u64,
-        request.limits.max_mutations,
-    )?;
+    plan_with_limits(file_system, request, TransactionLimits::default()).await
+}
+
+/// Plans with limits selected by trusted orchestration rather than request input.
+pub async fn plan_with_limits<F: PlanningFileSystem>(
+    file_system: &F,
+    request: TransactionRequest,
+    limits: TransactionLimits,
+) -> Result<PlannedTransaction<F::Root, F::ResolvedPath>, PlanError> {
+    validate_request_limits(&request, limits)?;
 
     let root = file_system.open_root(&request.root).await?;
     let root_identity = file_system.root_identity(&root)?;
@@ -290,13 +320,13 @@ pub async fn plan<F: PlanningFileSystem>(
             .namespace
             .len()
             .saturating_add(root_identity.value.len()) as u64,
-        request.limits.max_executor_key_bytes,
+        limits.max_executor_key_bytes,
     )?;
 
     let mut state = PlanState {
         file_system,
         root: &root,
-        limits: request.limits,
+        limits,
         used_paths: BTreeMap::new(),
         summary: PlanSummary::default(),
     };
@@ -333,34 +363,6 @@ pub async fn plan<F: PlanningFileSystem>(
         plan_digest,
         summary,
     })
-}
-
-fn compile_edits(
-    path: &str,
-    before: &[u8],
-    edits: Vec<FileEdit>,
-    allow_empty: bool,
-) -> Result<Vec<u8>, PlanError> {
-    let mut edits = edits.into_iter();
-    match (edits.next(), edits.next()) {
-        (None, None) if allow_empty => Ok(before.to_vec()),
-        (Some(FileEdit::ReplaceAll { contents }), None) => Ok(contents),
-        _ => Err(PlanError::InvalidEdits {
-            path: path.to_string(),
-        }),
-    }
-}
-
-fn check_limit(resource: &'static str, observed: u64, limit: u64) -> Result<(), PlanError> {
-    if observed > limit {
-        Err(PlanError::Limit {
-            resource,
-            observed,
-            limit,
-        })
-    } else {
-        Ok(())
-    }
 }
 
 fn digest_plan<P>(

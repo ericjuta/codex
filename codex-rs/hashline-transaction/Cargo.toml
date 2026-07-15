@@ -12,6 +12,7 @@ codex-utils-path-uri = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
+xxhash-rust = { workspace = true, features = ["xxh32"] }
 
 [dev-dependencies]
 futures = { workspace = true, features = ["executor"] }

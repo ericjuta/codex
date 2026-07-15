@@ -89,7 +89,6 @@ fn request(mutations: Vec<FileMutation>) -> TransactionRequest {
         root: PathUri::parse("file:///workspace").unwrap(),
         action: TransactionAction::Preview,
         mutations,
-        limits: TransactionLimits::default(),
     }
 }
 
@@ -118,6 +117,14 @@ fn update(path: &str, before: &[u8], after: &[u8]) -> FileMutation {
 
 fn plan_error(file_system: &FakePlanningFileSystem, request: TransactionRequest) -> PlanError {
     block_on(plan(file_system, request)).unwrap_err()
+}
+
+fn plan_error_with_limits(
+    file_system: &FakePlanningFileSystem,
+    request: TransactionRequest,
+    limits: TransactionLimits,
+) -> PlanError {
+    block_on(plan_with_limits(file_system, request, limits)).unwrap_err()
 }
 
 #[test]
@@ -385,10 +392,13 @@ fn rejects_empty_and_ambiguous_edit_lists() {
 fn enforces_every_planner_limit() {
     let empty = FakePlanningFileSystem::default();
 
-    let mut mutation_count = request(vec![create("one", b"1"), create("two", b"2")]);
-    mutation_count.limits.max_mutations = 1;
+    let mutation_count = request(vec![create("one", b"1"), create("two", b"2")]);
+    let limits = TransactionLimits {
+        max_mutations: 1,
+        ..Default::default()
+    };
     assert_eq!(
-        plan_error(&empty, mutation_count),
+        plan_error_with_limits(&empty, mutation_count, limits),
         PlanError::Limit {
             resource: "mutation count",
             observed: 2,
@@ -396,10 +406,77 @@ fn enforces_every_planner_limit() {
         }
     );
 
-    let mut model_path = request(vec![create("long", b"1")]);
-    model_path.limits.max_model_path_bytes = 3;
+    let edit_count = request(vec![FileMutation::Update {
+        path: "file".to_string(),
+        expected: expected(b"old"),
+        edits: vec![
+            FileEdit::ReplaceAll {
+                contents: b"one".to_vec(),
+            },
+            FileEdit::ReplaceAll {
+                contents: b"two".to_vec(),
+            },
+        ],
+    }]);
+    let limits = TransactionLimits {
+        max_edits: 1,
+        ..Default::default()
+    };
     assert_eq!(
-        plan_error(&empty, model_path),
+        plan_error_with_limits(&empty, edit_count, limits),
+        PlanError::Limit {
+            resource: "edit count",
+            observed: 2,
+            limit: 1,
+        }
+    );
+
+    let edit_lines = request(vec![FileMutation::Update {
+        path: "file".to_string(),
+        expected: expected(b"old"),
+        edits: vec![FileEdit::InsertBefore {
+            anchor: LineAnchor {
+                line: 1,
+                expected_hash: "0000".to_string(),
+            },
+            lines: vec![String::new(), String::new()],
+        }],
+    }]);
+    let limits = TransactionLimits {
+        max_edit_lines: 1,
+        ..Default::default()
+    };
+    assert_eq!(
+        plan_error_with_limits(&empty, edit_lines, limits),
+        PlanError::Limit {
+            resource: "edit line count",
+            observed: 2,
+            limit: 1,
+        }
+    );
+
+    let input_bytes = request(vec![create("file", b"new")]);
+    let observed_input_bytes = super::limits::request_costs(&input_bytes).input_bytes;
+    let limits = TransactionLimits {
+        max_input_bytes: observed_input_bytes - 1,
+        ..Default::default()
+    };
+    assert_eq!(
+        plan_error_with_limits(&empty, input_bytes, limits),
+        PlanError::Limit {
+            resource: "input bytes",
+            observed: observed_input_bytes,
+            limit: observed_input_bytes - 1,
+        }
+    );
+
+    let model_path = request(vec![create("long", b"1")]);
+    let limits = TransactionLimits {
+        max_model_path_bytes: 3,
+        ..Default::default()
+    };
+    assert_eq!(
+        plan_error_with_limits(&empty, model_path, limits),
         PlanError::Limit {
             resource: "model path bytes",
             observed: 4,
@@ -407,11 +484,14 @@ fn enforces_every_planner_limit() {
         }
     );
 
-    let mut root_key = request(vec![create("file", b"1")]);
+    let root_key = request(vec![create("file", b"1")]);
     let root_key_bytes = "fake-root".len() as u64 + root_key.root.to_string().len() as u64;
-    root_key.limits.max_executor_key_bytes = root_key_bytes - 1;
+    let limits = TransactionLimits {
+        max_executor_key_bytes: root_key_bytes - 1,
+        ..Default::default()
+    };
     assert_eq!(
-        plan_error(&empty, root_key),
+        plan_error_with_limits(&empty, root_key, limits),
         PlanError::Limit {
             resource: "executor key bytes",
             observed: root_key_bytes,
@@ -420,10 +500,13 @@ fn enforces_every_planner_limit() {
     );
 
     let long_path = "x".repeat(40);
-    let mut path_key = request(vec![create(&long_path, b"1")]);
-    path_key.limits.max_executor_key_bytes = 30;
+    let path_key = request(vec![create(&long_path, b"1")]);
+    let limits = TransactionLimits {
+        max_executor_key_bytes: 30,
+        ..Default::default()
+    };
     assert_eq!(
-        plan_error(&empty, path_key),
+        plan_error_with_limits(&empty, path_key, limits),
         PlanError::Limit {
             resource: "executor key bytes",
             observed: 49,
@@ -435,10 +518,13 @@ fn enforces_every_planner_limit() {
         files: BTreeMap::from([("file".to_string(), observed(b"old", 1))]),
         ..Default::default()
     };
-    let mut before_file = request(vec![update("file", b"old", b"new")]);
-    before_file.limits.max_file_bytes = 2;
+    let before_file = request(vec![update("file", b"old", b"new")]);
+    let limits = TransactionLimits {
+        max_file_bytes: 2,
+        ..Default::default()
+    };
     assert_eq!(
-        plan_error(&existing, before_file),
+        plan_error_with_limits(&existing, before_file, limits),
         PlanError::Limit {
             resource: "file bytes",
             observed: 3,
@@ -446,10 +532,13 @@ fn enforces_every_planner_limit() {
         }
     );
 
-    let mut after_file = request(vec![create("file", b"new")]);
-    after_file.limits.max_file_bytes = 2;
+    let after_file = request(vec![create("file", b"new")]);
+    let limits = TransactionLimits {
+        max_file_bytes: 2,
+        ..Default::default()
+    };
     assert_eq!(
-        plan_error(&empty, after_file),
+        plan_error_with_limits(&empty, after_file, limits),
         PlanError::Limit {
             resource: "file bytes",
             observed: 3,
@@ -461,10 +550,13 @@ fn enforces_every_planner_limit() {
         files: BTreeMap::from([("file".to_string(), observed(b"old", 1))]),
         ..Default::default()
     };
-    let mut total = request(vec![update("file", b"old", b"new")]);
-    total.limits.max_total_bytes = 5;
+    let total = request(vec![update("file", b"old", b"new")]);
+    let limits = TransactionLimits {
+        max_total_bytes: 5,
+        ..Default::default()
+    };
     assert_eq!(
-        plan_error(&total_file_system, total),
+        plan_error_with_limits(&total_file_system, total, limits),
         PlanError::Limit {
             resource: "total bytes",
             observed: 6,

@@ -1,6 +1,8 @@
 //! Executor-owned capability boundary for recoverable Hashline transactions.
 
 mod capability;
+mod edits;
+mod limits;
 mod observation;
 mod planner;
 mod types;
@@ -32,9 +34,12 @@ pub use observation::ObservedFile;
 pub use observation::ObservedPath;
 pub use planner::PlanError;
 pub use planner::plan;
+pub use planner::plan_with_limits;
 pub use types::ExpectedFile;
 pub use types::FileEdit;
 pub use types::FileMutation;
+pub use types::LineAnchor;
+pub use types::LineRange;
 pub use types::PlanSummary;
 pub use types::PlannedMutation;
 pub use types::PlannedTransaction;

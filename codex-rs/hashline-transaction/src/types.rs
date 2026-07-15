@@ -7,6 +7,15 @@ use crate::ExactBytesDigest;
 use crate::ExecutorRootIdentity;
 use crate::ObservedFile;
 
+const DEFAULT_MAX_MUTATIONS: u64 = 64;
+const DEFAULT_MAX_EDITS: u64 = 1024;
+const DEFAULT_MAX_EDIT_LINES: u64 = 65_536;
+const DEFAULT_MAX_INPUT_BYTES: u64 = 16 * 1024 * 1024;
+const DEFAULT_MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
+const DEFAULT_MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
+const DEFAULT_MAX_MODEL_PATH_BYTES: u64 = 4096;
+const DEFAULT_MAX_EXECUTOR_KEY_BYTES: u64 = 4096;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionRequest {
@@ -14,7 +23,6 @@ pub struct TransactionRequest {
     pub root: PathUri,
     pub action: TransactionAction,
     pub mutations: Vec<FileMutation>,
-    pub limits: TransactionLimits,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -31,6 +39,9 @@ pub enum TransactionAction {
 #[serde(rename_all = "camelCase")]
 pub struct TransactionLimits {
     pub max_mutations: u64,
+    pub max_edits: u64,
+    pub max_edit_lines: u64,
+    pub max_input_bytes: u64,
     pub max_file_bytes: u64,
     pub max_total_bytes: u64,
     pub max_model_path_bytes: u64,
@@ -40,11 +51,14 @@ pub struct TransactionLimits {
 impl Default for TransactionLimits {
     fn default() -> Self {
         Self {
-            max_mutations: 64,
-            max_file_bytes: 4 * 1024 * 1024,
-            max_total_bytes: 16 * 1024 * 1024,
-            max_model_path_bytes: 4096,
-            max_executor_key_bytes: 4096,
+            max_mutations: DEFAULT_MAX_MUTATIONS,
+            max_edits: DEFAULT_MAX_EDITS,
+            max_edit_lines: DEFAULT_MAX_EDIT_LINES,
+            max_input_bytes: DEFAULT_MAX_INPUT_BYTES,
+            max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            max_total_bytes: DEFAULT_MAX_TOTAL_BYTES,
+            max_model_path_bytes: DEFAULT_MAX_MODEL_PATH_BYTES,
+            max_executor_key_bytes: DEFAULT_MAX_EXECUTOR_KEY_BYTES,
         }
     }
 }
@@ -56,9 +70,37 @@ pub struct ExpectedFile {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LineAnchor {
+    pub line: u64,
+    pub expected_hash: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LineRange {
+    pub start: LineAnchor,
+    pub end: LineAnchor,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum FileEdit {
-    ReplaceAll { contents: Vec<u8> },
+    ReplaceAll {
+        contents: Vec<u8>,
+    },
+    ReplaceLines {
+        range: LineRange,
+        lines: Vec<String>,
+    },
+    InsertBefore {
+        anchor: LineAnchor,
+        lines: Vec<String>,
+    },
+    InsertAfter {
+        anchor: LineAnchor,
+        lines: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
