@@ -2,11 +2,14 @@
 
 mod capability;
 mod edits;
+mod executor;
 mod journal;
 mod limits;
 mod observation;
 mod planner;
+mod prepared;
 mod preview;
+mod rollback;
 mod types;
 
 pub use capability::CanonicalPathKey;
@@ -14,6 +17,7 @@ pub use capability::DurablePathKey;
 pub use capability::DurableTransactionKey;
 pub use capability::ExecutorRootIdentity;
 pub use capability::GuardedMutation;
+pub use capability::GuardedRollback;
 pub use capability::MutationOutcome;
 pub use capability::PlanningFileSystem;
 pub use capability::RecoveryOutcome;
@@ -25,6 +29,11 @@ pub use capability::TransactionId;
 pub use capability::TransactionMutation;
 pub use capability::TransactionRecovery;
 pub use capability::TransactionStorage;
+pub use executor::ExecuteError;
+pub use executor::ExecutionFailure;
+pub use executor::ExecutionOutcome;
+pub use executor::ExecutionResult;
+pub use executor::execute;
 pub use journal::DurableFileEvidence;
 pub use journal::FileEvidence;
 pub use journal::JournalBytes;
