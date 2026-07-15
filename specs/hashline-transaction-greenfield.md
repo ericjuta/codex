@@ -4,7 +4,7 @@
 - Status: In Progress
 - Owner(s): Codex
 - Created: 2026-07-15
-- Last Updated: 2026-07-15 11:24Z
+- Last Updated: 2026-07-15 15:00Z
 - Links: [Current Hashline integration](../codex-rs/docs/hashline_tool_integration_spec.md) | [Prior Hashline hardening](hashline-audit-hardening.md)
 
 This ExecPlan is the source of truth for a greenfield Hashline transaction
@@ -71,8 +71,9 @@ Non-goals for the first version:
 - [x] (2026-07-15 10:16Z) Complete the typed no-write planner and prove its executor-owned Linux adapter with handle-relative no-follow traversal, stable evidence, bounded reads, directory-chain race detection, and fail-closed path-semantics negotiation.
 - [x] (2026-07-15 11:24Z) Expose preview-only planning through the selected local or remote environment, bind the canonical environment identity at the `Environment` facade, keep executor handles and full file images local, route restricted requests through the filesystem helper sandbox, bound every RPC response/error path, and prove both paths without writes.
 - [x] (2026-07-15 12:16Z) Implement the versioned bounded journal, staged executor, guarded per-path commit, reverse ordinary-error rollback, terminal cleanup receipts, and evidence-preserving `RecoveryRequired` state behind the complete transaction capability.
-- [ ] Implement engine-owned startup recovery and restart convergence from every durable transition.
-- [ ] Add the core tool adapter and remote commit/recovery capability boundary.
+- [x] (2026-07-15 14:43Z) Implement engine-owned startup recovery and restart convergence from every durable transition.
+- [x] (2026-07-15 14:58Z) Add the disabled-by-default core preview adapter with selected-environment routing, sandbox propagation, an 8 KiB model-output cap, mixed-operation no-write coverage, and preserved RPC compatibility.
+- [ ] Add immediate commit, previewed commit, and the remote commit/recovery capability boundary.
 - [ ] Run focused, fault-injection, cross-platform, and integration validation.
 - [ ] Record implementation outcomes, review findings, rollout evidence, and residual risks.
 
@@ -745,16 +746,29 @@ feature must not delete unresolved journals or backups.
   tool adapter are complete.
 - Outcome: the shared engine now executes a fully planned transaction through canonical
   locking, final deep revalidation, same-filesystem staging/backups, write-ahead mutation
-  progress, parent sync, reverse rollback, cleanup, and terminal journal receipts.
-  Evidence: commits `d589476c42`, `d0717d7137`, and `1d99c97f9c`; 35 passing
-  `codex-hashline-transaction` tests including six deterministic failure scenarios; 17
-  passing Hashline executor-boundary tests; and a findings-only durability review with no
-  remaining P1/P2 findings. The tests prove rollback or evidence-preserving quarantine for
-  stale final validation, forward mutation failure, inverse mutation failure, and journal
-  failure immediately before and after visible mutation.
-  Remaining: the production Linux surface still implements planning only. Add engine-owned
-  restart recovery plus a fail-closed native mutation/storage adapter before exposing commit
-  through the environment RPC or model tool surface.
+  progress, parent sync, reverse rollback, cleanup, and terminal journal receipts. It also
+  recovers after restart from every durable create transition, validates immutable schema-3
+  manifests, and reloads the journal after acquiring path locks so a waiting recovery never
+  acts on a stale pre-lock snapshot.
+  Evidence: commits `d589476c42`, `d0717d7137`, `6d11343266`, `e84275f6de`, and `905abe77ed`;
+  58 passing `codex-hashline-transaction` tests, including deterministic mutation/journal
+  failures, restart convergence, exact-before rollback, scan isolation, and the stale-journal
+  lock-order regression. Review found no remaining P1/P2 recovery findings.
+  Compatibility boundary: schema 3 is the first durable on-disk journal surface; no production
+  schema-2 journal was ever exposed, so recovery intentionally rejects older schemas rather
+  than migrating unverified records.
+  Remaining: the production Linux surface still implements planning only. Add a fail-closed
+  native mutation/storage adapter before exposing commit through the environment RPC or model
+  tool surface.
+- Outcome: the experimental `hashline_transactions` feature now exposes a preview-only
+  `hashline.transaction` tool without changing the existing Hashline namespace or defaults.
+  The model adapter routes through the selected environment and turn sandbox, emits valid JSON
+  capped at 8 KiB, and leaves the established exec-server preview DTO wire shape unchanged.
+  Evidence: focused `codex-core` Hashline transaction tests pass 5/5, including mixed
+  create/update/delete/move no-write state comparison, oversized output, denied-path sandbox,
+  and explicit remote selection; `codex-hashline-transaction` passes 58/58 and
+  `codex-features` passes 56/56. Remaining: commit and recovery are intentionally absent from
+  the model tool until the native mutation/storage capability is complete.
 
 ## Artifacts and Notes
 
@@ -778,3 +792,9 @@ property that can be retrofitted onto arbitrary direct reads of unrelated paths.
   including canonical environment identity, bounded integer-ID remote RPC, stable
   error categories, and restricted filesystem-helper routing, without enabling a
   model-facing tool or commit operation.
+- 2026-07-15: Completed the shared recoverable executor and restart-recovery milestone.
+  Durable schema-3 manifests bind the immutable operation set; recovery reloads under the
+  acquired path lease before convergence and retains evidence whenever it cannot prove safety.
+- 2026-07-15: Added the opt-in preview-only core tool. Review hardening preserved the existing
+  RPC digest-field spelling, made auto-environment coverage executor-neutral, proved sandbox
+  forwarding and mixed-operation no-write behavior, and added an 8 KiB model-visible cap.

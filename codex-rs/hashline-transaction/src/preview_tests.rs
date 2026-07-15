@@ -172,13 +172,30 @@ fn preview_projects_every_operation_without_executor_handles_or_full_images() {
     assert!(!serialized.contains("after-secret"));
     assert!(!serialized.contains("before-secret"));
     let value = serde_json::to_value(&preview).unwrap();
-    for mutation in value["mutations"].as_array().unwrap() {
-        for field in ["beforeDigest", "afterDigest"] {
+    let mutations = value["mutations"].as_array().unwrap();
+    for mutation in mutations {
+        for field in ["before_digest", "after_digest"] {
             if let Some(digest) = mutation.get(field) {
                 assert_eq!(digest.as_str().unwrap().len(), 64);
             }
         }
+        assert!(mutation.get("beforeDigest").is_none());
+        assert!(mutation.get("afterDigest").is_none());
     }
+    assert_eq!(
+        mutations
+            .iter()
+            .filter(|mutation| mutation.get("before_digest").is_some())
+            .count(),
+        3
+    );
+    assert_eq!(
+        mutations
+            .iter()
+            .filter(|mutation| mutation.get("after_digest").is_some())
+            .count(),
+        3
+    );
 }
 
 #[test]
