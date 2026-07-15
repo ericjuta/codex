@@ -2,6 +2,8 @@
 
 mod capability;
 mod observation;
+mod planner;
+mod types;
 
 pub use capability::CanonicalPathKey;
 pub use capability::DurablePathKey;
@@ -28,7 +30,22 @@ pub use observation::MetadataSnapshot;
 pub use observation::ObservationLimit;
 pub use observation::ObservedFile;
 pub use observation::ObservedPath;
+pub use planner::PlanError;
+pub use planner::plan;
+pub use types::ExpectedFile;
+pub use types::FileEdit;
+pub use types::FileMutation;
+pub use types::PlanSummary;
+pub use types::PlannedMutation;
+pub use types::PlannedTransaction;
+pub use types::TransactionAction;
+pub use types::TransactionLimits;
+pub use types::TransactionRequest;
 
 #[cfg(test)]
 #[path = "capability_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "planner_tests.rs"]
+mod planner_tests;

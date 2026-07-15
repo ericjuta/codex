@@ -18,6 +18,10 @@ impl ExactBytesDigest {
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    pub const fn from_array(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
 }
 
 impl fmt::Display for ExactBytesDigest {
