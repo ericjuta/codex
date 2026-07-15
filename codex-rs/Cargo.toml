@@ -95,6 +95,7 @@ members = [
     "utils/path-uri",
     "utils/cargo-bin",
     "git-utils",
+    "hashline-transaction",
     "utils/cache",
     "utils/image",
     "utils/json-to-toml",
@@ -196,6 +197,7 @@ codex-install-context = { path = "install-context" }
 codex-file-search = { path = "file-search" }
 codex-file-watcher = { path = "file-watcher" }
 codex-git-utils = { path = "git-utils" }
+codex-hashline-transaction = { path = "hashline-transaction" }
 codex-hooks = { path = "hooks" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }

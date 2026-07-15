@@ -3244,6 +3244,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-hashline-transaction"
+version = "0.1337.0"
+dependencies = [
+ "codex-utils-path-uri",
+ "futures",
+ "pretty_assertions",
+ "serde",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "codex-home"
 version = "0.1337.0"
 dependencies = [

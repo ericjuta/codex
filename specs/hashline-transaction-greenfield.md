@@ -63,6 +63,7 @@ Non-goals for the first version:
 - [x] (2026-07-15 07:17Z) Verify the current Hashline create/update and apply-patch atomicity boundaries.
 - [x] (2026-07-15 07:19Z) Define the greenfield API, guarantee levels, recovery model, and staged implementation plan.
 - [x] (2026-07-15 07:31Z) Resolve independent review findings for file identity, path races, executor capabilities, recovery semantics, and path types.
+- [x] (2026-07-15 08:26Z) Establish the separate crate, executor-owned read-only planning boundary, complete transaction capability traits, and exact-byte identity/metadata evidence types.
 - [ ] Implement the typed planner as a separate crate with no filesystem writes.
 - [ ] Implement the staged executor, durable journal, rollback, and startup recovery.
 - [ ] Add the core tool adapter, remote-environment capability boundary, and bounded responses.
