@@ -118,6 +118,7 @@ enum ToolTransactionAction {
     Preview,
     Commit,
     CommitPreviewed {
+        #[serde(rename = "expectedPlanDigest", alias = "expected_plan_digest")]
         expected_plan_digest: ExactBytesDigest,
     },
 }
@@ -382,3 +383,7 @@ async fn handle_transaction(
         Some(true),
     )))
 }
+
+#[cfg(test)]
+#[path = "hashline_transaction_tests.rs"]
+mod tests;
