@@ -90,6 +90,9 @@ pub async fn execute<F: TransactionFileSystem>(
         .allocate_storage(&lease, &transaction_id, requirements)
         .await
         .map_err(before_commit)?;
+    let transaction_key = file_system
+        .durable_transaction_key(&storage)
+        .map_err(before_commit)?;
     let prepared = match prepare(file_system, &storage, &plan.mutations).await {
         Ok(prepared) => prepared,
         Err(error) => {
@@ -101,6 +104,7 @@ pub async fn execute<F: TransactionFileSystem>(
     let operations = prepared.iter().map(|entry| entry.journal.clone()).collect();
     let mut record = JournalRecord::new(
         transaction_id.clone(),
+        transaction_key,
         plan.environment_id,
         root,
         plan.root_identity,

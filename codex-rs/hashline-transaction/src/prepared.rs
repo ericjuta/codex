@@ -1,7 +1,7 @@
+use crate::FileEvidence;
 use crate::GuardedMutation;
 use crate::GuardedRollback;
 use crate::JournalOperation;
-use crate::ObservedFile;
 use crate::PlannedMutation;
 use crate::StageFileRequest;
 use crate::TransactionFileSystem;
@@ -19,18 +19,18 @@ pub(crate) enum PreparedMutation<P, S, B> {
     },
     Replace {
         destination: P,
-        expected: ObservedFile,
+        expected: FileEvidence,
         staged: S,
         backup: B,
     },
     Remove {
         source: P,
-        expected: ObservedFile,
+        expected: FileEvidence,
         backup: B,
     },
     Move {
         source: P,
-        expected: ObservedFile,
+        expected: FileEvidence,
         destination: P,
         staged: S,
         backup: B,
@@ -164,14 +164,15 @@ pub(crate) async fn prepare<F: TransactionFileSystem>(
                 contents,
                 ..
             } => {
+                let expected = FileEvidence::from(before);
                 let staged =
                     stage(file_system, storage, path, contents, Some(&before.metadata)).await?;
-                let backup = backup(file_system, storage, path, before).await?;
-                let journal = replacement_journal(file_system, path, before, &staged, &backup)?;
+                let backup = backup(file_system, storage, path, &expected).await?;
+                let journal = replacement_journal(file_system, path, &expected, &staged, &backup)?;
                 PreparedEntry {
                     mutation: PreparedMutation::Replace {
                         destination: path.clone(),
-                        expected: before.clone(),
+                        expected,
                         staged,
                         backup,
                     },
@@ -179,16 +180,17 @@ pub(crate) async fn prepare<F: TransactionFileSystem>(
                 }
             }
             PlannedMutation::Delete { path, before, .. } => {
-                let backup = backup(file_system, storage, path, before).await?;
+                let expected = FileEvidence::from(before);
+                let backup = backup(file_system, storage, path, &expected).await?;
                 let journal = JournalOperation::Delete {
                     path: file_system.durable_path_key(path)?,
-                    before: before.into(),
+                    before: expected.clone(),
                     backup: file_system.backup_evidence(&backup)?,
                 };
                 PreparedEntry {
                     mutation: PreparedMutation::Remove {
                         source: path.clone(),
-                        expected: before.clone(),
+                        expected,
                         backup,
                     },
                     journal,
@@ -201,6 +203,7 @@ pub(crate) async fn prepare<F: TransactionFileSystem>(
                 contents,
                 ..
             } => {
+                let expected = FileEvidence::from(before);
                 let staged = stage(
                     file_system,
                     storage,
@@ -209,18 +212,18 @@ pub(crate) async fn prepare<F: TransactionFileSystem>(
                     Some(&before.metadata),
                 )
                 .await?;
-                let backup = backup(file_system, storage, source, before).await?;
+                let backup = backup(file_system, storage, source, &expected).await?;
                 let journal = JournalOperation::Move {
                     source: file_system.durable_path_key(source)?,
                     destination: file_system.durable_path_key(destination)?,
-                    before: before.into(),
+                    before: expected.clone(),
                     staged: file_system.staged_file_evidence(&staged)?,
                     backup: file_system.backup_evidence(&backup)?,
                 };
                 PreparedEntry {
                     mutation: PreparedMutation::Move {
                         source: source.clone(),
-                        expected: before.clone(),
+                        expected,
                         destination: destination.clone(),
                         staged,
                         backup,
@@ -260,7 +263,7 @@ async fn backup<F: TransactionFileSystem>(
     file_system: &F,
     storage: &F::Storage,
     source: &F::ResolvedPath,
-    expected: &ObservedFile,
+    expected: &FileEvidence,
 ) -> Result<F::Backup, TransactionFileSystemError> {
     let backup = file_system.backup_file(storage, source, expected).await?;
     file_system.sync_backup(&backup).await?;
@@ -270,13 +273,13 @@ async fn backup<F: TransactionFileSystem>(
 fn replacement_journal<F: TransactionFileSystem>(
     file_system: &F,
     path: &F::ResolvedPath,
-    before: &ObservedFile,
+    before: &FileEvidence,
     staged: &F::StagedFile,
     backup: &F::Backup,
 ) -> Result<JournalOperation, TransactionFileSystemError> {
     Ok(JournalOperation::Update {
         path: file_system.durable_path_key(path)?,
-        before: before.into(),
+        before: before.clone(),
         staged: file_system.staged_file_evidence(staged)?,
         backup: file_system.backup_evidence(backup)?,
     })

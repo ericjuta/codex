@@ -23,27 +23,25 @@ use crate::ObservationLimit;
 use crate::ObservedFile;
 use crate::ObservedPath;
 use crate::PlanningFileSystem;
-use crate::RecoveryOutcome;
 use crate::StageFileRequest;
 use crate::StorageRequirements;
 use crate::TransactionCoordination;
 use crate::TransactionFileSystemError;
 use crate::TransactionId;
 use crate::TransactionMutation;
-use crate::TransactionRecovery;
 use crate::TransactionStorage;
 
 #[derive(Clone, Debug)]
 pub(super) struct TestFileSystem {
-    state: Arc<Mutex<TestState>>,
+    pub(super) state: Arc<Mutex<TestState>>,
 }
 
 #[derive(Debug, Default)]
-struct TestState {
+pub(super) struct TestState {
     files: BTreeMap<String, ObservedFile>,
-    staged: BTreeMap<String, TestStagedFile>,
-    backups: BTreeMap<String, TestBackup>,
-    journals: Vec<JournalRecord>,
+    pub(super) staged: BTreeMap<String, TestStagedFile>,
+    pub(super) backups: BTreeMap<String, TestBackup>,
+    pub(super) journals: Vec<JournalRecord>,
     events: Vec<TestEvent>,
     next_artifact: usize,
     persist_calls: usize,
@@ -67,27 +65,27 @@ pub(super) struct TestLease;
 
 #[derive(Clone, Debug)]
 pub(super) struct TestStorage {
-    transaction_id: TransactionId,
+    pub(super) transaction_id: TransactionId,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct TestStagedFile {
     key: String,
     destination: String,
-    file: ObservedFile,
+    pub(super) file: ObservedFile,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct TestBackup {
     key: String,
     source: String,
-    file: ObservedFile,
+    pub(super) file: ObservedFile,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct TestJournal {
-    transaction_id: TransactionId,
-    generation: usize,
+    pub(super) transaction_id: TransactionId,
+    pub(super) generation: usize,
 }
 
 impl TestFileSystem {
@@ -283,17 +281,18 @@ impl TransactionStorage for TestFileSystem {
         &self,
         _storage: &Self::Storage,
         source: &Self::ResolvedPath,
-        expected: &ObservedFile,
+        expected: &FileEvidence,
     ) -> Result<Self::Backup, TransactionFileSystemError> {
         let mut state = self.state.lock().unwrap();
         require_file(&state, source, expected, "backup file")?;
+        let file = state.files[source].clone();
         let index = state.next_artifact;
         state.next_artifact += 1;
         let key = format!("backup-{index}");
         let backup = TestBackup {
             key: key.clone(),
             source: source.clone(),
-            file: expected.clone(),
+            file,
         };
         state.backups.insert(key, backup.clone());
         Ok(backup)
@@ -325,6 +324,16 @@ impl TransactionStorage for TestFileSystem {
         path: &Self::ResolvedPath,
     ) -> Result<DurablePathKey, TransactionFileSystemError> {
         Ok(durable_key("test-path", path))
+    }
+
+    fn durable_transaction_key(
+        &self,
+        storage: &Self::Storage,
+    ) -> Result<DurableTransactionKey, TransactionFileSystemError> {
+        Ok(DurableTransactionKey {
+            namespace: "test-transaction".to_string(),
+            value: storage.transaction_id.0.as_bytes().to_vec(),
+        })
     }
 
     async fn persist_journal(
@@ -442,26 +451,7 @@ impl TransactionMutation for TestFileSystem {
     }
 }
 
-impl TransactionRecovery for TestFileSystem {
-    async fn pending_recovery(
-        &self,
-        _root: &Self::Root,
-    ) -> Result<Vec<DurableTransactionKey>, TransactionFileSystemError> {
-        Ok(Vec::new())
-    }
-
-    async fn recover(
-        &self,
-        _key: &DurableTransactionKey,
-    ) -> Result<RecoveryOutcome, TransactionFileSystemError> {
-        Err(TransactionFileSystemError::Unsupported {
-            capability: "test recovery",
-            reason: "recovery is outside the executor unit-test scope".to_string(),
-        })
-    }
-}
-
-fn observe(state: &TestState, path: &str) -> ObservedPath {
+pub(super) fn observe(state: &TestState, path: &str) -> ObservedPath {
     state
         .files
         .get(path)
@@ -472,10 +462,14 @@ fn observe(state: &TestState, path: &str) -> ObservedPath {
 fn require_file(
     state: &TestState,
     path: &str,
-    expected: &ObservedFile,
+    expected: &FileEvidence,
     operation: &'static str,
 ) -> Result<(), TransactionFileSystemError> {
-    if state.files.get(path) == Some(expected) {
+    if state
+        .files
+        .get(path)
+        .is_some_and(|file| FileEvidence::from(file) == *expected)
+    {
         Ok(())
     } else {
         Err(TransactionFileSystemError::ChangedSincePlanning {
@@ -585,7 +579,12 @@ fn restore(
                     MutationOutcome::AlreadyApplied,
                 ));
             }
-            require_file(state, destination, &staged.file, "rollback create")?;
+            require_file(
+                state,
+                destination,
+                &FileEvidence::from(&staged.file),
+                "rollback create",
+            )?;
             state.files.remove(destination);
             Ok((format!("create:{destination}"), MutationOutcome::Applied))
         }
@@ -602,7 +601,12 @@ fn restore(
                     MutationOutcome::AlreadyApplied,
                 ));
             }
-            require_file(state, destination, &staged.file, "rollback replace")?;
+            require_file(
+                state,
+                destination,
+                &FileEvidence::from(&staged.file),
+                "rollback replace",
+            )?;
             state.files.insert(destination.clone(), backup.file.clone());
             Ok((format!("replace:{destination}"), MutationOutcome::Applied))
         }
@@ -636,7 +640,12 @@ fn restore(
             if state.files.contains_key(source) {
                 return Err(changed(source));
             }
-            require_file(state, destination, &staged.file, "rollback move")?;
+            require_file(
+                state,
+                destination,
+                &FileEvidence::from(&staged.file),
+                "rollback move",
+            )?;
             state.files.remove(destination);
             state.files.insert(source.clone(), backup.file.clone());
             Ok((
@@ -661,10 +670,10 @@ fn require_destination(
 fn require_backup(
     backup: &TestBackup,
     source: &str,
-    expected: &ObservedFile,
+    expected: &FileEvidence,
 ) -> Result<(), TransactionFileSystemError> {
     require_backup_source(backup, source)?;
-    if &backup.file == expected {
+    if FileEvidence::from(&backup.file) == *expected {
         Ok(())
     } else {
         Err(changed(source))
@@ -682,7 +691,7 @@ fn require_backup_source(
     }
 }
 
-fn durable_evidence(key: &str, file: &ObservedFile) -> DurableFileEvidence {
+pub(super) fn durable_evidence(key: &str, file: &ObservedFile) -> DurableFileEvidence {
     DurableFileEvidence {
         key: durable_key("test-artifact", key),
         evidence: FileEvidence::from(file),
@@ -696,13 +705,16 @@ fn durable_key(namespace: &str, value: &str) -> DurablePathKey {
     }
 }
 
-fn changed(path: &str) -> TransactionFileSystemError {
+pub(super) fn changed(path: &str) -> TransactionFileSystemError {
     TransactionFileSystemError::ChangedSincePlanning {
         path: path.to_string(),
     }
 }
 
-fn platform(operation: &'static str, reason: impl Into<String>) -> TransactionFileSystemError {
+pub(super) fn platform(
+    operation: &'static str,
+    reason: impl Into<String>,
+) -> TransactionFileSystemError {
     TransactionFileSystemError::Platform {
         operation,
         reason: reason.into(),

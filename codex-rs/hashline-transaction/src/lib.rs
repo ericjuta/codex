@@ -4,6 +4,7 @@ mod capability;
 mod edits;
 mod executor;
 mod journal;
+mod journal_decode;
 mod limits;
 mod observation;
 mod planner;
@@ -18,9 +19,11 @@ pub use capability::DurableTransactionKey;
 pub use capability::ExecutorRootIdentity;
 pub use capability::GuardedMutation;
 pub use capability::GuardedRollback;
+pub use capability::LoadedJournal;
 pub use capability::MutationOutcome;
+pub use capability::ObservedEvidence;
 pub use capability::PlanningFileSystem;
-pub use capability::RecoveryOutcome;
+pub use capability::RecoveryScanLimit;
 pub use capability::StageFileRequest;
 pub use capability::TransactionCoordination;
 pub use capability::TransactionFileSystem;
@@ -43,8 +46,10 @@ pub use journal::JournalOperation;
 pub use journal::JournalRecord;
 pub use journal::JournalState;
 pub use journal::MutationProgress;
+pub use journal::RecoveryTarget;
 pub use journal::StorageRequirements;
 pub use journal::TRANSACTION_JOURNAL_SCHEMA_VERSION;
+pub use journal_decode::JournalReadLimits;
 pub use observation::ExactBytesDigest;
 pub use observation::ExecutorFileIdentity;
 pub use observation::FileKind;
@@ -95,6 +100,10 @@ mod journal_tests;
 #[cfg(test)]
 #[path = "executor_test_support.rs"]
 mod executor_test_support;
+
+#[cfg(test)]
+#[path = "executor_test_recovery.rs"]
+mod executor_test_recovery;
 
 #[cfg(test)]
 #[path = "executor_tests.rs"]

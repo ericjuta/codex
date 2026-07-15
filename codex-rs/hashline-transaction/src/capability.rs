@@ -8,9 +8,9 @@ use thiserror::Error;
 
 use crate::MetadataSnapshot;
 use crate::ObservationLimit;
-use crate::ObservedFile;
 use crate::ObservedPath;
 use crate::journal::DurableFileEvidence;
+use crate::journal::FileEvidence;
 use crate::journal::JournalBytes;
 use crate::journal::StorageRequirements;
 
@@ -114,6 +114,12 @@ pub struct DurableTransactionKey {
     pub value: Vec<u8>,
 }
 
+/// Hard cap for one environment-owned recovery scan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecoveryScanLimit {
+    pub max_transactions: u64,
+}
+
 /// Collision-resistant transaction identifier chosen by the transaction engine.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TransactionId(pub String);
@@ -135,18 +141,18 @@ pub enum GuardedMutation<'a, P, S, B> {
     },
     Replace {
         destination: &'a P,
-        expected: &'a ObservedFile,
+        expected: &'a FileEvidence,
         staged: &'a S,
         backup: &'a B,
     },
     Remove {
         source: &'a P,
-        expected: &'a ObservedFile,
+        expected: &'a FileEvidence,
         backup: &'a B,
     },
     Move {
         source: &'a P,
-        expected: &'a ObservedFile,
+        expected: &'a FileEvidence,
         destination: &'a P,
         staged: Option<&'a S>,
         backup: &'a B,
@@ -183,11 +189,18 @@ pub enum MutationOutcome {
     AlreadyApplied,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RecoveryOutcome {
-    Committed,
-    RolledBack,
-    RecoveryRequired,
+/// Compact live evidence used by restart recovery without retaining file contents.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ObservedEvidence {
+    Absent,
+    Present(FileEvidence),
+}
+
+/// Current durable journal handle and its bounded serialized record.
+#[derive(Debug)]
+pub struct LoadedJournal<J> {
+    pub journal: J,
+    pub bytes: JournalBytes,
 }
 
 /// Locking and final-precondition portion of the transaction capability.
@@ -232,7 +245,7 @@ pub trait TransactionStorage: TransactionCoordination {
         &self,
         storage: &Self::Storage,
         source: &Self::ResolvedPath,
-        expected: &ObservedFile,
+        expected: &FileEvidence,
     ) -> impl Future<Output = Result<Self::Backup, TransactionFileSystemError>> + Send;
 
     fn staged_file_evidence(
@@ -254,6 +267,11 @@ pub trait TransactionStorage: TransactionCoordination {
         &self,
         path: &Self::ResolvedPath,
     ) -> Result<DurablePathKey, TransactionFileSystemError>;
+
+    fn durable_transaction_key(
+        &self,
+        storage: &Self::Storage,
+    ) -> Result<DurableTransactionKey, TransactionFileSystemError>;
 
     /// Atomically installs one complete, parseable journal record.
     ///
@@ -336,13 +354,49 @@ pub trait TransactionMutation: TransactionStorage {
 pub trait TransactionRecovery: TransactionMutation {
     fn pending_recovery(
         &self,
-        root: &Self::Root,
+        limit: RecoveryScanLimit,
     ) -> impl Future<Output = Result<Vec<DurableTransactionKey>, TransactionFileSystemError>> + Send;
 
-    fn recover(
+    fn open_recovery_storage(
         &self,
         key: &DurableTransactionKey,
-    ) -> impl Future<Output = Result<RecoveryOutcome, TransactionFileSystemError>> + Send;
+    ) -> impl Future<Output = Result<Self::Storage, TransactionFileSystemError>> + Send;
+
+    fn load_journal(
+        &self,
+        storage: &Self::Storage,
+        max_bytes: u64,
+    ) -> impl Future<Output = Result<LoadedJournal<Self::Journal>, TransactionFileSystemError>> + Send;
+
+    fn reopen_root(
+        &self,
+        key: &DurablePathKey,
+    ) -> impl Future<Output = Result<Self::Root, TransactionFileSystemError>> + Send;
+
+    fn reopen_path(
+        &self,
+        root: &Self::Root,
+        key: &DurablePathKey,
+    ) -> impl Future<Output = Result<Self::ResolvedPath, TransactionFileSystemError>> + Send;
+
+    fn reopen_staged_file(
+        &self,
+        storage: &Self::Storage,
+        evidence: &DurableFileEvidence,
+    ) -> impl Future<Output = Result<Self::StagedFile, TransactionFileSystemError>> + Send;
+
+    fn reopen_backup(
+        &self,
+        storage: &Self::Storage,
+        evidence: &DurableFileEvidence,
+    ) -> impl Future<Output = Result<Self::Backup, TransactionFileSystemError>> + Send;
+
+    fn observe_evidence_locked(
+        &self,
+        lease: &Self::Lease,
+        path: &Self::ResolvedPath,
+        limit: ObservationLimit,
+    ) -> impl Future<Output = Result<ObservedEvidence, TransactionFileSystemError>> + Send;
 }
 
 /// Complete executor-owned filesystem contract required before commits are enabled.

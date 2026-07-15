@@ -7,6 +7,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::DurablePathKey;
+use crate::DurableTransactionKey;
 use crate::ExactBytesDigest;
 use crate::ExecutorFileIdentity;
 use crate::ExecutorRootIdentity;
@@ -15,7 +16,7 @@ use crate::MetadataSnapshot;
 use crate::ObservedFile;
 use crate::TransactionId;
 
-pub const TRANSACTION_JOURNAL_SCHEMA_VERSION: u32 = 1;
+pub const TRANSACTION_JOURNAL_SCHEMA_VERSION: u32 = 2;
 
 /// Exact identity and metadata evidence persisted without retaining file contents.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -53,6 +54,17 @@ pub struct DurableFileEvidence {
 pub struct JournalBytes(Vec<u8>);
 
 impl JournalBytes {
+    pub fn try_from_vec(bytes: Vec<u8>, max_bytes: u64) -> Result<Self, JournalError> {
+        let observed = bytes.len() as u64;
+        if observed > max_bytes {
+            return Err(JournalError::Limit {
+                observed,
+                limit: max_bytes,
+            });
+        }
+        Ok(Self(bytes))
+    }
+
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
@@ -95,6 +107,14 @@ pub enum JournalState {
     Cleaning,
     Complete,
     RecoveryRequired,
+}
+
+/// Durable terminal outcome selected before restart recovery can be required.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecoveryTarget {
+    Rollback,
+    Commit,
 }
 
 /// Durable progress for one ordered mutation.
@@ -149,17 +169,20 @@ pub struct JournalMutation {
 pub struct JournalRecord {
     pub schema_version: u32,
     pub transaction_id: TransactionId,
+    pub transaction_key: DurableTransactionKey,
     pub environment_id: String,
     pub root: DurablePathKey,
     pub root_identity: ExecutorRootIdentity,
     pub plan_digest: ExactBytesDigest,
     pub state: JournalState,
+    pub recovery_target: RecoveryTarget,
     pub mutations: Vec<JournalMutation>,
 }
 
 impl JournalRecord {
     pub fn new(
         transaction_id: TransactionId,
+        transaction_key: DurableTransactionKey,
         environment_id: String,
         root: DurablePathKey,
         root_identity: ExecutorRootIdentity,
@@ -169,11 +192,13 @@ impl JournalRecord {
         Self {
             schema_version: TRANSACTION_JOURNAL_SCHEMA_VERSION,
             transaction_id,
+            transaction_key,
             environment_id,
             root,
             root_identity,
             plan_digest,
             state: JournalState::Preparing,
+            recovery_target: RecoveryTarget::Rollback,
             mutations: operations
                 .into_iter()
                 .map(|operation| JournalMutation {
@@ -191,8 +216,15 @@ impl JournalRecord {
                 next,
             });
         }
+        let recovery_target = if next == JournalState::Committed {
+            RecoveryTarget::Commit
+        } else {
+            self.recovery_target
+        };
         validate_progress(next, &self.mutations)?;
+        validate_recovery_target(next, recovery_target, &self.mutations)?;
         self.state = next;
+        self.recovery_target = recovery_target;
         Ok(())
     }
 
@@ -202,7 +234,8 @@ impl JournalRecord {
                 version: self.schema_version,
             });
         }
-        validate_progress(self.state, &self.mutations)
+        validate_progress(self.state, &self.mutations)?;
+        validate_recovery_target(self.state, self.recovery_target, &self.mutations)
     }
 
     pub fn set_mutation_progress(
@@ -256,6 +289,11 @@ pub enum JournalError {
     },
     #[error("journal state {state:?} is inconsistent with mutation progress")]
     InconsistentProgress { state: JournalState },
+    #[error("journal state {state:?} is inconsistent with recovery target {target:?}")]
+    InconsistentRecoveryTarget {
+        state: JournalState,
+        target: RecoveryTarget,
+    },
     #[error("journal mutation index {index} is out of bounds")]
     MutationIndex { index: usize },
     #[error("invalid mutation progress transition in {state:?} from {current:?} to {next:?}")]
@@ -268,6 +306,17 @@ pub enum JournalError {
     Serialization { reason: String },
     #[error("transaction journal byte limit exceeded: observed {observed}, limit {limit}")]
     Limit { observed: u64, limit: u64 },
+    #[error("transaction journal {resource} limit exceeded: observed {observed}, limit {limit}")]
+    StructuralLimit {
+        resource: &'static str,
+        observed: u64,
+        limit: u64,
+    },
+    #[error("invalid transaction journal field `{field}`: {reason}")]
+    InvalidField {
+        field: &'static str,
+        reason: &'static str,
+    },
 }
 
 fn serialization_error(error: serde_json::Error) -> JournalError {
@@ -296,6 +345,7 @@ fn valid_transition(current: JournalState, next: JournalState) -> bool {
     matches!(
         (current, next),
         (JournalState::Preparing, JournalState::Prepared)
+            | (JournalState::Preparing, JournalState::RollingBack)
             | (JournalState::Preparing, JournalState::RecoveryRequired)
             | (JournalState::Prepared, JournalState::Committing)
             | (JournalState::Prepared, JournalState::RollingBack)
@@ -311,6 +361,8 @@ fn valid_transition(current: JournalState, next: JournalState) -> bool {
             | (JournalState::RolledBack, JournalState::RecoveryRequired)
             | (JournalState::Cleaning, JournalState::Complete)
             | (JournalState::Cleaning, JournalState::RecoveryRequired)
+            | (JournalState::RecoveryRequired, JournalState::RollingBack)
+            | (JournalState::RecoveryRequired, JournalState::Cleaning)
     )
 }
 
@@ -367,6 +419,38 @@ fn validate_progress(
         Ok(())
     } else {
         Err(JournalError::InconsistentProgress { state })
+    }
+}
+
+fn validate_recovery_target(
+    state: JournalState,
+    target: RecoveryTarget,
+    mutations: &[JournalMutation],
+) -> Result<(), JournalError> {
+    let consistent = match state {
+        JournalState::Preparing
+        | JournalState::Prepared
+        | JournalState::Committing
+        | JournalState::RollingBack
+        | JournalState::RolledBack => target == RecoveryTarget::Rollback,
+        JournalState::Committed => target == RecoveryTarget::Commit,
+        JournalState::Cleaning | JournalState::Complete => match target {
+            RecoveryTarget::Commit => mutations
+                .iter()
+                .all(|mutation| mutation.progress == MutationProgress::Applied),
+            RecoveryTarget::Rollback => mutations.iter().all(|mutation| {
+                matches!(
+                    mutation.progress,
+                    MutationProgress::Pending | MutationProgress::RolledBack
+                )
+            }),
+        },
+        JournalState::RecoveryRequired => true,
+    };
+    if consistent {
+        Ok(())
+    } else {
+        Err(JournalError::InconsistentRecoveryTarget { state, target })
     }
 }
 

@@ -61,6 +61,10 @@ fn mixed_commit_is_ordered_and_leaves_a_terminal_receipt() {
         terminal_snapshot(&file_system),
         (JournalState::Complete, vec![MutationProgress::Applied; 4],)
     );
+    assert_eq!(
+        file_system.journals().last().unwrap().recovery_target,
+        RecoveryTarget::Commit
+    );
 }
 
 #[test]
@@ -158,6 +162,10 @@ fn forward_apply_failure_rolls_back_in_reverse_order() {
             vec![MutationProgress::RolledBack; 4],
         )
     );
+    assert_eq!(
+        file_system.journals().last().unwrap().recovery_target,
+        RecoveryTarget::Rollback
+    );
 }
 
 #[test]
@@ -206,6 +214,10 @@ fn rollback_failure_marks_recovery_required_and_retains_evidence() {
                 MutationProgress::Pending,
             ],
         )
+    );
+    assert_eq!(
+        file_system.journals().last().unwrap().recovery_target,
+        RecoveryTarget::Rollback
     );
     assert_eq!(
         file_system.events(),
