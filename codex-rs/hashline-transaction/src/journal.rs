@@ -15,8 +15,12 @@ use crate::FileKind;
 use crate::MetadataSnapshot;
 use crate::ObservedFile;
 use crate::TransactionId;
+use crate::journal_state::valid_progress_transition;
+use crate::journal_state::valid_transition;
+use crate::journal_state::validate_progress;
+use crate::journal_state::validate_recovery_target;
 
-pub const TRANSACTION_JOURNAL_SCHEMA_VERSION: u32 = 2;
+pub const TRANSACTION_JOURNAL_SCHEMA_VERSION: u32 = 3;
 
 /// Exact identity and metadata evidence persisted without retaining file contents.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -174,6 +178,7 @@ pub struct JournalRecord {
     pub root: DurablePathKey,
     pub root_identity: ExecutorRootIdentity,
     pub plan_digest: ExactBytesDigest,
+    pub manifest_digest: ExactBytesDigest,
     pub state: JournalState,
     pub recovery_target: RecoveryTarget,
     pub mutations: Vec<JournalMutation>,
@@ -188,8 +193,23 @@ impl JournalRecord {
         root_identity: ExecutorRootIdentity,
         plan_digest: ExactBytesDigest,
         operations: Vec<JournalOperation>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, JournalError> {
+        if operations.is_empty() {
+            return Err(JournalError::InvalidField {
+                field: "mutations",
+                reason: "at least one mutation is required",
+            });
+        }
+        let manifest_digest = manifest_digest(
+            &transaction_id,
+            &transaction_key,
+            &environment_id,
+            &root,
+            &root_identity,
+            plan_digest,
+            operations.iter().collect(),
+        )?;
+        Ok(Self {
             schema_version: TRANSACTION_JOURNAL_SCHEMA_VERSION,
             transaction_id,
             transaction_key,
@@ -197,6 +217,7 @@ impl JournalRecord {
             root,
             root_identity,
             plan_digest,
+            manifest_digest,
             state: JournalState::Preparing,
             recovery_target: RecoveryTarget::Rollback,
             mutations: operations
@@ -206,7 +227,7 @@ impl JournalRecord {
                     operation,
                 })
                 .collect(),
-        }
+        })
     }
 
     pub fn transition(&mut self, next: JournalState) -> Result<(), JournalError> {
@@ -232,6 +253,30 @@ impl JournalRecord {
         if self.schema_version != TRANSACTION_JOURNAL_SCHEMA_VERSION {
             return Err(JournalError::UnsupportedSchema {
                 version: self.schema_version,
+            });
+        }
+        if self.mutations.is_empty() {
+            return Err(JournalError::InvalidField {
+                field: "mutations",
+                reason: "at least one mutation is required",
+            });
+        }
+        let manifest_digest = manifest_digest(
+            &self.transaction_id,
+            &self.transaction_key,
+            &self.environment_id,
+            &self.root,
+            &self.root_identity,
+            self.plan_digest,
+            self.mutations
+                .iter()
+                .map(|mutation| &mutation.operation)
+                .collect(),
+        )?;
+        if manifest_digest != self.manifest_digest {
+            return Err(JournalError::InvalidField {
+                field: "manifestDigest",
+                reason: "digest does not match the immutable transaction manifest",
             });
         }
         validate_progress(self.state, &self.mutations)?;
@@ -276,6 +321,41 @@ impl JournalRecord {
         serde_json::to_writer(&mut bytes, self).map_err(serialization_error)?;
         Ok(JournalBytes(bytes))
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JournalManifest<'a> {
+    transaction_id: &'a TransactionId,
+    transaction_key: &'a DurableTransactionKey,
+    environment_id: &'a str,
+    root: &'a DurablePathKey,
+    root_identity: &'a ExecutorRootIdentity,
+    plan_digest: ExactBytesDigest,
+    operations: Vec<&'a JournalOperation>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn manifest_digest(
+    transaction_id: &TransactionId,
+    transaction_key: &DurableTransactionKey,
+    environment_id: &str,
+    root: &DurablePathKey,
+    root_identity: &ExecutorRootIdentity,
+    plan_digest: ExactBytesDigest,
+    operations: Vec<&JournalOperation>,
+) -> Result<ExactBytesDigest, JournalError> {
+    let manifest = JournalManifest {
+        transaction_id,
+        transaction_key,
+        environment_id,
+        root,
+        root_identity,
+        plan_digest,
+        operations,
+    };
+    let bytes = serde_json::to_vec(&manifest).map_err(serialization_error)?;
+    Ok(ExactBytesDigest::new(&bytes))
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -338,139 +418,5 @@ impl Write for ByteCounter {
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
-    }
-}
-
-fn valid_transition(current: JournalState, next: JournalState) -> bool {
-    matches!(
-        (current, next),
-        (JournalState::Preparing, JournalState::Prepared)
-            | (JournalState::Preparing, JournalState::RollingBack)
-            | (JournalState::Preparing, JournalState::RecoveryRequired)
-            | (JournalState::Prepared, JournalState::Committing)
-            | (JournalState::Prepared, JournalState::RollingBack)
-            | (JournalState::Prepared, JournalState::RecoveryRequired)
-            | (JournalState::Committing, JournalState::Committed)
-            | (JournalState::Committing, JournalState::RollingBack)
-            | (JournalState::Committing, JournalState::RecoveryRequired)
-            | (JournalState::Committed, JournalState::Cleaning)
-            | (JournalState::Committed, JournalState::RecoveryRequired)
-            | (JournalState::RollingBack, JournalState::RolledBack)
-            | (JournalState::RollingBack, JournalState::RecoveryRequired)
-            | (JournalState::RolledBack, JournalState::Cleaning)
-            | (JournalState::RolledBack, JournalState::RecoveryRequired)
-            | (JournalState::Cleaning, JournalState::Complete)
-            | (JournalState::Cleaning, JournalState::RecoveryRequired)
-            | (JournalState::RecoveryRequired, JournalState::RollingBack)
-            | (JournalState::RecoveryRequired, JournalState::Cleaning)
-    )
-}
-
-fn validate_progress(
-    state: JournalState,
-    mutations: &[JournalMutation],
-) -> Result<(), JournalError> {
-    let consistent = match state {
-        JournalState::Preparing | JournalState::Prepared => mutations
-            .iter()
-            .all(|mutation| mutation.progress == MutationProgress::Pending),
-        JournalState::Committing => mutations.iter().all(|mutation| {
-            matches!(
-                mutation.progress,
-                MutationProgress::Pending
-                    | MutationProgress::Committing
-                    | MutationProgress::Applied
-            )
-        }),
-        JournalState::Committed => mutations
-            .iter()
-            .all(|mutation| mutation.progress == MutationProgress::Applied),
-        JournalState::RollingBack => mutations.iter().all(|mutation| {
-            matches!(
-                mutation.progress,
-                MutationProgress::Pending
-                    | MutationProgress::Committing
-                    | MutationProgress::Applied
-                    | MutationProgress::RollingBack
-                    | MutationProgress::RolledBack
-            )
-        }),
-        JournalState::RolledBack => mutations.iter().all(|mutation| {
-            matches!(
-                mutation.progress,
-                MutationProgress::Pending | MutationProgress::RolledBack
-            )
-        }),
-        JournalState::Cleaning | JournalState::Complete => {
-            let all_applied = mutations
-                .iter()
-                .all(|mutation| mutation.progress == MutationProgress::Applied);
-            let all_rolled_back = mutations.iter().all(|mutation| {
-                matches!(
-                    mutation.progress,
-                    MutationProgress::Pending | MutationProgress::RolledBack
-                )
-            });
-            all_applied || all_rolled_back
-        }
-        JournalState::RecoveryRequired => true,
-    };
-    if consistent {
-        Ok(())
-    } else {
-        Err(JournalError::InconsistentProgress { state })
-    }
-}
-
-fn validate_recovery_target(
-    state: JournalState,
-    target: RecoveryTarget,
-    mutations: &[JournalMutation],
-) -> Result<(), JournalError> {
-    let consistent = match state {
-        JournalState::Preparing
-        | JournalState::Prepared
-        | JournalState::Committing
-        | JournalState::RollingBack
-        | JournalState::RolledBack => target == RecoveryTarget::Rollback,
-        JournalState::Committed => target == RecoveryTarget::Commit,
-        JournalState::Cleaning | JournalState::Complete => match target {
-            RecoveryTarget::Commit => mutations
-                .iter()
-                .all(|mutation| mutation.progress == MutationProgress::Applied),
-            RecoveryTarget::Rollback => mutations.iter().all(|mutation| {
-                matches!(
-                    mutation.progress,
-                    MutationProgress::Pending | MutationProgress::RolledBack
-                )
-            }),
-        },
-        JournalState::RecoveryRequired => true,
-    };
-    if consistent {
-        Ok(())
-    } else {
-        Err(JournalError::InconsistentRecoveryTarget { state, target })
-    }
-}
-
-fn valid_progress_transition(
-    state: JournalState,
-    current: MutationProgress,
-    next: MutationProgress,
-) -> bool {
-    match state {
-        JournalState::Committing => matches!(
-            (current, next),
-            (MutationProgress::Pending, MutationProgress::Committing)
-                | (MutationProgress::Committing, MutationProgress::Applied)
-        ),
-        JournalState::RollingBack => matches!(
-            (current, next),
-            (MutationProgress::Applied, MutationProgress::RollingBack)
-                | (MutationProgress::Committing, MutationProgress::RollingBack)
-                | (MutationProgress::RollingBack, MutationProgress::RolledBack)
-        ),
-        _ => false,
     }
 }

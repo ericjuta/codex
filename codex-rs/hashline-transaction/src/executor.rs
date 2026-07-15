@@ -102,7 +102,7 @@ pub async fn execute<F: TransactionFileSystem>(
     };
 
     let operations = prepared.iter().map(|entry| entry.journal.clone()).collect();
-    let mut record = JournalRecord::new(
+    let mut record = match JournalRecord::new(
         transaction_id.clone(),
         transaction_key,
         plan.environment_id,
@@ -110,7 +110,13 @@ pub async fn execute<F: TransactionFileSystem>(
         plan.root_identity,
         plan.plan_digest,
         operations,
-    );
+    ) {
+        Ok(record) => record,
+        Err(error) => {
+            let _ = file_system.cleanup_artifacts(&storage).await;
+            return Err(before_commit(error));
+        }
+    };
     let mut journal = match persist(file_system, &storage, &record, limits).await {
         Ok(journal) => journal,
         Err(failure) => {

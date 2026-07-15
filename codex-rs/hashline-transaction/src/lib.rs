@@ -5,6 +5,7 @@ mod edits;
 mod executor;
 mod journal;
 mod journal_decode;
+mod journal_state;
 mod limits;
 mod observation;
 mod planner;

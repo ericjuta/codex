@@ -76,6 +76,7 @@ fn record() -> JournalRecord {
             },
         ],
     )
+    .unwrap()
 }
 
 #[test]
@@ -165,6 +166,29 @@ fn journal_rejects_unknown_schema_versions() {
         record.validate(),
         Err(JournalError::UnsupportedSchema {
             version: TRANSACTION_JOURNAL_SCHEMA_VERSION + 1,
+        })
+    );
+}
+
+#[test]
+fn journal_rejects_empty_or_truncated_mutation_manifests() {
+    let mut empty = record();
+    empty.mutations.clear();
+    assert_eq!(
+        empty.validate(),
+        Err(JournalError::InvalidField {
+            field: "mutations",
+            reason: "at least one mutation is required",
+        })
+    );
+
+    let mut truncated = record();
+    truncated.mutations.pop();
+    assert_eq!(
+        truncated.validate(),
+        Err(JournalError::InvalidField {
+            field: "manifestDigest",
+            reason: "digest does not match the immutable transaction manifest",
         })
     );
 }
@@ -324,11 +348,26 @@ fn bounded_journal_decode_validates_structure() {
 
 #[test]
 fn bounded_journal_decode_rejects_duplicate_paths() {
-    let mut record = record();
-    let JournalOperation::Update { path, .. } = &mut record.mutations[1].operation else {
+    let record = record();
+    let mut operations = record
+        .mutations
+        .into_iter()
+        .map(|mutation| mutation.operation)
+        .collect::<Vec<_>>();
+    let JournalOperation::Update { path, .. } = &mut operations[1] else {
         panic!("expected update operation");
     };
     *path = path_key("created.txt");
+    let record = JournalRecord::new(
+        record.transaction_id,
+        record.transaction_key,
+        record.environment_id,
+        record.root,
+        record.root_identity,
+        record.plan_digest,
+        operations,
+    )
+    .unwrap();
     let bytes = record.to_bounded_json(64 * 1024).unwrap();
 
     assert_eq!(
