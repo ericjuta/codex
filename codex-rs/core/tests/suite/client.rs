@@ -3303,6 +3303,7 @@ async fn token_count_includes_rate_limits_snapshot() {
                 "total_token_usage": {
                     "input_tokens": 123,
                     "cached_input_tokens": 0,
+                    "cache_write_input_tokens": 0,
                     "output_tokens": 0,
                     "reasoning_output_tokens": 0,
                     "total_tokens": 123
@@ -3310,6 +3311,7 @@ async fn token_count_includes_rate_limits_snapshot() {
                 "last_token_usage": {
                     "input_tokens": 123,
                     "cached_input_tokens": 0,
+                    "cache_write_input_tokens": 0,
                     "output_tokens": 0,
                     "reasoning_output_tokens": 0,
                     "total_tokens": 123

@@ -2105,14 +2105,7 @@ where
                 }) => {
                     feedback_tags!(last_model_response_id = &response_id);
                     if let Some(usage) = &token_usage {
-                        session_telemetry.sse_event_completed(
-                            usage.input_tokens,
-                            usage.output_tokens,
-                            Some(usage.cached_input_tokens),
-                            Some(usage.reasoning_output_tokens),
-                            usage.total_tokens,
-                            ttft_ms,
-                        );
+                        session_telemetry.sse_event_completed(usage, ttft_ms);
                     }
                     if let Some(observation) = prompt_cache_observation.take() {
                         observation.record_completed(token_usage.as_ref(), ttft_ms);
