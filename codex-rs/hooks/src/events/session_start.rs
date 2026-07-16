@@ -81,14 +81,14 @@ pub struct SessionStartOutcome {
     pub hook_events: Vec<HookCompletedEvent>,
     pub should_stop: bool,
     pub stop_reason: Option<String>,
-    pub additional_contexts: Vec<String>,
+    pub additional_contexts: Vec<common::ContextUpdate>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 struct SessionStartHandlerData {
     should_stop: bool,
     stop_reason: Option<String>,
-    additional_contexts_for_model: Vec<String>,
+    additional_contexts_for_model: Vec<common::ContextUpdate>,
 }
 
 pub(crate) fn preview(
@@ -265,6 +265,10 @@ fn parse_completed(
                             suppress_output,
                         );
                     }
+                    common::append_context_updates(
+                        &mut additional_contexts_for_model,
+                        parsed.context_updates,
+                    );
                     if handler.event_name == HookEventName::SessionStart
                         && !parsed.universal.continue_processing
                     {
@@ -376,7 +380,9 @@ mod tests {
             SessionStartHandlerData {
                 should_stop: false,
                 stop_reason: None,
-                additional_contexts_for_model: vec!["hello from hook".to_string()],
+                additional_contexts_for_model: vec![crate::ContextUpdate::durable(
+                    "hello from hook"
+                )],
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Completed);
@@ -406,7 +412,7 @@ mod tests {
             SessionStartHandlerData {
                 should_stop: true,
                 stop_reason: Some("pause".to_string()),
-                additional_contexts_for_model: vec!["do not inject".to_string()],
+                additional_contexts_for_model: vec![crate::ContextUpdate::durable("do not inject")],
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Stopped);
@@ -468,7 +474,9 @@ mod tests {
             SessionStartHandlerData {
                 should_stop: false,
                 stop_reason: None,
-                additional_contexts_for_model: vec!["hello from subagent hook".to_string()],
+                additional_contexts_for_model: vec![crate::ContextUpdate::durable(
+                    "hello from subagent hook",
+                )],
             }
         );
         assert_eq!(parsed.completed.turn_id.as_deref(), Some("turn-1"));
@@ -499,7 +507,7 @@ mod tests {
             SessionStartHandlerData {
                 should_stop: false,
                 stop_reason: None,
-                additional_contexts_for_model: vec!["child context".to_string()],
+                additional_contexts_for_model: vec![crate::ContextUpdate::durable("child context")],
             }
         );
         assert_eq!(parsed.completed.turn_id.as_deref(), Some("turn-1"));

@@ -78,6 +78,60 @@ fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
     h
 }
 
+fn replaceable_context(key: &str, value: Option<&str>) -> ResponseItem {
+    ContextualUserFragment::into(crate::context::ReplaceableContextFragment::new(
+        key,
+        value.map(str::to_string),
+    ))
+}
+
+#[test]
+fn replaceable_context_for_prompt_keeps_newest_value_and_unkeyed_messages() {
+    let legacy = ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "legacy durable context".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let newest = replaceable_context("honcho.prompt", Some("new"));
+    let history = create_history_with_items(vec![
+        replaceable_context("honcho.prompt", Some("old")),
+        legacy.clone(),
+        newest.clone(),
+    ]);
+
+    assert_eq!(
+        history.for_prompt(&default_input_modalities()),
+        vec![legacy, newest]
+    );
+}
+
+#[test]
+fn replaceable_context_clear_removes_prior_value() {
+    let history = create_history_with_items(vec![
+        replaceable_context("honcho.prompt", Some("old")),
+        replaceable_context("honcho.prompt", None),
+    ]);
+
+    assert!(history.for_prompt(&default_input_modalities()).is_empty());
+}
+
+#[test]
+fn active_replaceable_context_returns_only_latest_active_values() {
+    let active = replaceable_context("honcho.prompt", Some("new"));
+    let history = create_history_with_items(vec![
+        replaceable_context("honcho.prompt", Some("old")),
+        replaceable_context("honcho.pre_tool", Some("stale")),
+        active.clone(),
+        replaceable_context("honcho.pre_tool", None),
+    ]);
+
+    assert_eq!(history.active_replaceable_context(), vec![active]);
+}
+
 struct TestWorldStateSection;
 
 impl WorldStateSection for TestWorldStateSection {

@@ -96,6 +96,16 @@ pub(crate) struct HookUniversalOutputWire {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ContextUpdateWire {
+    pub key: String,
+    #[serde(default)]
+    #[schemars(schema_with = "NullableString::json_schema")]
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub(crate) enum HookEventNameWire {
     #[serde(rename = "PreToolUse")]
     PreToolUse,
@@ -229,6 +239,8 @@ pub(crate) struct PostToolUseHookSpecificOutputWire {
     #[serde(default)]
     pub additional_context: Option<String>,
     #[serde(default)]
+    pub context_updates: Vec<ContextUpdateWire>,
+    #[serde(default)]
     #[serde(rename = "updatedMCPToolOutput")]
     pub updated_mcp_tool_output: Option<Value>,
 }
@@ -247,6 +259,8 @@ pub(crate) struct PreToolUseHookSpecificOutputWire {
     pub updated_input: Option<Value>,
     #[serde(default)]
     pub additional_context: Option<String>,
+    #[serde(default)]
+    pub context_updates: Vec<ContextUpdateWire>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -395,6 +409,8 @@ pub(crate) struct SessionStartHookSpecificOutputWire {
     pub hook_event_name: HookEventNameWire,
     #[serde(default)]
     pub additional_context: Option<String>,
+    #[serde(default)]
+    pub context_updates: Vec<ContextUpdateWire>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -416,6 +432,8 @@ pub(crate) struct SubagentStartHookSpecificOutputWire {
     pub hook_event_name: HookEventNameWire,
     #[serde(default)]
     pub additional_context: Option<String>,
+    #[serde(default)]
+    pub context_updates: Vec<ContextUpdateWire>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -441,6 +459,8 @@ pub(crate) struct UserPromptSubmitHookSpecificOutputWire {
     pub hook_event_name: HookEventNameWire,
     #[serde(default)]
     pub additional_context: Option<String>,
+    #[serde(default)]
+    pub context_updates: Vec<ContextUpdateWire>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

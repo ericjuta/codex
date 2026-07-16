@@ -60,18 +60,6 @@ impl HookOutputSpiller {
         spilled_hook_output_preview(&text, &path)
     }
 
-    pub(crate) async fn maybe_spill_texts(
-        &self,
-        thread_id: ThreadId,
-        texts: Vec<String>,
-    ) -> Vec<String> {
-        let mut spilled = Vec::with_capacity(texts.len());
-        for text in texts {
-            spilled.push(self.maybe_spill_text(thread_id, text).await);
-        }
-        spilled
-    }
-
     pub(crate) async fn maybe_spill_prompt_fragments(
         &self,
         thread_id: ThreadId,

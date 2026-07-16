@@ -8,12 +8,38 @@
       ],
       "type": "string"
     },
+    "ContextUpdateWire": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "type": "object"
+    },
     "UserPromptSubmitHookSpecificOutputWire": {
       "additionalProperties": false,
       "properties": {
         "additionalContext": {
           "default": null,
           "type": "string"
+        },
+        "contextUpdates": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ContextUpdateWire"
+          },
+          "type": "array"
         },
         "hookEventName": {
           "const": "UserPromptSubmit",

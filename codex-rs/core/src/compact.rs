@@ -322,6 +322,7 @@ async fn run_compact_task_inner_impl(
 
     let history_snapshot = sess.clone_history().await;
     let history_items = history_snapshot.raw_items();
+    let replaceable_context = history_snapshot.active_replaceable_context();
     let summary_suffix = get_last_assistant_message_from_turn(history_items).unwrap_or_default();
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
     let user_messages = collect_user_messages(history_items);
@@ -334,12 +335,13 @@ async fn run_compact_task_inner_impl(
     }
     let (window_number, window_ids) = sess.advance_auto_compact_window().await;
 
-    let (initial_context, world_state_baseline) = build_compaction_initial_context(
+    let (mut initial_context, world_state_baseline) = build_compaction_initial_context(
         sess.as_ref(),
         turn_context.as_ref(),
         &initial_context_injection,
     )
     .await;
+    initial_context.extend(replaceable_context);
     if !initial_context.is_empty() {
         new_history =
             insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);

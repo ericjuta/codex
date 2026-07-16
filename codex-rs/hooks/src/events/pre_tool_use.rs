@@ -39,7 +39,7 @@ pub struct PreToolUseOutcome {
     pub hook_events: Vec<HookCompletedEvent>,
     pub should_block: bool,
     pub block_reason: Option<String>,
-    pub additional_contexts: Vec<String>,
+    pub additional_contexts: Vec<common::ContextUpdate>,
     pub updated_input: Option<Value>,
 }
 
@@ -47,7 +47,7 @@ pub struct PreToolUseOutcome {
 struct PreToolUseHandlerData {
     should_block: bool,
     block_reason: Option<String>,
-    additional_contexts_for_model: Vec<String>,
+    additional_contexts_for_model: Vec<common::ContextUpdate>,
     updated_input: Option<Value>,
 }
 
@@ -234,6 +234,10 @@ fn parse_completed(
                                 suppress_output,
                             );
                         }
+                        common::append_context_updates(
+                            &mut additional_contexts_for_model,
+                            parsed.context_updates,
+                        );
                         if let Some(reason) = parsed.block_reason {
                             status = HookRunStatus::Blocked;
                             should_block = true;
@@ -483,7 +487,9 @@ mod tests {
             PreToolUseHandlerData {
                 should_block: true,
                 block_reason: Some("do not run that".to_string()),
-                additional_contexts_for_model: vec!["quiet context".to_string()],
+                additional_contexts_for_model: vec![common::ContextUpdate::durable(
+                    "quiet context"
+                )],
                 updated_input: None,
             }
         );
@@ -539,7 +545,9 @@ mod tests {
             PreToolUseHandlerData {
                 should_block: true,
                 block_reason: Some("do not run that".to_string()),
-                additional_contexts_for_model: vec!["remember this".to_string()],
+                additional_contexts_for_model: vec![common::ContextUpdate::durable(
+                    "remember this"
+                )],
                 updated_input: None,
             }
         );
@@ -634,7 +642,7 @@ mod tests {
             PreToolUseHandlerData {
                 should_block: true,
                 block_reason: Some("do not run that".to_string()),
-                additional_contexts_for_model: vec!["nope".to_string()],
+                additional_contexts_for_model: vec![common::ContextUpdate::durable("nope")],
                 updated_input: None,
             }
         );

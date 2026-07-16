@@ -10,6 +10,7 @@ pub(crate) struct UniversalOutput {
 pub(crate) struct SessionStartOutput {
     pub universal: UniversalOutput,
     pub additional_context: Option<String>,
+    pub context_updates: Vec<crate::events::common::ContextUpdate>,
 }
 
 #[derive(Debug, Clone)]
@@ -17,6 +18,7 @@ pub(crate) struct PreToolUseOutput {
     pub universal: UniversalOutput,
     pub block_reason: Option<String>,
     pub additional_context: Option<String>,
+    pub context_updates: Vec<crate::events::common::ContextUpdate>,
     pub updated_input: Option<serde_json::Value>,
     pub invalid_reason: Option<String>,
 }
@@ -41,6 +43,7 @@ pub(crate) struct PostToolUseOutput {
     pub reason: Option<String>,
     pub invalid_block_reason: Option<String>,
     pub additional_context: Option<String>,
+    pub context_updates: Vec<crate::events::common::ContextUpdate>,
     pub invalid_reason: Option<String>,
 }
 
@@ -51,6 +54,7 @@ pub(crate) struct UserPromptSubmitOutput {
     pub reason: Option<String>,
     pub invalid_block_reason: Option<String>,
     pub additional_context: Option<String>,
+    pub context_updates: Vec<crate::events::common::ContextUpdate>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,31 +94,59 @@ use crate::schema::SubagentStartCommandOutputWire;
 use crate::schema::SubagentStopCommandOutputWire;
 use crate::schema::UserPromptSubmitCommandOutputWire;
 
+const MAX_CONTEXT_UPDATES: usize = 8;
+const MAX_CONTEXT_UPDATE_KEY_BYTES: usize = 128;
+
+fn normalized_context_updates(
+    updates: Vec<crate::schema::ContextUpdateWire>,
+) -> Vec<crate::events::common::ContextUpdate> {
+    updates
+        .into_iter()
+        .filter(|update| !update.key.is_empty() && update.key.len() <= MAX_CONTEXT_UPDATE_KEY_BYTES)
+        .take(MAX_CONTEXT_UPDATES)
+        .map(Into::into)
+        .collect()
+}
+
 pub(crate) fn parse_session_start(stdout: &str) -> Option<SessionStartOutput> {
     let wire: SessionStartCommandOutputWire = parse_json(stdout)?;
+    let context_updates = wire
+        .hook_specific_output
+        .as_ref()
+        .map(|output| output.context_updates.clone())
+        .unwrap_or_default();
     Some(session_start_output(
         wire.universal,
         wire.hook_specific_output
             .and_then(|output| output.additional_context),
+        context_updates,
     ))
 }
 
 pub(crate) fn parse_subagent_start(stdout: &str) -> Option<SessionStartOutput> {
     let wire: SubagentStartCommandOutputWire = parse_json(stdout)?;
+    let context_updates = wire
+        .hook_specific_output
+        .as_ref()
+        .map(|output| output.context_updates.clone())
+        .unwrap_or_default();
     Some(session_start_output(
         wire.universal,
         wire.hook_specific_output
             .and_then(|output| output.additional_context),
+        context_updates,
     ))
 }
 
 fn session_start_output(
     universal: HookUniversalOutputWire,
     additional_context: Option<String>,
+    context_updates: Vec<crate::schema::ContextUpdateWire>,
 ) -> SessionStartOutput {
     SessionStartOutput {
         universal: UniversalOutput::from(universal),
         additional_context,
+        context_updates: normalized_context_updates(context_updates),
     }
 }
 
@@ -129,6 +161,9 @@ pub(crate) fn parse_pre_tool_use(stdout: &str) -> Option<PreToolUseOutput> {
     let hook_specific_output = hook_specific_output.as_ref();
     let additional_context =
         hook_specific_output.and_then(|output| output.additional_context.clone());
+    let context_updates = hook_specific_output
+        .map(|output| output.context_updates.clone())
+        .unwrap_or_default();
     let use_hook_specific_decision = hook_specific_output.is_some_and(|output| {
         output.permission_decision.is_some()
             || output.permission_decision_reason.is_some()
@@ -176,6 +211,7 @@ pub(crate) fn parse_pre_tool_use(stdout: &str) -> Option<PreToolUseOutput> {
         universal,
         block_reason,
         additional_context,
+        context_updates: normalized_context_updates(context_updates),
         updated_input,
         invalid_reason,
     })
@@ -224,9 +260,10 @@ pub(crate) fn parse_post_tool_use(stdout: &str) -> Option<PostToolUseOutput> {
     } else {
         None
     };
-    let additional_context = wire
-        .hook_specific_output
-        .and_then(|output| output.additional_context);
+    let (additional_context, context_updates) = wire.hook_specific_output.map_or_else(
+        || (None, Vec::new()),
+        |output| (output.additional_context, output.context_updates),
+    );
 
     Some(PostToolUseOutput {
         universal,
@@ -234,6 +271,7 @@ pub(crate) fn parse_post_tool_use(stdout: &str) -> Option<PostToolUseOutput> {
         reason: wire.reason,
         invalid_block_reason,
         additional_context,
+        context_updates: normalized_context_updates(context_updates),
         invalid_reason,
     })
 }
@@ -268,15 +306,17 @@ pub(crate) fn parse_user_prompt_submit(stdout: &str) -> Option<UserPromptSubmitO
     } else {
         None
     };
-    let additional_context = wire
-        .hook_specific_output
-        .and_then(|output| output.additional_context);
+    let (additional_context, context_updates) = wire.hook_specific_output.map_or_else(
+        || (None, Vec::new()),
+        |output| (output.additional_context, output.context_updates),
+    );
     Some(UserPromptSubmitOutput {
         universal: UniversalOutput::from(wire.universal),
         should_block: should_block && invalid_block_reason.is_none(),
         reason: wire.reason,
         invalid_block_reason,
         additional_context,
+        context_updates: normalized_context_updates(context_updates),
     })
 }
 
@@ -331,6 +371,15 @@ impl From<HookUniversalOutputWire> for UniversalOutput {
             stop_reason: value.stop_reason,
             suppress_output: value.suppress_output,
             system_message: value.system_message,
+        }
+    }
+}
+
+impl From<crate::schema::ContextUpdateWire> for crate::events::common::ContextUpdate {
+    fn from(value: crate::schema::ContextUpdateWire) -> Self {
+        Self {
+            key: Some(value.key),
+            value: value.value,
         }
     }
 }
@@ -511,6 +560,7 @@ mod tests {
     use serde_json::json;
 
     use super::parse_permission_request;
+    use super::parse_user_prompt_submit;
 
     #[test]
     fn permission_request_rejects_reserved_updated_input_field() {
@@ -579,5 +629,47 @@ mod tests {
             parsed.invalid_reason,
             Some("PermissionRequest hook returned unsupported interrupt:true".to_string())
         );
+    }
+
+    #[test]
+    fn user_prompt_context_updates_support_set_clear_legacy_and_bounds() {
+        let mut updates = vec![
+            json!({"key": "honcho.prompt", "value": "new"}),
+            json!({"key": "honcho.pre_tool", "value": null}),
+            json!({"key": "", "value": "invalid"}),
+            json!({"key": "x".repeat(129), "value": "invalid"}),
+        ];
+        updates.extend((0..10).map(|index| {
+            json!({
+                "key": format!("valid.{index}"),
+                "value": format!("value-{index}")
+            })
+        }));
+        let parsed = parse_user_prompt_submit(
+            &json!({
+                "continue": true,
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": "legacy",
+                    "contextUpdates": updates
+                }
+            })
+            .to_string(),
+        )
+        .expect("user prompt hook output should parse");
+
+        assert_eq!(parsed.additional_context.as_deref(), Some("legacy"));
+        assert_eq!(parsed.context_updates.len(), 8);
+        assert_eq!(
+            parsed.context_updates[0].key.as_deref(),
+            Some("honcho.prompt")
+        );
+        assert_eq!(parsed.context_updates[0].value.as_deref(), Some("new"));
+        assert_eq!(
+            parsed.context_updates[1].key.as_deref(),
+            Some("honcho.pre_tool")
+        );
+        assert_eq!(parsed.context_updates[1].value, None);
+        assert_eq!(parsed.context_updates[7].key.as_deref(), Some("valid.5"));
     }
 }

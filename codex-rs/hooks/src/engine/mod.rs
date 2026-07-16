@@ -178,7 +178,7 @@ impl ClaudeHooksEngine {
         let mut outcome =
             crate::events::session_start::run(&self.handlers, &self.shell, request, turn_id).await;
         outcome.additional_contexts = self
-            .maybe_spill_texts(session_id, outcome.additional_contexts)
+            .maybe_spill_context_updates(session_id, outcome.additional_contexts)
             .await;
         outcome
     }
@@ -188,7 +188,7 @@ impl ClaudeHooksEngine {
         let mut outcome =
             crate::events::pre_tool_use::run(&self.handlers, &self.shell, request).await;
         outcome.additional_contexts = self
-            .maybe_spill_texts(session_id, outcome.additional_contexts)
+            .maybe_spill_context_updates(session_id, outcome.additional_contexts)
             .await;
         outcome
     }
@@ -208,7 +208,7 @@ impl ClaudeHooksEngine {
         let mut outcome =
             crate::events::post_tool_use::run(&self.handlers, &self.shell, request).await;
         outcome.additional_contexts = self
-            .maybe_spill_texts(session_id, outcome.additional_contexts)
+            .maybe_spill_context_updates(session_id, outcome.additional_contexts)
             .await;
         outcome.feedback_message = self
             .maybe_spill_text(session_id, outcome.feedback_message)
@@ -250,7 +250,7 @@ impl ClaudeHooksEngine {
         let mut outcome =
             crate::events::user_prompt_submit::run(&self.handlers, &self.shell, request).await;
         outcome.additional_contexts = self
-            .maybe_spill_texts(session_id, outcome.additional_contexts)
+            .maybe_spill_context_updates(session_id, outcome.additional_contexts)
             .await;
         outcome
     }
@@ -268,10 +268,17 @@ impl ClaudeHooksEngine {
         outcome
     }
 
-    async fn maybe_spill_texts(&self, session_id: ThreadId, texts: Vec<String>) -> Vec<String> {
-        self.output_spiller
-            .maybe_spill_texts(session_id, texts)
-            .await
+    async fn maybe_spill_context_updates(
+        &self,
+        session_id: ThreadId,
+        updates: Vec<crate::events::common::ContextUpdate>,
+    ) -> Vec<crate::events::common::ContextUpdate> {
+        let mut spilled = Vec::with_capacity(updates.len());
+        for mut update in updates {
+            update.value = self.maybe_spill_text(session_id, update.value).await;
+            spilled.push(update);
+        }
+        spilled
     }
 
     async fn maybe_spill_text(&self, session_id: ThreadId, text: Option<String>) -> Option<String> {

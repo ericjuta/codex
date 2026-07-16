@@ -2,6 +2,25 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
+    "ContextUpdateWire": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "type": "object"
+    },
     "PreToolUseDecisionWire": {
       "enum": [
         "approve",
@@ -15,6 +34,13 @@
         "additionalContext": {
           "default": null,
           "type": "string"
+        },
+        "contextUpdates": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ContextUpdateWire"
+          },
+          "type": "array"
         },
         "hookEventName": {
           "const": "PreToolUse",

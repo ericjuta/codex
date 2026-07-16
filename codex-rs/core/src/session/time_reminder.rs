@@ -97,8 +97,12 @@ pub(super) async fn maybe_record_current_time_reminder(
         return Ok(());
     }
 
+    let reminder = crate::context::CurrentTimeReminder::new(current_time);
     let response_item =
-        ContextualUserFragment::into(crate::context::CurrentTimeReminder::new(current_time));
+        ContextualUserFragment::into(crate::context::ReplaceableContextFragment::new(
+            "codex.current_time",
+            Some(reminder.body()),
+        ));
     sess.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
         .await;
 

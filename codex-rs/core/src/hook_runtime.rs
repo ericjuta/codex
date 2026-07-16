@@ -41,6 +41,7 @@ use tracing::instrument;
 
 use crate::context::ContextualUserFragment;
 use crate::context::HookAdditionalContext;
+use crate::context::ReplaceableContextFragment;
 use crate::event_mapping::parse_turn_item;
 use crate::session::TurnInput;
 use crate::session::session::Session;
@@ -50,7 +51,7 @@ use crate::tools::sandboxing::PermissionRequestPayload;
 
 pub(crate) struct HookRuntimeOutcome {
     pub should_stop: bool,
-    pub additional_contexts: Vec<String>,
+    pub additional_contexts: Vec<codex_hooks::ContextUpdate>,
 }
 
 pub(crate) enum PreToolUseHookResult {
@@ -540,7 +541,7 @@ pub(crate) async fn record_pending_input(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     pending_input: TurnInput,
-    additional_contexts: Vec<String>,
+    additional_contexts: Vec<codex_hooks::ContextUpdate>,
 ) {
     match pending_input {
         TurnInput::UserInput { content, client_id } => {
@@ -595,7 +596,7 @@ impl HookRuntimeOutcome {
 pub(crate) async fn record_additional_contexts(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    additional_contexts: Vec<String>,
+    additional_contexts: Vec<codex_hooks::ContextUpdate>,
 ) {
     let developer_messages = additional_context_messages(additional_contexts);
     if developer_messages.is_empty() {
@@ -606,11 +607,20 @@ pub(crate) async fn record_additional_contexts(
         .await;
 }
 
-fn additional_context_messages(additional_contexts: Vec<String>) -> Vec<ResponseItem> {
+fn additional_context_messages(
+    additional_contexts: Vec<codex_hooks::ContextUpdate>,
+) -> Vec<ResponseItem> {
     additional_contexts
         .into_iter()
-        .map(HookAdditionalContext::new)
-        .map(ContextualUserFragment::into)
+        .filter_map(|update| match update.key {
+            Some(key) => Some(ContextualUserFragment::into(
+                ReplaceableContextFragment::new(key, update.value),
+            )),
+            None => update
+                .value
+                .map(HookAdditionalContext::new)
+                .map(ContextualUserFragment::into),
+        })
         .collect()
 }
 
@@ -797,8 +807,14 @@ mod tests {
     #[test]
     fn additional_context_messages_stay_separate_and_ordered() {
         let messages = additional_context_messages(vec![
-            "first tide note".to_string(),
-            "second tide note".to_string(),
+            codex_hooks::ContextUpdate {
+                key: None,
+                value: Some("first tide note".to_string()),
+            },
+            codex_hooks::ContextUpdate {
+                key: None,
+                value: Some("second tide note".to_string()),
+            },
         ]);
 
         assert_eq!(messages.len(), 2);

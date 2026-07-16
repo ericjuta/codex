@@ -330,6 +330,48 @@ async fn process_compacted_history_replaces_developer_messages() {
 }
 
 #[tokio::test]
+async fn process_compacted_history_preserves_latest_replaceable_context() {
+    let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+    let turn_context = Arc::new(turn_context);
+    let stale = crate::context::ContextualUserFragment::into(
+        crate::context::ReplaceableContextFragment::new(
+            "honcho.prompt",
+            Some("stale context".to_string()),
+        ),
+    );
+    let latest = crate::context::ContextualUserFragment::into(
+        crate::context::ReplaceableContextFragment::new(
+            "honcho.prompt",
+            Some("latest context".to_string()),
+        ),
+    );
+    session
+        .record_conversation_items(&turn_context, &[stale, latest.clone()])
+        .await;
+    let world_state = Arc::new(build_world_state_from_turn_context(&session, &turn_context).await);
+
+    let (refreshed, _) = crate::compact_remote::process_compacted_history(
+        &session,
+        &turn_context,
+        vec![user_message("summary")],
+        &InitialContextInjection::BeforeLastUserMessage(world_state),
+    )
+    .await;
+
+    let retained = refreshed
+        .iter()
+        .filter(|item| crate::context::replaceable_context_key(item).is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(retained.len(), 1);
+    assert!(matches!(
+        retained[0],
+        ResponseItem::Message { content, .. }
+            if matches!(content.as_slice(), [ContentItem::InputText { text }]
+                if text.contains(">latest context</replaceable_context>"))
+    ));
+}
+
+#[tokio::test]
 async fn process_compacted_history_reinjects_full_initial_context() {
     let compacted_history = vec![ResponseItem::Message {
         id: None,

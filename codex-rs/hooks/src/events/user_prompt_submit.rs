@@ -36,14 +36,14 @@ pub struct UserPromptSubmitOutcome {
     pub hook_events: Vec<HookCompletedEvent>,
     pub should_stop: bool,
     pub stop_reason: Option<String>,
-    pub additional_contexts: Vec<String>,
+    pub additional_contexts: Vec<common::ContextUpdate>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 struct UserPromptSubmitHandlerData {
     should_stop: bool,
     stop_reason: Option<String>,
-    additional_contexts_for_model: Vec<String>,
+    additional_contexts_for_model: Vec<common::ContextUpdate>,
 }
 
 pub(crate) fn preview(
@@ -173,6 +173,12 @@ fn parse_completed(
                             &mut additional_contexts_for_model,
                             additional_context,
                             suppress_output,
+                        );
+                    }
+                    if parsed.invalid_block_reason.is_none() {
+                        common::append_context_updates(
+                            &mut additional_contexts_for_model,
+                            parsed.context_updates,
                         );
                     }
                     if !parsed.universal.continue_processing {
@@ -312,7 +318,7 @@ mod tests {
             UserPromptSubmitHandlerData {
                 should_stop: true,
                 stop_reason: Some("pause".to_string()),
-                additional_contexts_for_model: vec!["do not inject".to_string()],
+                additional_contexts_for_model: vec![crate::ContextUpdate::durable("do not inject")],
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Stopped);
@@ -348,7 +354,7 @@ mod tests {
             UserPromptSubmitHandlerData {
                 should_stop: true,
                 stop_reason: Some("slow down".to_string()),
-                additional_contexts_for_model: vec!["do not inject".to_string()],
+                additional_contexts_for_model: vec![crate::ContextUpdate::durable("do not inject")],
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);

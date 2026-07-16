@@ -15,6 +15,22 @@ pub struct SubagentHookContext {
     pub agent_type: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextUpdate {
+    pub key: Option<String>,
+    pub value: Option<String>,
+}
+
+impl ContextUpdate {
+    #[cfg(test)]
+    pub(crate) fn durable(value: impl Into<String>) -> Self {
+        Self {
+            key: None,
+            value: Some(value.into()),
+        }
+    }
+}
+
 pub(crate) fn join_text_chunks(chunks: Vec<String>) -> Option<String> {
     if chunks.is_empty() {
         None
@@ -34,7 +50,7 @@ pub(crate) fn trimmed_non_empty(text: &str) -> Option<String> {
 
 pub(crate) fn append_additional_context(
     entries: &mut Vec<HookOutputEntry>,
-    additional_contexts_for_model: &mut Vec<String>,
+    additional_contexts_for_model: &mut Vec<ContextUpdate>,
     additional_context: String,
 ) {
     append_additional_context_with_visibility(
@@ -47,7 +63,7 @@ pub(crate) fn append_additional_context(
 
 pub(crate) fn append_additional_context_with_visibility(
     entries: &mut Vec<HookOutputEntry>,
-    additional_contexts_for_model: &mut Vec<String>,
+    additional_contexts_for_model: &mut Vec<ContextUpdate>,
     additional_context: String,
     suppress_output: bool,
 ) {
@@ -57,12 +73,22 @@ pub(crate) fn append_additional_context_with_visibility(
             text: additional_context.clone(),
         });
     }
-    additional_contexts_for_model.push(additional_context);
+    additional_contexts_for_model.push(ContextUpdate {
+        key: None,
+        value: Some(additional_context),
+    });
+}
+
+pub(crate) fn append_context_updates(
+    additional_contexts_for_model: &mut Vec<ContextUpdate>,
+    updates: Vec<ContextUpdate>,
+) {
+    additional_contexts_for_model.extend(updates);
 }
 
 pub(crate) fn flatten_additional_contexts<'a>(
-    additional_contexts: impl IntoIterator<Item = &'a [String]>,
-) -> Vec<String> {
+    additional_contexts: impl IntoIterator<Item = &'a [ContextUpdate]>,
+) -> Vec<ContextUpdate> {
     additional_contexts
         .into_iter()
         .flat_map(|chunk| chunk.iter().cloned())

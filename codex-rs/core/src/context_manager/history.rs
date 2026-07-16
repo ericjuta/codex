@@ -29,6 +29,7 @@ use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
 use codex_utils_output_truncation::truncate_function_output_items_with_policy;
 use codex_utils_output_truncation::truncate_text;
+use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::LazyLock;
@@ -139,8 +140,44 @@ impl ContextManager {
     /// include `InputModality::Image`, images are stripped from messages and tool
     /// outputs.
     pub(crate) fn for_prompt(mut self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
+        self.collapse_replaceable_context();
         self.normalize_history(input_modalities);
         self.items
+    }
+
+    pub(crate) fn active_replaceable_context(&self) -> Vec<ResponseItem> {
+        let mut seen = HashSet::new();
+        let mut active = self
+            .items
+            .iter()
+            .rev()
+            .filter_map(|item| {
+                let (key, has_value) = crate::context::replaceable_context_key(item)?;
+                if !seen.insert(key.to_string()) || !has_value {
+                    return None;
+                }
+                Some(item.clone())
+            })
+            .collect::<Vec<_>>();
+        active.reverse();
+        active
+    }
+
+    fn collapse_replaceable_context(&mut self) {
+        let mut seen = HashSet::new();
+        let mut retained = self
+            .items
+            .drain(..)
+            .rev()
+            .filter(|item| {
+                let Some((key, has_value)) = crate::context::replaceable_context_key(item) else {
+                    return true;
+                };
+                seen.insert(key.to_string()) && has_value
+            })
+            .collect::<Vec<_>>();
+        retained.reverse();
+        self.items = retained;
     }
 
     /// Returns raw items in the history.

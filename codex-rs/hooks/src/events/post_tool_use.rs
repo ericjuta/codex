@@ -39,14 +39,14 @@ pub struct PostToolUseRequest {
 pub struct PostToolUseOutcome {
     pub hook_events: Vec<HookCompletedEvent>,
     pub should_block: bool,
-    pub additional_contexts: Vec<String>,
+    pub additional_contexts: Vec<common::ContextUpdate>,
     pub feedback_message: Option<String>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct PostToolUseHandlerData {
     should_block: bool,
-    additional_contexts_for_model: Vec<String>,
+    additional_contexts_for_model: Vec<common::ContextUpdate>,
     feedback_messages_for_model: Vec<String>,
 }
 
@@ -204,6 +204,12 @@ fn parse_completed(
                             &mut additional_contexts_for_model,
                             additional_context,
                             suppress_output,
+                        );
+                    }
+                    if parsed.invalid_reason.is_none() && parsed.invalid_block_reason.is_none() {
+                        common::append_context_updates(
+                            &mut additional_contexts_for_model,
+                            parsed.context_updates,
                         );
                     }
                     if !parsed.universal.continue_processing {
@@ -387,7 +393,9 @@ mod tests {
             parsed.data,
             PostToolUseHandlerData {
                 should_block: false,
-                additional_contexts_for_model: vec!["Remember the bash cleanup note.".to_string()],
+                additional_contexts_for_model: vec![common::ContextUpdate::durable(
+                    "Remember the bash cleanup note.",
+                )],
                 feedback_messages_for_model: Vec::new(),
             }
         );

@@ -59,6 +59,7 @@ pub(crate) async fn run_command(
     let mut command = build_command(shell, handler);
     command
         .current_dir(cwd)
+        .env("CODEX_HOOK_CONTEXT_UPDATES", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

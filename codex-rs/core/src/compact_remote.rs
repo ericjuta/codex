@@ -311,8 +311,9 @@ pub(crate) async fn process_compacted_history(
     // Mid-turn compaction is the only path that must inject initial context above the last user
     // message in the replacement history. Pre-turn compaction instead injects context after the
     // compaction item, but mid-turn compaction keeps the compaction item last for model training.
-    let (initial_context, world_state_baseline) =
+    let (mut initial_context, world_state_baseline) =
         build_compaction_initial_context(sess, turn_context, initial_context_injection).await;
+    initial_context.extend(sess.clone_history().await.active_replaceable_context());
 
     compacted_history.retain(should_keep_compacted_history_item);
     (
