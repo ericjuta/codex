@@ -128,6 +128,7 @@ fn input_delta_and_provider_usage_are_recorded() {
         Some(&TokenUsage {
             input_tokens: 100,
             cached_input_tokens: 75,
+            cache_write_input_tokens: 0,
             output_tokens: 10,
             reasoning_output_tokens: 0,
             total_tokens: 110,
