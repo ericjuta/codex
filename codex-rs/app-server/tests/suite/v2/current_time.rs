@@ -101,7 +101,12 @@ async fn current_time_read_round_trip_adds_reminder_to_model_input() -> Result<(
             .single_request()
             .message_input_texts("developer")
             .iter()
-            .any(|text| text == CURRENT_TIME_REMINDER)
+            .any(|text| {
+                text.strip_prefix("<replaceable_context key=\"")
+                    .and_then(|text| text.split_once("\">"))
+                    .and_then(|(_, reminder)| reminder.strip_suffix("</replaceable_context>"))
+                    == Some(CURRENT_TIME_REMINDER)
+            })
     );
     Ok(())
 }

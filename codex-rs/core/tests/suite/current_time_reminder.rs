@@ -91,7 +91,13 @@ fn current_time_reminders(request: &ResponsesRequest) -> Vec<String> {
     request
         .message_input_texts("developer")
         .into_iter()
-        .filter(|text| text.starts_with("It is "))
+        .filter_map(|text| {
+            let (_, reminder) = text
+                .strip_prefix("<replaceable_context key=\"")?
+                .split_once("\">")?;
+            let reminder = reminder.strip_suffix("</replaceable_context>")?;
+            reminder.starts_with("It is ").then(|| reminder.to_string())
+        })
         .collect()
 }
 
@@ -112,7 +118,7 @@ fn enable_current_time_reminder(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn current_time_reminders_follow_time_interval_and_persist_in_history() -> Result<()> {
+async fn current_time_reminders_follow_time_interval_and_replace_previous_value() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -157,10 +163,7 @@ async fn current_time_reminders_follow_time_interval_and_persist_in_history() ->
     assert_eq!(requests.len(), 3);
     assert_eq!(current_time_reminders(&requests[0]), vec![FIRST_REMINDER]);
     assert_eq!(current_time_reminders(&requests[1]), vec![FIRST_REMINDER]);
-    assert_eq!(
-        current_time_reminders(&requests[2]),
-        vec![FIRST_REMINDER, THIRD_REMINDER]
-    );
+    assert_eq!(current_time_reminders(&requests[2]), vec![THIRD_REMINDER]);
     Ok(())
 }
 
@@ -195,10 +198,7 @@ async fn zero_current_time_reminder_interval_delivers_when_time_moves_backward()
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(current_time_reminders(&requests[0]), vec![FIRST_REMINDER]);
-    assert_eq!(
-        current_time_reminders(&requests[1]),
-        vec![FIRST_REMINDER, EARLIER_REMINDER]
-    );
+    assert_eq!(current_time_reminders(&requests[1]), vec![EARLIER_REMINDER]);
     Ok(())
 }
 
@@ -254,14 +254,8 @@ async fn current_time_reminders_can_follow_only_user_or_tool_outputs() -> Result
     let requests = responses.requests();
     assert_eq!(requests.len(), 3);
     assert_eq!(current_time_reminders(&requests[0]), vec![FIRST_REMINDER]);
-    assert_eq!(
-        current_time_reminders(&requests[1]),
-        vec![FIRST_REMINDER, SECOND_REMINDER]
-    );
-    assert_eq!(
-        current_time_reminders(&requests[2]),
-        vec![FIRST_REMINDER, SECOND_REMINDER]
-    );
+    assert_eq!(current_time_reminders(&requests[1]), vec![SECOND_REMINDER]);
+    assert_eq!(current_time_reminders(&requests[2]), vec![SECOND_REMINDER]);
     Ok(())
 }
 
