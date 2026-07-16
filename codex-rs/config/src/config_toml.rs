@@ -694,9 +694,9 @@ pub struct AgentsToml {
     /// Reserved for controlling whether the spawn tool supports agent types.
     /// Currently ignored.
     pub support_agent_type: Option<bool>,
-    /// Reserved default model for spawned subagents. Currently ignored.
+    /// Default model for spawned subagents when the spawn call does not select one.
     pub default_subagent_model: Option<String>,
-    /// Reserved default reasoning effort for spawned subagents. Currently ignored.
+    /// Default reasoning effort for spawned subagents when the spawn call does not select one.
     pub default_subagent_reasoning_effort: Option<ReasoningEffort>,
     /// Default maximum runtime in seconds for agent job workers.
     #[schemars(range(min = 1))]

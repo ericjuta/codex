@@ -69,8 +69,6 @@ async fn handle_spawn_agent(
     let child_depth = next_thread_spawn_depth(&session_source);
     let mut config =
         build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
-    // TODO(jif): Apply `agents.default_subagent_model` as the default model here.
-    // TODO(jif): Apply `agents.default_subagent_reasoning_effort` as the default effort here.
     if let Some(service_tier) = args.service_tier.as_ref() {
         config.service_tier = Some(service_tier.clone());
     }
@@ -86,6 +84,7 @@ async fn handle_spawn_agent(
         )
         .await?;
         apply_spawn_agent_role(&session, &mut config, role_name).await?;
+    }
     }
     apply_spawn_agent_service_tier(
         &session,

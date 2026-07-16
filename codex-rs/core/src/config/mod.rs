@@ -877,10 +877,10 @@ pub struct Config {
     /// Reserved setting for whether the spawn tool supports agent types.
     pub agent_support_agent_type: Option<bool>,
 
-    /// Reserved default model for spawned subagents.
+    /// Default model for spawned subagents when the spawn call does not select one.
     pub agent_default_subagent_model: Option<String>,
 
-    /// Reserved default reasoning effort for spawned subagents.
+    /// Default reasoning effort for spawned subagents when the spawn call does not select one.
     pub agent_default_subagent_reasoning_effort: Option<ReasoningEffort>,
 
     /// Maximum runtime in seconds for agent job workers before they are failed.
