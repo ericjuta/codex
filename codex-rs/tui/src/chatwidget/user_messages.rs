@@ -531,6 +531,7 @@ pub(super) struct UserMessageDisplay {
     pub(super) text_elements: Vec<TextElement>,
 }
 
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PendingSteerCompareKey {
     pub(super) message: String,
@@ -601,7 +602,13 @@ impl ChatWidget {
         }
     }
 
-    pub(super) fn user_message_display_from_inputs(items: &[UserInput]) -> UserMessageDisplay {
+    pub(crate) fn user_message_display_from_inputs(items: &[UserInput]) -> UserMessageDisplay {
+        if items
+            .iter()
+            .any(|item| matches!(item, UserInput::Audio { .. } | UserInput::LocalAudio { .. }))
+        {
+            tracing::warn!("audio user inputs are not supported by the TUI and will be omitted");
+        }
         let mut message = String::new();
         let mut remote_image_urls = Vec::new();
         let mut local_images = Vec::new();
@@ -630,8 +637,8 @@ impl ChatWidget {
                 ),
                 UserInput::Image { url, .. } => remote_image_urls.push(url.clone()),
                 UserInput::LocalImage { path, .. } => local_images.push(path.clone()),
-                UserInput::Audio { .. } // TODO: Include audio inputs in the user message display.
-                | UserInput::LocalAudio { .. } // TODO: Include audio inputs in the user message display.
+                UserInput::Audio { .. }
+                | UserInput::LocalAudio { .. }
                 | UserInput::Skill { .. }
                 | UserInput::Mention { .. } => {}
             }

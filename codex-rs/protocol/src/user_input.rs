@@ -29,7 +29,6 @@ pub enum UserInput {
         #[ts(optional)]
         detail: Option<ImageDetail>,
     },
-
     /// Local image path provided by the user.  This will be converted to an
     /// `Image` variant (base64 data URL) during request serialization.
     LocalImage {
