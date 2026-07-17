@@ -206,6 +206,7 @@ fn create_fake_rollout_with_source_and_parent_thread_id(
         selected_capability_roots: Vec::new(),
         memory_mode: None,
         history_mode: Default::default(),
+        history_base: None,
         multi_agent_version: None,
         context_window: None,
     };
@@ -296,6 +297,7 @@ pub fn create_fake_rollout_with_text_elements(
         selected_capability_roots: Vec::new(),
         memory_mode: None,
         history_mode: Default::default(),
+        history_base: None,
         multi_agent_version: None,
         context_window: None,
     };

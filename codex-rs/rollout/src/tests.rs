@@ -1481,6 +1481,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 selected_capability_roots: Vec::new(),
                 memory_mode: None,
                 history_mode: Default::default(),
+                history_base: None,
                 multi_agent_version: None,
                 context_window: None,
             },

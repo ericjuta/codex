@@ -3024,6 +3024,16 @@ impl SessionContextWindow {
     }
 }
 
+/// Exclusive position in another thread's paginated rollout history.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
+pub struct HistoryPosition {
+    pub thread_id: ThreadId,
+    /// First rollout ordinal not included from the prefix file.
+    pub end_ordinal_exclusive: u64,
+    /// Byte offset immediately after the last included JSONL record from the prefix file.
+    pub end_byte_offset: u64,
+}
+
 /// SessionMeta contains session-level data that doesn't correspond to a specific turn.
 ///
 /// NOTE: There used to be an `instructions` field here, which stored user_instructions, but we
@@ -3073,6 +3083,9 @@ pub struct SessionMeta {
     pub memory_mode: Option<String>,
     #[serde(default)]
     pub history_mode: ThreadHistoryMode,
+    /// Exclusive prefix of another paginated rollout inherited by this thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_base: Option<HistoryPosition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub multi_agent_version: Option<MultiAgentVersion>,
     /// Initial context-window identity for consumers that tail rollout JSONL before compaction.
@@ -3103,6 +3116,7 @@ impl Default for SessionMeta {
             selected_capability_roots: Vec::new(),
             memory_mode: None,
             history_mode: ThreadHistoryMode::default(),
+            history_base: None,
             multi_agent_version: None,
             context_window: None,
         }
@@ -5823,6 +5837,7 @@ mod tests {
         }))?;
 
         assert_eq!(session_meta.history_mode, ThreadHistoryMode::Legacy);
+        assert_eq!(session_meta.history_base, None);
         let serialized = serde_json::to_value(&session_meta)?;
         assert_eq!(serialized["history_mode"], json!("legacy"));
         let mut unknown = serialized;

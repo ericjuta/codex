@@ -813,6 +813,7 @@ impl RolloutRecorder {
                     selected_capability_roots,
                     memory_mode: (!config.generate_memories()).then_some("disabled".to_string()),
                     history_mode,
+                    history_base: None,
                     multi_agent_version,
                     context_window: initial_window_id.map(SessionContextWindow::new),
                 };
