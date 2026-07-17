@@ -1,9 +1,11 @@
 use super::StreamingRender;
 use super::render_source;
 use crate::history_cell::HistoryRenderMode;
+use crate::inline_visualization::InlineVisualizationContext;
 use crate::markdown::render_streaming_markdown_agent_with_links_and_cwd;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::visible_lines;
+use codex_protocol::ThreadId;
 use insta::assert_debug_snapshot;
 use pretty_assertions::assert_eq;
 use std::path::Path;
@@ -22,7 +24,14 @@ fn append(
     render_mode: HistoryRenderMode,
 ) {
     source.push_str(chunk);
-    render.append(source, chunk, width, cwd, render_mode);
+    render.append(
+        source,
+        chunk,
+        width,
+        cwd,
+        render_mode,
+        /*inline_visualization_context*/ None,
+    );
 }
 
 fn append_rich_and_assert_matches_full(
@@ -35,7 +44,13 @@ fn append_rich_and_assert_matches_full(
     append(render, source, chunk, width, cwd, HistoryRenderMode::Rich);
     assert_eq!(
         render.lines,
-        render_source(source, width, cwd, HistoryRenderMode::Rich),
+        render_source(
+            source,
+            width,
+            cwd,
+            HistoryRenderMode::Rich,
+            /*inline_visualization_context*/ None,
+        ),
         "incremental render diverged after chunk {chunk:?}",
     );
 }
@@ -151,6 +166,53 @@ fn incremental_raw_render_preserves_blank_lines() {
 }
 
 #[test]
+fn inline_visualizations_use_canonical_full_render() {
+    let cwd = test_cwd();
+    let context = InlineVisualizationContext::new(&cwd, ThreadId::new())
+        .expect("UUIDv7 thread id should provide a timestamp");
+    let width = Some(80);
+    let mut source = String::new();
+    let mut render = StreamingRender::new();
+
+    for chunk in ["Before.\n\n", "::codex-inline-vis{file=\"missing.html\"}\n"] {
+        source.push_str(chunk);
+        render.append(
+            &source,
+            chunk,
+            width,
+            &cwd,
+            HistoryRenderMode::Rich,
+            Some(&context),
+        );
+        assert_eq!(
+            render.lines,
+            render_source(
+                &source,
+                width,
+                &cwd,
+                HistoryRenderMode::Rich,
+                Some(&context),
+            ),
+        );
+        assert_eq!(render.stable_source_len, 0);
+    }
+}
+
+#[test]
+fn inline_visualizations_without_context_use_canonical_full_render() {
+    let (_, render) = assert_rich_stream_matches_full_render(
+        &["Before.\n\n", "::codex-inline-vis{file=\"missing.html\"}\n"],
+        Some(80),
+    );
+
+    assert_eq!(render.stable_source_len, 0);
+    assert_debug_snapshot!(
+        "inline_visualizations_without_context_use_canonical_full_render",
+        render.lines
+    );
+}
+
+#[test]
 fn reference_link_definition_recomputes_earlier_and_later_blocks() {
     let streams: &[&[&str]] = &[
         &[
@@ -193,7 +255,13 @@ fn reference_link_definition_survives_raw_to_rich_render_mode_switch() {
         &cwd,
         HistoryRenderMode::Raw,
     );
-    render.recompute(&source, width, &cwd, HistoryRenderMode::Rich);
+    render.recompute(
+        &source,
+        width,
+        &cwd,
+        HistoryRenderMode::Rich,
+        /*inline_visualization_context*/ None,
+    );
     for chunk in ["First [reference][id].\n\n", "Later [reference][id].\n"] {
         append_rich_and_assert_matches_full(&mut render, &mut source, chunk, width, &cwd);
     }

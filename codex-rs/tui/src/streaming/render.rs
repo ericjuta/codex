@@ -5,7 +5,9 @@
 
 use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::raw_lines_from_source;
-use crate::markdown::render_markdown_agent_with_links_and_cwd;
+use crate::inline_visualization::DIRECTIVE_PREFIX;
+use crate::inline_visualization::InlineVisualizationContext;
+use crate::markdown::render_markdown_agent_with_links_cwd_and_visualizations;
 use crate::markdown::render_streaming_markdown_agent_with_links_and_cwd;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::plain_hyperlink_lines;
@@ -53,17 +55,24 @@ impl StreamingRender {
         width: Option<usize>,
         cwd: &Path,
         render_mode: HistoryRenderMode,
+        inline_visualization_context: Option<&InlineVisualizationContext>,
     ) {
-        self.lines = match render_mode {
-            HistoryRenderMode::Rich => {
+        self.lines = match (render_mode, inline_visualization_context) {
+            (HistoryRenderMode::Rich, None) if !source.contains(DIRECTIVE_PREFIX) => {
                 let rendered =
                     render_streaming_markdown_agent_with_links_and_cwd(source, width, Some(cwd));
                 self.has_reference_link_definition = rendered.has_reference_link_definition;
                 rendered.lines
             }
-            HistoryRenderMode::Raw => {
+            _ => {
                 self.has_reference_link_definition = false;
-                render_source(source, width, cwd, render_mode)
+                render_source(
+                    source,
+                    width,
+                    cwd,
+                    render_mode,
+                    inline_visualization_context,
+                )
             }
         };
         self.stable_source_len = 0;
@@ -74,8 +83,8 @@ impl StreamingRender {
     ///
     /// The final top-level block can still change meaning when another line arrives (for example,
     /// list tightness, a setext heading, a fenced block, or a table). Earlier top-level blocks are
-    /// rendered once and retained. Reference-style link definitions fall back to a full render
-    /// because they can affect source-wide rendering state.
+    /// rendered once and retained. Reference-style link definitions and inline visualization
+    /// rewriting fall back to a full render because they can affect source-wide rendering state.
     pub(super) fn append(
         &mut self,
         raw_source: &str,
@@ -83,6 +92,7 @@ impl StreamingRender {
         width: Option<usize>,
         cwd: &Path,
         render_mode: HistoryRenderMode,
+        inline_visualization_context: Option<&InlineVisualizationContext>,
     ) {
         if render_mode == HistoryRenderMode::Raw {
             self.lines
@@ -92,8 +102,25 @@ impl StreamingRender {
             return;
         }
 
+        if inline_visualization_context.is_some() || raw_source.contains(DIRECTIVE_PREFIX) {
+            self.recompute(
+                raw_source,
+                width,
+                cwd,
+                render_mode,
+                inline_visualization_context,
+            );
+            return;
+        }
+
         if self.has_reference_link_definition {
-            self.recompute(raw_source, width, cwd, render_mode);
+            self.recompute(
+                raw_source,
+                width,
+                cwd,
+                render_mode,
+                inline_visualization_context,
+            );
             return;
         }
 
@@ -102,14 +129,26 @@ impl StreamingRender {
             render_streaming_markdown_agent_with_links_and_cwd(pending_source, width, Some(cwd));
         if pending.has_reference_link_definition {
             self.has_reference_link_definition = true;
-            self.recompute(raw_source, width, cwd, render_mode);
+            self.recompute(
+                raw_source,
+                width,
+                cwd,
+                render_mode,
+                inline_visualization_context,
+            );
             return;
         }
 
         let mut newly_stable_rendered_len = None;
         if let Some(boundary) = pending.last_top_level_block_start {
             let newly_stable_source = &pending_source[..boundary];
-            let newly_stable = render_source(newly_stable_source, width, cwd, render_mode);
+            let newly_stable = render_source(
+                newly_stable_source,
+                width,
+                cwd,
+                render_mode,
+                inline_visualization_context,
+            );
             self.stable_source_len += boundary;
             newly_stable_rendered_len = Some(newly_stable.len());
         }
@@ -134,11 +173,15 @@ pub(super) fn render_source(
     width: Option<usize>,
     cwd: &Path,
     render_mode: HistoryRenderMode,
+    inline_visualization_context: Option<&InlineVisualizationContext>,
 ) -> Vec<HyperlinkLine> {
     match render_mode {
-        HistoryRenderMode::Rich => {
-            render_markdown_agent_with_links_and_cwd(source, width, Some(cwd))
-        }
+        HistoryRenderMode::Rich => render_markdown_agent_with_links_cwd_and_visualizations(
+            source,
+            width,
+            Some(cwd),
+            inline_visualization_context,
+        ),
         HistoryRenderMode::Raw => plain_hyperlink_lines(raw_lines_from_source(source)),
     }
 }
