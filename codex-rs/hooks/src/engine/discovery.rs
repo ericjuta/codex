@@ -3,11 +3,6 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
-use super::ConfiguredHandler;
-use super::HookListEntry;
-use crate::config_rules::hook_states_from_stack;
-use crate::events::common::matcher_pattern_for_event;
-use crate::events::common::validate_matcher_pattern;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
@@ -28,8 +23,15 @@ use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use crate::config_rules::hook_states_from_stack;
+use crate::events::common::matcher_pattern_for_event;
+use crate::events::common::validate_matcher_pattern;
+use crate::events::session_end::SESSION_END_DEFAULT_TIMEOUT_SEC;
+use crate::events::session_end::SESSION_END_MAX_TIMEOUT_SEC;
 use serde::Deserialize;
 use serde::Serialize;
+use super::ConfiguredHandler;
+use super::HookListEntry;
 
 pub(crate) struct DiscoveryResult {
     pub handlers: Vec<ConfiguredHandler>,
@@ -472,7 +474,27 @@ fn append_matcher_groups(
                     } else {
                         command
                     };
-                    let timeout_sec = timeout_sec.unwrap_or(600).max(1);
+                    if command.trim().is_empty() {
+                        warnings.push(format!(
+                            "skipping empty hook command in {}",
+                            source.path.display()
+                        ));
+                        continue;
+                    }
+                    let timeout_sec = normalize_command_hook(
+                        event_name,
+                        timeout_sec,
+                        source.path.as_path(),
+                        warnings,
+                    );
+                    let run_async = r#async
+                        && event_name != codex_protocol::protocol::HookEventName::SessionEnd;
+                    if r#async && !run_async {
+                        warnings.push(format!(
+                            "running async SessionEnd hook synchronously in {}",
+                            source.path.display()
+                        ));
+                    }
                     let normalized_handler = HookHandlerConfig::Command {
                         command: command.clone(),
                         command_windows: None,
@@ -481,13 +503,6 @@ fn append_matcher_groups(
                         status_message: status_message.clone(),
                     };
                     let current_hash = hook_hash(event_name, matcher, &group, normalized_handler);
-                    if command.trim().is_empty() {
-                        warnings.push(format!(
-                            "skipping empty hook command in {}",
-                            source.path.display()
-                        ));
-                        continue;
-                    }
                     let command = source.env.iter().fold(command, |command, (key, value)| {
                         command.replace(&format!("${{{key}}}"), value)
                     });
@@ -498,7 +513,7 @@ fn append_matcher_groups(
                     let trusted_hash = hook_trusted_hash(source.is_managed, state);
                     let trust_status =
                         hook_trust_status(source.is_managed, &current_hash, trusted_hash);
-                    let execution_mode = if r#async {
+                    let execution_mode = if run_async {
                         HookExecutionMode::Async
                     } else {
                         HookExecutionMode::Sync
@@ -584,6 +599,30 @@ fn append_matcher_groups(
             }
         }
     }
+}
+
+/// Normalizes command-hook timeouts. SessionEnd defaults to one second and is capped at three
+/// seconds; all other command hooks keep the standard ten-minute default.
+fn normalize_command_hook(
+    event_name: codex_protocol::protocol::HookEventName,
+    timeout_sec: Option<u64>,
+    source_path: &Path,
+    warnings: &mut Vec<String>,
+) -> u64 {
+    if event_name != codex_protocol::protocol::HookEventName::SessionEnd {
+        return timeout_sec.unwrap_or(600).max(1);
+    }
+
+    let max_timeout_sec = SESSION_END_MAX_TIMEOUT_SEC;
+    if timeout_sec.is_some_and(|timeout_sec| timeout_sec > max_timeout_sec) {
+        warnings.push(format!(
+            "clamping SessionEnd hook timeout to {max_timeout_sec}s in {}",
+            source_path.display()
+        ));
+    }
+    timeout_sec
+        .unwrap_or(SESSION_END_DEFAULT_TIMEOUT_SEC)
+        .clamp(1, max_timeout_sec)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -898,6 +937,86 @@ mod tests {
                 env: std::collections::HashMap::new(),
                 execution_mode: HookExecutionMode::Sync,
             }]
+        );
+    }
+
+    #[test]
+    fn session_end_normalizes_timeout() {
+        let mut handlers = Vec::new();
+        let mut hook_entries = Vec::new();
+        let mut warnings = Vec::new();
+        let mut display_order = 0;
+        let source_path = source_path();
+        let hook_states = std::collections::HashMap::new();
+
+        append_matcher_groups(
+            &mut handlers,
+            &mut hook_entries,
+            &mut warnings,
+            &mut display_order,
+            &hook_handler_source(&source_path, &hook_states),
+            HookEventName::SessionEnd,
+            vec![MatcherGroup {
+                matcher: Some("other".to_string()),
+                hooks: vec![
+                    HookHandlerConfig::Command {
+                        command: "echo default".to_string(),
+                        command_windows: None,
+                        timeout_sec: None,
+                        r#async: false,
+                        status_message: None,
+                    },
+                    HookHandlerConfig::Command {
+                        command: "echo clamped".to_string(),
+                        command_windows: None,
+                        timeout_sec: Some(600),
+                        r#async: true,
+                        status_message: None,
+                    },
+                ],
+            }],
+        );
+
+        assert_eq!(
+            handlers
+                .iter()
+                .map(|handler| handler.timeout_sec)
+                .collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert_eq!(
+            handlers
+                .iter()
+                .map(|handler| handler.matcher.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("other"), Some("other")]
+        );
+        assert_eq!(
+            hook_entries
+                .iter()
+                .map(|entry| entry.timeout_sec)
+                .collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert_eq!(
+            hook_entries
+                .iter()
+                .map(|entry| entry.matcher.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("other"), Some("other")]
+        );
+        assert_eq!(
+            warnings,
+            vec![
+                format!(
+                    "clamping SessionEnd hook timeout to 3s in {}",
+                    source_path.display()
+                ),
+                format!(
+                    "running async SessionEnd hook synchronously in {}",
+                    source_path.display()
+                ),
+            ]
         );
     }
 

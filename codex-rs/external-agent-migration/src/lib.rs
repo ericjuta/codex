@@ -1903,6 +1903,13 @@ Review carefully."""
                         "command": source_hook_command("approve.py")
                     }]
                 }],
+                "SessionEnd": [{
+                    "matcher": "clear",
+                    "hooks": [{
+                        "type": "command",
+                        "command": source_hook_command("cleanup.py")
+                    }]
+                }],
                 "SubagentStart": [{
                     "matcher": "worker",
                     "hooks": [{"type": "prompt", "prompt": "check"}]
@@ -1920,6 +1927,13 @@ Review carefully."""
                     "hooks": [{
                         "type": "command",
                         "command": migrated_hook_command("approve.py")
+                    }]
+                }],
+                "SessionEnd": [{
+                    "matcher": "clear",
+                    "hooks": [{
+                        "type": "command",
+                        "command": migrated_hook_command("cleanup.py")
                     }]
                 }]
             })

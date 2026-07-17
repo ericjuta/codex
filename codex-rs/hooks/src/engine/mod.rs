@@ -3,24 +3,6 @@ pub(crate) mod discovery;
 pub(crate) mod dispatcher;
 pub(crate) mod output_parser;
 pub(crate) mod schema_loader;
-
-use crate::events::compact::PostCompactRequest;
-use crate::events::compact::PreCompactOutcome;
-use crate::events::compact::PreCompactRequest;
-use crate::events::compact::StatelessHookOutcome;
-use crate::events::permission_request::PermissionRequestOutcome;
-use crate::events::permission_request::PermissionRequestRequest;
-use crate::events::post_tool_use::PostToolUseOutcome;
-use crate::events::post_tool_use::PostToolUseRequest;
-use crate::events::pre_tool_use::PreToolUseOutcome;
-use crate::events::pre_tool_use::PreToolUseRequest;
-use crate::events::session_start::SessionStartOutcome;
-use crate::events::session_start::SessionStartRequest;
-use crate::events::stop::StopOutcome;
-use crate::events::stop::StopRequest;
-use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
-use crate::events::user_prompt_submit::UserPromptSubmitRequest;
-use crate::output_spill::HookOutputSpiller;
 use codex_config::ConfigLayerStack;
 use codex_plugin::PluginHookSource;
 use codex_protocol::ThreadId;
@@ -31,6 +13,25 @@ use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use crate::events::compact::PostCompactRequest;
+use crate::events::compact::PreCompactOutcome;
+use crate::events::compact::PreCompactRequest;
+use crate::events::compact::StatelessHookOutcome;
+use crate::events::permission_request::PermissionRequestOutcome;
+use crate::events::permission_request::PermissionRequestRequest;
+use crate::events::post_tool_use::PostToolUseOutcome;
+use crate::events::post_tool_use::PostToolUseRequest;
+use crate::events::pre_tool_use::PreToolUseOutcome;
+use crate::events::pre_tool_use::PreToolUseRequest;
+use crate::events::session_end::SessionEndOutcome;
+use crate::events::session_end::SessionEndRequest;
+use crate::events::session_start::SessionStartOutcome;
+use crate::events::session_start::SessionStartRequest;
+use crate::events::stop::StopOutcome;
+use crate::events::stop::StopRequest;
+use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
+use crate::events::user_prompt_submit::UserPromptSubmitRequest;
+use crate::output_spill::HookOutputSpiller;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -71,6 +72,7 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::PreCompact => "pre-compact",
             codex_protocol::protocol::HookEventName::PostCompact => "post-compact",
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
+            codex_protocol::protocol::HookEventName::SessionEnd => "session-end",
             codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
             codex_protocol::protocol::HookEventName::SubagentStart => "subagent-start",
             codex_protocol::protocol::HookEventName::SubagentStop => "subagent-stop",
@@ -257,6 +259,14 @@ impl ClaudeHooksEngine {
 
     pub(crate) fn preview_stop(&self, request: &StopRequest) -> Vec<HookRunSummary> {
         crate::events::stop::preview(&self.handlers, request)
+    }
+
+    pub(crate) fn preview_session_end(&self) -> Vec<HookRunSummary> {
+        crate::events::session_end::preview(&self.handlers)
+    }
+
+    pub(crate) async fn run_session_end(&self, request: SessionEndRequest) -> SessionEndOutcome {
+        crate::events::session_end::run(&self.handlers, &self.shell, request).await
     }
 
     pub(crate) async fn run_stop(&self, request: StopRequest) -> StopOutcome {
