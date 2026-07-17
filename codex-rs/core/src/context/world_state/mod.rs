@@ -3,6 +3,8 @@ mod apps_instructions;
 mod collaboration_mode;
 mod environment;
 mod plugins_instructions;
+#[cfg(test)]
+mod test_support;
 
 use crate::context::ContextualUserFragment;
 use codex_extension_api::PreviousWorldStateSection;
