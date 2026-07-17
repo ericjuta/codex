@@ -17,6 +17,7 @@ use crate::agent::status::is_final;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::attestation::AttestationProvider;
+use crate::audio_preparation::prepare_response_items as prepare_audio_response_items;
 use crate::build_available_skills;
 use crate::compact;
 use crate::config::ManagedFeatures;
@@ -35,7 +36,7 @@ use crate::current_time::TimeProvider;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::ExecPolicyManager;
-use crate::image_preparation::prepare_response_items;
+use crate::image_preparation::prepare_response_items as prepare_image_response_items;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::session::step_context::StepContext;
@@ -1457,32 +1458,33 @@ impl Session {
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
         // Keep the recorded rollout unchanged. Prepare its reconstructed history before
-        // installing it, so legacy images are processed once for this resume or fork and
+        // installing it, so legacy media is processed once for this resume or fork and
         // will be processed again if the rollout is reconstructed in a future session.
-        // This meets image resizing requirements without modifying persisted rollouts.
-        prepare_response_items(&mut history);
+        // This meets media preparation requirements without modifying persisted rollouts.
+        prepare_image_response_items(&mut history);
+        prepare_audio_response_items(&mut history);
         // Rollouts persisted by older builds can carry duplicate or misordered
         // tool call/output pairs, which fail every subsequent model request.
         // Repair them here so resume, fork, and rollback install valid history.
         crate::context_manager::normalize::repair_call_output_pairs(&mut history);
         {
-            let mut state = self.state.lock().await;
-            state.replace_history(history, reference_context_item);
-            if let Some(world_state) = world_state_baseline {
-                state.history.set_world_state_baseline(world_state);
-            }
-            let fallback_ids = state.auto_compact_window_ids();
-            let window_id = window_id.unwrap_or(fallback_ids.window_id);
-            state.restore_auto_compact_window(
-                window_number,
-                AutoCompactWindowIds {
-                    first_window_id: first_window_id.unwrap_or(window_id),
-                    previous_window_id,
-                    window_id,
-                },
-            );
-            state.set_previous_turn_settings(previous_turn_settings.clone());
+        let mut state = self.state.lock().await;
+        state.replace_history(history, reference_context_item);
+        if let Some(world_state) = world_state_baseline {
+            state.history.set_world_state_baseline(world_state);
         }
+        let fallback_ids = state.auto_compact_window_ids();
+        let window_id = window_id.unwrap_or(fallback_ids.window_id);
+        state.restore_auto_compact_window(
+            window_number,
+            AutoCompactWindowIds {
+                first_window_id: first_window_id.unwrap_or(window_id),
+                previous_window_id,
+                window_id,
+            },
+        );
+        state.set_previous_turn_settings(previous_turn_settings.clone());
+    }
         let prefix_tokens = if matches!(
             turn_context.config.model_auto_compact_token_limit_scope,
             AutoCompactTokenLimitScope::BodyAfterPrefix
@@ -2794,7 +2796,8 @@ impl Session {
         items: &'a [ResponseItem],
     ) -> Cow<'a, [ResponseItem]> {
         let mut items = Cow::Borrowed(items);
-        prepare_response_items(items.to_mut());
+        prepare_image_response_items(items.to_mut());
+        prepare_audio_response_items(items.to_mut());
         // Most response items get their passthrough turn ID at the durable history boundary.
         for item in items.to_mut() {
             item.set_turn_id_if_missing(&turn_context.sub_id);

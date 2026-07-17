@@ -588,7 +588,10 @@ impl ChatWidget {
             match item {
                 UserInput::Text { text, .. } => message.push_str(text),
                 UserInput::Image { .. } | UserInput::LocalImage { .. } => image_count += 1,
-                UserInput::Skill { .. } | UserInput::Mention { .. } => {}
+                UserInput::Audio { .. } // TODO: Include audio inputs in pending steer comparison.
+                | UserInput::LocalAudio { .. } // TODO: Include audio inputs in pending steer comparison.
+                | UserInput::Skill { .. }
+                | UserInput::Mention { .. } => {}
             }
         }
 
@@ -627,7 +630,10 @@ impl ChatWidget {
                 ),
                 UserInput::Image { url, .. } => remote_image_urls.push(url.clone()),
                 UserInput::LocalImage { path, .. } => local_images.push(path.clone()),
-                UserInput::Skill { .. } | UserInput::Mention { .. } => {}
+                UserInput::Audio { .. } // TODO: Include audio inputs in the user message display.
+                | UserInput::LocalAudio { .. } // TODO: Include audio inputs in the user message display.
+                | UserInput::Skill { .. }
+                | UserInput::Mention { .. } => {}
             }
         }
 
