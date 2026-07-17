@@ -42,6 +42,8 @@ pub(crate) struct AgentNavigationState {
     threads: HashMap<ThreadId, AgentPickerThreadEntry>,
     /// Stable first-seen traversal order for picker rows and keyboard cycling.
     order: Vec<ThreadId>,
+    /// Threads with observed terminal liveness that must not be revived by delayed activity.
+    stopped_threads: HashSet<ThreadId>,
 }
 
 /// Direction of keyboard traversal through the stable picker order.
@@ -119,8 +121,32 @@ impl AgentNavigationState {
                     is_closed: false,
                 });
         entry.agent_path = Some(activity.agent_path);
-        entry.is_running = activity.is_running_hint;
-        entry.is_closed = false;
+        if activity.is_running_hint
+            && !entry.is_closed
+            && !self.stopped_threads.contains(&activity.thread_id)
+        {
+            entry.is_running = true;
+        } else {
+            entry.is_running = false;
+            self.stopped_threads.insert(activity.thread_id);
+        }
+    }
+
+    pub(crate) fn mark_running(&mut self, thread_id: ThreadId) {
+        if self
+            .threads
+            .get(&thread_id)
+            .is_some_and(|entry| entry.is_closed)
+        {
+            return;
+        }
+        self.stopped_threads.remove(&thread_id);
+        self.set_running(thread_id, /*is_running*/ true);
+    }
+
+    pub(crate) fn mark_stopped(&mut self, thread_id: ThreadId) {
+        self.stopped_threads.insert(thread_id);
+        self.set_running(thread_id, /*is_running*/ false);
     }
 
     pub(crate) fn set_running(&mut self, thread_id: ThreadId, is_running: bool) {
@@ -162,6 +188,7 @@ impl AgentNavigationState {
     pub(crate) fn clear(&mut self) {
         self.threads.clear();
         self.order.clear();
+        self.stopped_threads.clear();
     }
 
     /// Removes a tracked thread entirely from picker metadata and traversal order.
@@ -172,6 +199,7 @@ impl AgentNavigationState {
     pub(crate) fn remove(&mut self, thread_id: ThreadId) {
         self.threads.remove(&thread_id);
         self.order.retain(|candidate| *candidate != thread_id);
+        self.stopped_threads.remove(&thread_id);
     }
 
     /// Returns whether there is at least one tracked thread other than the primary one.
