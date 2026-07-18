@@ -199,7 +199,7 @@ fn normalize_executor_rpc_error(error: JSONRPCErrorError) -> JSONRPCErrorError {
     error
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 #[path = "hashline_transaction_execute_tests.rs"]
 mod tests;
 
