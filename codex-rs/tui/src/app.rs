@@ -508,6 +508,7 @@ pub(crate) struct App {
     workspace_command_runner: Option<WorkspaceCommandRunner>,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
+    launch_cwd: PathBuf,
     pub(crate) state_db: Option<StateDbHandle>,
     cli_kv_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,
@@ -760,6 +761,7 @@ impl App {
         tui: &mut tui::Tui,
         mut app_server: AppServerSession,
         mut config: Config,
+        launch_cwd: PathBuf,
         cli_kv_overrides: Vec<(String, TomlValue)>,
         harness_overrides: ConfigOverrides,
         loader_overrides: LoaderOverrides,
@@ -1025,6 +1027,7 @@ See the Codex keymap documentation for supported actions and examples."
             chat_widget,
             workspace_command_runner: Some(workspace_command_runner),
             config,
+            launch_cwd,
             state_db,
             cli_kv_overrides,
             harness_overrides,
