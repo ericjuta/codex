@@ -26,6 +26,7 @@ use crate::multi_agents::previous_agent_shortcut;
 use codex_protocol::ThreadId;
 use ratatui::text::Span;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 /// Small state container for multi-agent picker ordering and labeling.
 ///
