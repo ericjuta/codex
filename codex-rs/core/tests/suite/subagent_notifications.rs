@@ -61,10 +61,6 @@ const INHERITED_MODEL: &str = "gpt-5.2";
 const INHERITED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::XHigh;
 const REQUESTED_MODEL: &str = "gpt-5.4";
 const REQUESTED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
-const V2_DEFAULT_MODEL: &str = "gpt-5.6-terra";
-const V2_DEFAULT_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::High;
-const V2_REQUESTED_MODEL: &str = "gpt-5.6-sol";
-const V2_REQUESTED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
 const ROLE_MODEL: &str = "gpt-5.4";
 const ROLE_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::High;
 const SUBAGENT_START_CONTEXT: &str = "subagent start context reaches child";
@@ -353,26 +349,6 @@ async fn wait_for_requests(
         }
         if Instant::now() >= deadline {
             anyhow::bail!("expected at least 1 request, got {}", requests.len());
-        }
-        sleep(Duration::from_millis(10)).await;
-    }
-}
-
-async fn wait_for_request_with_model(
-    mock: &core_test_support::responses::ResponseMock,
-    model: &str,
-) -> Result<ResponsesRequest> {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        if let Some(request) = mock
-            .requests()
-            .into_iter()
-            .find(|request| request.body_json()["model"] == model)
-        {
-            return Ok(request);
-        }
-        if Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for request using model {model}");
         }
         sleep(Duration::from_millis(10)).await;
     }
@@ -919,11 +895,9 @@ async fn spawned_child_receives_forked_parent_context() -> Result<()> {
     )
     .await;
 
-    let child_request_log = mount_sse_once_match(
+    let _child_request_log = mount_sse_once_match(
         &server,
-        |req: &wiremock::Request| {
-            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
-        },
+        |req: &wiremock::Request| body_contains(req, CHILD_PROMPT),
         sse(vec![
             ev_response_created("resp-child-1"),
             ev_assistant_message("msg-child-1", "child done"),
@@ -948,154 +922,35 @@ async fn spawned_child_receives_forked_parent_context() -> Result<()> {
             .features
             .enable(Feature::Collab)
             .expect("test config should allow feature update");
-            config.model = Some(INHERITED_MODEL.to_string());
-            config.model_reasoning_effort = Some(INHERITED_REASONING_EFFORT);
-            config.agent_default_subagent_model = Some(REQUESTED_MODEL.to_string());
-            config.agent_default_subagent_reasoning_effort = Some(REQUESTED_REASONING_EFFORT);
-        });
-    let test = builder.build(&server).await?;
-
-    test.submit_turn(TURN_0_FORK_PROMPT).await?;
-    let _ = seed_turn.single_request();
-
-    test.submit_turn(TURN_1_PROMPT).await?;
-    let _ = spawn_turn.single_request();
-
-    let child_request = wait_for_request_with_model(&child_request_log, REQUESTED_MODEL).await?;
-    assert!(child_request.body_contains_text(TURN_0_FORK_PROMPT));
-    let child_body = child_request.body_json();
-    assert_eq!(
-        (
-            child_body["model"].clone(),
-            child_body["reasoning"]["effort"].clone(),
-        ),
-        (
-            json!(REQUESTED_MODEL),
-            json!(REQUESTED_REASONING_EFFORT.to_string()),
-        )
-    );
-
-    Ok(())
-}
-
-#[derive(Clone, Copy)]
-enum FullHistoryV2ModelSelection {
-    ConfiguredDefault,
-    ExplicitOverride,
-}
-
-#[test_case(FullHistoryV2ModelSelection::ConfiguredDefault; "configured default with omitted fork_turns")]
-#[test_case(FullHistoryV2ModelSelection::ExplicitOverride; "explicit override with fork_turns all")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_context(
-    selection: FullHistoryV2ModelSelection,
-) -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let seed_turn = mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| body_contains(req, TURN_0_FORK_PROMPT),
-        sse(vec![
-            ev_response_created("resp-seed-1"),
-            ev_assistant_message("msg-seed-1", "seeded"),
-            ev_completed("resp-seed-1"),
-        ]),
-    )
-    .await;
-    let (spawn_args, expected_model, expected_reasoning_effort) = match selection {
-        FullHistoryV2ModelSelection::ConfiguredDefault => (
-            json!({
-                "message": CHILD_PROMPT,
-                "task_name": "worker",
-            }),
-            V2_DEFAULT_MODEL,
-            V2_DEFAULT_REASONING_EFFORT,
-        ),
-        FullHistoryV2ModelSelection::ExplicitOverride => (
-            json!({
-                "message": CHILD_PROMPT,
-                "task_name": "worker",
-                "fork_turns": "all",
-                "model": V2_REQUESTED_MODEL,
-                "reasoning_effort": V2_REQUESTED_REASONING_EFFORT,
-            }),
-            V2_REQUESTED_MODEL,
-            V2_REQUESTED_REASONING_EFFORT,
-        ),
-    };
-    let spawn_args = serde_json::to_string(&spawn_args)?;
-    let spawn_turn = mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
-        sse(vec![
-            ev_response_created("resp-turn1-1"),
-            ev_function_call_with_namespace(
-                SPAWN_CALL_ID,
-                MULTI_AGENT_V2_NAMESPACE,
-                "spawn_agent",
-                &spawn_args,
-            ),
-            ev_completed("resp-turn1-1"),
-        ]),
-    )
-    .await;
-    let child_request_log = mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| {
-            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
-        },
-        sse(vec![
-            ev_response_created("resp-child-1"),
-            ev_assistant_message("msg-child-1", "child done"),
-            ev_completed("resp-child-1"),
-        ]),
-    )
-    .await;
-    let _turn1_followup = mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
-        sse(vec![
-            ev_response_created("resp-turn1-2"),
-            ev_assistant_message("msg-turn1-2", "parent done"),
-            ev_completed("resp-turn1-2"),
-        ]),
-    )
-    .await;
-    let mut builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::Collab)
-            .expect("test config should allow feature update");
-        config
-            .features
-            .enable(Feature::MultiAgentV2)
-            .expect("test config should allow feature update");
-        config.model = Some(INHERITED_MODEL.to_string());
-        config.model_reasoning_effort = Some(INHERITED_REASONING_EFFORT);
-        config.agent_default_subagent_model = Some(V2_DEFAULT_MODEL.to_string());
-        config.agent_default_subagent_reasoning_effort = Some(V2_DEFAULT_REASONING_EFFORT);
     });
     let test = builder.build(&server).await?;
 
     test.submit_turn(TURN_0_FORK_PROMPT).await?;
     let _ = seed_turn.single_request();
+
     test.submit_turn(TURN_1_PROMPT).await?;
     let _ = spawn_turn.single_request();
 
-    let child_request = wait_for_request_with_model(&child_request_log, expected_model).await?;
-    assert!(child_request.body_contains_text(TURN_0_FORK_PROMPT));
-    let child_body = child_request.body_json();
-    assert_eq!(
-        (
-            child_body["model"].clone(),
-            child_body["reasoning"]["effort"].clone(),
-        ),
-        (
-            json!(expected_model),
-            json!(expected_reasoning_effort.to_string()),
-        )
-    );
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let child_request = loop {
+        if let Some(request) = server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|request| {
+                body_contains(request, CHILD_PROMPT) && !body_contains(request, SPAWN_CALL_ID)
+            })
+        {
+            break request;
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for forked child request");
+        }
+        sleep(Duration::from_millis(10)).await;
+    };
+    assert!(body_contains(&child_request, TURN_0_FORK_PROMPT));
+    assert!(!body_contains(&child_request, SPAWN_CALL_ID));
 
     Ok(())
 }

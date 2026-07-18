@@ -85,7 +85,6 @@ async fn handle_spawn_agent(
         .await?;
         apply_spawn_agent_role(&session, &mut config, role_name).await?;
     }
-    }
     apply_spawn_agent_service_tier(
         &session,
         &mut config,
