@@ -136,9 +136,8 @@ impl ContextManager {
     }
 
     /// Returns the history prepared for sending to the model. This applies a proper
-    /// normalization and drops un-suited items. When `input_modalities` does not
-    /// include `InputModality::Image`, images are stripped from messages and tool
-    /// outputs.
+    /// normalization and drops un-suited items. Unsupported image and audio content
+    /// is stripped from messages and tool outputs according to `input_modalities`.
     pub(crate) fn for_prompt(mut self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
         self.collapse_replaceable_context();
         self.normalize_history(input_modalities);
@@ -392,7 +391,7 @@ impl ContextManager {
     /// This function enforces a couple of invariants on the in-memory history:
     /// 1. every call has exactly one output entry, ordered after the call
     /// 2. every output has a corresponding call entry
-    /// 3. when images are unsupported, image content is stripped from messages and tool outputs
+    /// 3. unsupported image and audio content is stripped from messages and tool outputs
     fn normalize_history(&mut self, input_modalities: &[InputModality]) {
         // duplicate calls/outputs sharing a call id and outputs recorded ahead
         // of their call must be repaired before the set-based checks below,
@@ -407,6 +406,9 @@ impl ContextManager {
 
         // strip images when model does not support them
         normalize::strip_images_when_unsupported(input_modalities, &mut self.items);
+
+        // strip audio when model does not support it
+        normalize::strip_audio_when_unsupported(input_modalities, &mut self.items);
     }
 
     fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
