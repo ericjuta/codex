@@ -2451,7 +2451,7 @@ dependencies = [
  "which 8.0.4",
  "windows-sys 0.52.0",
  "wiremock",
- "zstd",
+ "zstd 0.13.3",
 ]
 
 [[package]]
