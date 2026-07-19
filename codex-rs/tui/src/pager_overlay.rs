@@ -1231,7 +1231,6 @@ mod tests {
             CommandOutput {
                 exit_code: 0,
                 aggregated_output: "src\nREADME.md\n".into(),
-                formatted_output: "src\nREADME.md\n".into(),
             },
             Duration::from_millis(420),
         );
