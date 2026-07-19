@@ -140,6 +140,12 @@ pub(crate) const EXTERNAL_AGENT_CONFIG_IMPORT_IN_PROGRESS_MESSAGE: &str =
     "A previous Claude Code import is still running. Wait for it to finish before importing again.";
 const THREAD_SETTINGS_UPDATE_METHOD: &str = "thread/settings/update";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ForkPresentation {
+    Regular,
+    SideConversation,
+}
+
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
     color_eyre::eyre::eyre!("{context}: {err}")
 }
@@ -1194,6 +1200,65 @@ impl AppServerSession {
         let request_id = self.next_request_id;
         self.next_request_id += 1;
         RequestId::Integer(request_id)
+    }
+
+
+    pub(crate) async fn fork_side_thread(
+        &mut self,
+        config: Config,
+        thread_id: ThreadId,
+    ) -> Result<AppServerStartedThread> {
+        self.fork_thread_at_with_presentation(
+            config,
+            thread_id,
+            /*last_turn_id*/ None,
+            /*before_turn_id*/ None,
+            ForkGoalContinuation::StartIfIdle,
+            ForkPresentation::SideConversation,
+        )
+        .await
+    }
+
+    async fn fork_thread_at_with_presentation(
+        &mut self,
+        config: Config,
+        thread_id: ThreadId,
+        last_turn_id: Option<String>,
+        before_turn_id: Option<String>,
+        goal_continuation: ForkGoalContinuation,
+        presentation: ForkPresentation,
+    ) -> Result<AppServerStartedThread> {
+        let request_id = self.next_request_id();
+        let session_config = self.session_config_with_effective_service_tier(&config);
+        let response: ThreadForkResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadFork {
+                request_id,
+                params: ThreadForkParams {
+                    last_turn_id,
+                    before_turn_id,
+                    defer_goal_continuation: goal_continuation
+                        == ForkGoalContinuation::DeferUntilNextTurn,
+                    exclude_turns: presentation == ForkPresentation::SideConversation,
+                    ..thread_fork_params_from_config(
+                        session_config,
+                        thread_id,
+                        self.thread_params_mode(),
+                        self.remote_cwd_override.as_deref(),
+                    )
+                },
+            })
+            .await
+            .map_err(|err| {
+                bootstrap_request_error("thread/fork failed during TUI bootstrap", err)
+            })?;
+        let fork_parent_title = self
+            .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
+            .await;
+        let mut started =
+            started_thread_from_fork_response(response, &config, self.thread_params_mode()).await?;
+        started.session.fork_parent_title = fork_parent_title;
+        Ok(started)
     }
 }
 
@@ -2443,6 +2508,41 @@ mod tests {
             params.developer_instructions.as_deref(),
             Some("Developer override.")
         );
+    }
+
+    #[tokio::test]
+    async fn side_fork_excludes_turns_without_clearing_regular_ephemeral_fork() -> Result<()> {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&codex_home).await;
+        config.ephemeral = true;
+        let thread_id = ThreadId::from_string(
+            &create_fake_rollout(
+                codex_home.path(),
+                "2025-01-05T12-00-00",
+                "2025-01-05T12:00:00Z",
+                "Saved user message",
+                Some(config.model_provider_id.as_str()),
+                /*git_info*/ None,
+            )
+            .expect("create rollout"),
+        )?;
+        let mut app_server = crate::start_embedded_app_server_for_picker(&config).await?;
+
+        let regular = app_server.fork_thread(config.clone(), thread_id).await?;
+        let side = app_server.fork_side_thread(config, thread_id).await?;
+
+        assert_eq!(regular.turns.len(), 1);
+        assert!(matches!(
+            regular.turns[0].items.as_slice(),
+            [codex_app_server_protocol::ThreadItem::UserMessage { content, .. }]
+                if content == &[UserInput::Text {
+                    text: "Saved user message".to_string(),
+                    text_elements: Vec::new(),
+                }]
+        ));
+        assert_eq!(side.turns, Vec::<Turn>::new());
+        app_server.shutdown().await?;
+        Ok(())
     }
 
     #[tokio::test]
