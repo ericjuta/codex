@@ -1466,23 +1466,23 @@ impl Session {
         // Repair them here so resume, fork, and rollback install valid history.
         crate::context_manager::normalize::repair_call_output_pairs(&mut history);
         {
-        let mut state = self.state.lock().await;
-        state.replace_history(history, reference_context_item);
-        if let Some(world_state) = world_state_baseline {
-            state.history.set_world_state_baseline(world_state);
+            let mut state = self.state.lock().await;
+            state.replace_history(history, reference_context_item);
+            if let Some(world_state) = world_state_baseline {
+                state.history.set_world_state_baseline(world_state);
+            }
+            let fallback_ids = state.auto_compact_window_ids();
+            let window_id = window_id.unwrap_or(fallback_ids.window_id);
+            state.restore_auto_compact_window(
+                window_number,
+                AutoCompactWindowIds {
+                    first_window_id: first_window_id.unwrap_or(window_id),
+                    previous_window_id,
+                    window_id,
+                },
+            );
+            state.set_previous_turn_settings(previous_turn_settings.clone());
         }
-        let fallback_ids = state.auto_compact_window_ids();
-        let window_id = window_id.unwrap_or(fallback_ids.window_id);
-        state.restore_auto_compact_window(
-            window_number,
-            AutoCompactWindowIds {
-                first_window_id: first_window_id.unwrap_or(window_id),
-                previous_window_id,
-                window_id,
-            },
-        );
-        state.set_previous_turn_settings(previous_turn_settings.clone());
-    }
         let prefix_tokens = if matches!(
             turn_context.config.model_auto_compact_token_limit_scope,
             AutoCompactTokenLimitScope::BodyAfterPrefix

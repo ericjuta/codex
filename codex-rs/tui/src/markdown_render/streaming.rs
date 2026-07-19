@@ -10,7 +10,6 @@ use super::Options;
 use super::Parser;
 use super::Tag;
 use super::Writer;
-use super::never_hide_link_destination;
 use std::ops::Range;
 use std::path::Path;
 
@@ -47,7 +46,7 @@ pub(crate) fn render_streaming_markdown_lines_with_width_and_cwd(
         last_start: 0,
         first_is_html: false,
     };
-    let mut writer = Writer::new(input, parser, width, cwd, &never_hide_link_destination);
+    let mut writer = Writer::new(input, parser, width, cwd);
     writer.run();
     StreamingMarkdownRender {
         lines: writer.text,

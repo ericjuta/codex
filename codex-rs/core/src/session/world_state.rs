@@ -10,6 +10,7 @@ use crate::context::world_state::PermissionsState;
 use crate::context::world_state::PluginsInstructionsState;
 use crate::context::world_state::WorldState;
 use codex_extension_api::WorldStateContributionInput;
+use codex_features::Feature;
 
 impl Session {
     #[tracing::instrument(name = "world_state.build", level = "info", skip_all)]

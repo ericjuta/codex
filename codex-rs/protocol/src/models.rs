@@ -1449,37 +1449,13 @@ fn should_serialize_reasoning_content(content: &Option<Vec<ReasoningItemContent>
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LocalMediaKind {
-    Audio,
-    Image,
-}
-
-impl LocalMediaKind {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Audio => "audio",
-            Self::Image => "image",
-        }
-    }
-}
-
-fn local_media_error_placeholder(
+fn local_image_error_placeholder(
     path: &std::path::Path,
     error: impl std::fmt::Display,
-    media_kind: LocalMediaKind,
 ) -> ContentItem {
-    let media_name = media_kind.name();
     let path = path.display();
     ContentItem::InputText {
-        text: format!("Codex could not read the local {media_name} at `{path}`: {error}"),
-    }
-}
-
-fn local_media_kind_unsupported(media_kind: LocalMediaKind) -> ContentItem {
-    let media_name = media_kind.name();
-    ContentItem::InputText {
-        text: format!("Codex does not support local {media_name} input yet."),
+        text: format!("Codex could not read the local image at `{path}`: {error}"),
     }
 }
 
@@ -1619,21 +1595,13 @@ pub fn local_image_content_items_with_label_number(
             | ImageProcessingError::Encode { .. }
             | ImageProcessingError::InvalidDataUrl { .. }
             | ImageProcessingError::ImageTooLarge { .. } => {
-                vec![local_media_error_placeholder(
-                    path,
-                    &err,
-                    LocalMediaKind::Image,
-                )]
+                vec![local_image_error_placeholder(path, &err)]
             }
             ImageProcessingError::Decode { .. } if err.is_invalid_image() => {
                 vec![invalid_image_error_placeholder(path, &err)]
             }
             ImageProcessingError::Decode { .. } => {
-                vec![local_media_error_placeholder(
-                    path,
-                    &err,
-                    LocalMediaKind::Image,
-                )]
+                vec![local_image_error_placeholder(path, &err)]
             }
             ImageProcessingError::UnsupportedImageFormat { mime } => {
                 vec![unsupported_image_error_placeholder(path, mime)]
@@ -1907,7 +1875,6 @@ impl ResponseInputItem {
                             }
                             Err(err) => vec![local_audio_error_placeholder(&path, err)],
                         }
-                    }
                     }
                     UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
                 })
@@ -2325,6 +2292,13 @@ impl std::fmt::Display for FunctionCallOutputPayload {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use anyhow::Result;
+    use codex_execpolicy::Policy;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
     // A tiny valid PNG (1x1) so image conversion tests don't depend on cross-crate
     // file paths, which break under Bazel sandboxing.
     const TINY_PNG_BYTES: &[u8] = &[
@@ -3991,44 +3965,6 @@ mod tests {
             }
             other => panic!("expected message response but got {other:?}"),
         }
-
-        Ok(())
-    }
-
-    #[test]
-    fn replaces_unsupported_audio_user_input_with_placeholder() {
-        let item = ResponseInputItem::from(vec![UserInput::Audio {
-            audio_url: "data:audio/wav;base64,abc".to_string(),
-        }]);
-
-        assert_eq!(
-            item,
-            ResponseInputItem::Message {
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "Codex does not support audio input yet.".to_string(),
-                }],
-                phase: None,
-            }
-        );
-    }
-
-    #[test]
-    fn replaces_unsupported_local_audio_user_input_with_placeholder() -> Result<()> {
-        let item = ResponseInputItem::from(vec![UserInput::LocalAudio {
-            path: "sample.mp3".into(),
-        }]);
-
-        assert_eq!(
-            item,
-            ResponseInputItem::Message {
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "Codex does not support local audio input yet.".to_string(),
-                }],
-                phase: None,
-            }
-        );
 
         Ok(())
     }

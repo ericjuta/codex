@@ -1319,7 +1319,9 @@ impl ChatWidget {
                     }
                     UserInput::Text { .. }
                     | UserInput::Image { .. }
-                    | UserInput::LocalImage { .. } => None,
+                    | UserInput::LocalImage { .. }
+                    | UserInput::Audio { .. }
+                    | UserInput::LocalAudio { .. } => None,
                 })
                 .collect();
             mention_bindings.sort_by_key(|binding| {

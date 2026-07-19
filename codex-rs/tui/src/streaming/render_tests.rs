@@ -22,13 +22,7 @@ fn append(
     render_mode: HistoryRenderMode,
 ) {
     source.push_str(chunk);
-    render.append(
-        source,
-        chunk,
-        width,
-        cwd,
-        render_mode,
-    );
+    render.append(source, chunk, width, cwd, render_mode);
 }
 
 fn append_rich_and_assert_matches_full(
@@ -41,12 +35,7 @@ fn append_rich_and_assert_matches_full(
     append(render, source, chunk, width, cwd, HistoryRenderMode::Rich);
     assert_eq!(
         render.lines,
-        render_source(
-            source,
-            width,
-            cwd,
-            HistoryRenderMode::Rich,
-        ),
+        render_source(source, width, cwd, HistoryRenderMode::Rich),
         "incremental render diverged after chunk {chunk:?}",
     );
 }
@@ -161,7 +150,6 @@ fn incremental_raw_render_preserves_blank_lines() {
     );
 }
 
-
 #[test]
 fn reference_link_definition_recomputes_earlier_and_later_blocks() {
     let streams: &[&[&str]] = &[
@@ -205,12 +193,7 @@ fn reference_link_definition_survives_raw_to_rich_render_mode_switch() {
         &cwd,
         HistoryRenderMode::Raw,
     );
-    render.recompute(
-        &source,
-        width,
-        &cwd,
-        HistoryRenderMode::Rich,
-    );
+    render.recompute(&source, width, &cwd, HistoryRenderMode::Rich);
     for chunk in ["First [reference][id].\n\n", "Later [reference][id].\n"] {
         append_rich_and_assert_matches_full(&mut render, &mut source, chunk, width, &cwd);
     }

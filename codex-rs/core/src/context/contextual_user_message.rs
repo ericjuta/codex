@@ -72,7 +72,9 @@ pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
     protocol_is_contextual_user_fragment(content_item)
         || match content_item {
             ContentItem::InputText { text } => is_standard_contextual_user_text(text),
-            ContentItem::InputImage { .. } | ContentItem::OutputText { .. } => false,
+            ContentItem::InputImage { .. }
+            | ContentItem::InputAudio { .. }
+            | ContentItem::OutputText { .. } => false,
         }
 }
 

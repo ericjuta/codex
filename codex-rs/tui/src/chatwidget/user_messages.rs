@@ -531,7 +531,6 @@ pub(super) struct UserMessageDisplay {
     pub(super) text_elements: Vec<TextElement>,
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PendingSteerCompareKey {
     pub(super) message: String,
@@ -602,7 +601,7 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn user_message_display_from_inputs(items: &[UserInput]) -> UserMessageDisplay {
+    pub(super) fn user_message_display_from_inputs(items: &[UserInput]) -> UserMessageDisplay {
         if items
             .iter()
             .any(|item| matches!(item, UserInput::Audio { .. } | UserInput::LocalAudio { .. }))
