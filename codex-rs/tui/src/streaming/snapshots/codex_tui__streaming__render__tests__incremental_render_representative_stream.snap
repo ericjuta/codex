@@ -23,6 +23,7 @@ expression: render.lines
             TerminalHyperlink {
                 columns: 23..27,
                 destination: "https://example.com",
+                destination_kind: Web,
             },
         ],
     },
@@ -37,6 +38,7 @@ expression: render.lines
             TerminalHyperlink {
                 columns: 1..20,
                 destination: "https://example.com",
+                destination_kind: Web,
             },
         ],
     },
