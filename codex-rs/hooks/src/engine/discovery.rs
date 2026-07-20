@@ -3,6 +3,13 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
+use super::ConfiguredHandler;
+use super::HookListEntry;
+use crate::config_rules::hook_states_from_stack;
+use crate::events::common::matcher_pattern_for_event;
+use crate::events::common::validate_matcher_pattern;
+use crate::events::session_end::SESSION_END_DEFAULT_TIMEOUT_SEC;
+use crate::events::session_end::SESSION_END_MAX_TIMEOUT_SEC;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
@@ -23,15 +30,8 @@ use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use crate::config_rules::hook_states_from_stack;
-use crate::events::common::matcher_pattern_for_event;
-use crate::events::common::validate_matcher_pattern;
-use crate::events::session_end::SESSION_END_DEFAULT_TIMEOUT_SEC;
-use crate::events::session_end::SESSION_END_MAX_TIMEOUT_SEC;
 use serde::Deserialize;
 use serde::Serialize;
-use super::ConfiguredHandler;
-use super::HookListEntry;
 
 pub(crate) struct DiscoveryResult {
     pub handlers: Vec<ConfiguredHandler>,

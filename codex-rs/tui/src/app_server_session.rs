@@ -1205,7 +1205,6 @@ impl AppServerSession {
         RequestId::Integer(request_id)
     }
 
-
     pub(crate) async fn fork_side_thread(
         &mut self,
         config: Config,
