@@ -140,12 +140,6 @@ pub(crate) const EXTERNAL_AGENT_CONFIG_IMPORT_IN_PROGRESS_MESSAGE: &str =
     "A previous Claude Code import is still running. Wait for it to finish before importing again.";
 const THREAD_SETTINGS_UPDATE_METHOD: &str = "thread/settings/update";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ForkPresentation {
-    Regular,
-    SideConversation,
-}
-
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
     color_eyre::eyre::eyre!("{context}: {err}")
 }
@@ -564,12 +558,9 @@ impl AppServerSession {
             .map_err(|err| {
                 bootstrap_request_error("thread/fork failed during TUI bootstrap", err)
             })?;
-        let fork_parent_title = if presentation == ForkPresentation::SideConversation {
-            None
-        } else {
-            self.fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
-                .await
-        };
+        let fork_parent_title = self
+            .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
+            .await;
         let mut started =
             started_thread_from_fork_response(response, &config, self.thread_params_mode()).await?;
         started.session.fork_parent_title = fork_parent_title;
@@ -1205,30 +1196,13 @@ impl AppServerSession {
         RequestId::Integer(request_id)
     }
 
+    /// Fork a side conversation. Skips replaying inherited turns
+    /// (`exclude_turns`) and the parent-title lookup, which can race the
+    /// `thread/started` notification for the new side thread.
     pub(crate) async fn fork_side_thread(
         &mut self,
         config: Config,
         thread_id: ThreadId,
-    ) -> Result<AppServerStartedThread> {
-        self.fork_thread_at_with_presentation(
-            config,
-            thread_id,
-            /*last_turn_id*/ None,
-            /*before_turn_id*/ None,
-            ForkGoalContinuation::StartIfIdle,
-            ForkPresentation::SideConversation,
-        )
-        .await
-    }
-
-    async fn fork_thread_at_with_presentation(
-        &mut self,
-        config: Config,
-        thread_id: ThreadId,
-        last_turn_id: Option<String>,
-        before_turn_id: Option<String>,
-        goal_continuation: ForkGoalContinuation,
-        presentation: ForkPresentation,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(&config);
@@ -1237,11 +1211,7 @@ impl AppServerSession {
             .request_typed(ClientRequest::ThreadFork {
                 request_id,
                 params: ThreadForkParams {
-                    last_turn_id,
-                    before_turn_id,
-                    defer_goal_continuation: goal_continuation
-                        == ForkGoalContinuation::DeferUntilNextTurn,
-                    exclude_turns: presentation == ForkPresentation::SideConversation,
+                    exclude_turns: true,
                     ..thread_fork_params_from_config(
                         session_config,
                         thread_id,
@@ -1254,12 +1224,9 @@ impl AppServerSession {
             .map_err(|err| {
                 bootstrap_request_error("thread/fork failed during TUI bootstrap", err)
             })?;
-        let fork_parent_title = self
-            .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
-            .await;
         let mut started =
             started_thread_from_fork_response(response, &config, self.thread_params_mode()).await?;
-        started.session.fork_parent_title = fork_parent_title;
+        started.session.fork_parent_title = None;
         Ok(started)
     }
 }
