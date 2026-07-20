@@ -10,6 +10,7 @@ use pretty_assertions::assert_eq;
 use super::parse_completed;
 use super::preview;
 use crate::engine::ConfiguredHandler;
+use codex_protocol::protocol::HookExecutionMode;
 use crate::engine::command_runner::CommandRunResult;
 
 #[test]
@@ -69,5 +70,6 @@ fn handler(matcher: Option<&str>) -> ConfiguredHandler {
         source: HookSource::User,
         display_order: 0,
         env: HashMap::new(),
+        execution_mode: HookExecutionMode::Sync,
     }
 }
