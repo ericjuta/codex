@@ -1307,7 +1307,7 @@ impl TurnRequestProcessor {
                     thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
                 thread.session_id = review_thread.session_configured().session_id.to_string();
                 self.thread_watch_manager
-                    .upsert_thread_silently(thread.clone())
+                    .upsert_thread_silently(&thread.id)
                     .await;
                 thread.status = resolve_thread_status(
                     self.thread_watch_manager
