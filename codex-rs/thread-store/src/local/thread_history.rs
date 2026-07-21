@@ -9,6 +9,7 @@ use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 
 mod read;
+mod segment_paging;
 
 /// A valid complete rollout line with its absolute byte span in durable JSONL.
 ///
