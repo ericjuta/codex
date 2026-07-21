@@ -1,9 +1,3 @@
-use crate::agent::AgentStatus;
-use crate::config::ConstraintResult;
-use crate::elicitation::ElicitationRegistration;
-use crate::session::Codex;
-use crate::session::SessionSettingsUpdate;
-use crate::session::SteerInputError;
 use codex_exec_server::SelectedCapabilityRootsStatus;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
@@ -33,6 +27,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
+use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -47,6 +42,12 @@ use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
+use crate::agent::AgentStatus;
+use crate::config::ConstraintResult;
+use crate::elicitation::ElicitationRegistration;
+use crate::session::Codex;
+use crate::session::SessionSettingsUpdate;
+use crate::session::SteerInputError;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -136,6 +137,24 @@ impl ThreadConfigSnapshot {
             &self.permission_profile,
             self.cwd().as_path(),
         )
+    }
+
+    pub fn into_thread_settings_snapshot(self) -> ThreadSettingsSnapshot {
+        let cwd = self.cwd().clone();
+        ThreadSettingsSnapshot {
+            model: self.model,
+            model_provider_id: self.model_provider_id,
+            service_tier: self.service_tier,
+            approval_policy: self.approval_policy,
+            approvals_reviewer: self.approvals_reviewer,
+            permission_profile: self.permission_profile,
+            active_permission_profile: self.active_permission_profile,
+            cwd,
+            reasoning_effort: self.reasoning_effort,
+            reasoning_summary: self.reasoning_summary,
+            personality: self.personality,
+            collaboration_mode: self.collaboration_mode,
+        }
     }
 }
 

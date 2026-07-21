@@ -1355,12 +1355,19 @@ impl Session {
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
-        let is_subagent = {
+        let (is_subagent, is_paginated_subagent) = {
             let state = self.state.lock().await;
-            state
-                .session_configuration
-                .session_source
-                .is_non_root_agent()
+            let session_configuration = &state.session_configuration;
+            (
+                session_configuration.session_source.is_non_root_agent(),
+                matches!(
+                    session_configuration.history_mode,
+                    ThreadHistoryMode::Paginated
+                ) && matches!(
+                    session_configuration.thread_source.as_ref(),
+                    Some(ThreadSource::Subagent)
+                ),
+            )
         };
         let has_prior_user_turns = initial_history_has_prior_user_turns(&conversation_history);
         {
@@ -1431,8 +1438,16 @@ impl Session {
                     state.set_token_info(Some(info));
                 }
 
-                // If persisting, persist all rollout items as-is (the store filters).
-                if !rollout_items.is_empty() {
+                let thread_settings_applied =
+                    RolloutItem::EventMsg(handlers::thread_settings_applied_event(self).await);
+                if is_paginated_subagent {
+                    // Paginated subagents persist inherited model context while creating the live
+                    // thread so the copied prefix is not observed as child-owned metadata.
+                    self.persist_rollout_items(&[thread_settings_applied]).await;
+                } else {
+                    // Keep the copied prefix and the child's effective settings in one append so a
+                    // cold resume cannot observe inherited settings as the child's latest value.
+                    rollout_items.push(thread_settings_applied);
                     self.persist_rollout_items(&rollout_items).await;
                 }
 
