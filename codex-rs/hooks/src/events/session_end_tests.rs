@@ -10,8 +10,8 @@ use pretty_assertions::assert_eq;
 use super::parse_completed;
 use super::preview;
 use crate::engine::ConfiguredHandler;
-use codex_protocol::protocol::HookExecutionMode;
 use crate::engine::command_runner::CommandRunResult;
+use codex_protocol::protocol::HookExecutionMode;
 
 #[test]
 fn session_end_matches_other_reason() {
