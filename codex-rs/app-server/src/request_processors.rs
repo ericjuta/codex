@@ -1,18 +1,3 @@
-use crate::bespoke_event_handling::apply_bespoke_event_handling;
-use crate::command_exec::CommandExecManager;
-use crate::command_exec::StartCommandExecParams;
-use crate::config_manager::ConfigManager;
-use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
-use crate::error_code::invalid_params;
-use crate::models::supported_models;
-use crate::outgoing_message::ConnectionId;
-use crate::outgoing_message::ConnectionRequestId;
-use crate::outgoing_message::OutgoingMessageSender;
-use crate::outgoing_message::RequestContext;
-use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
-use crate::skills_watcher::SkillsWatcher;
-use crate::thread_status::ThreadWatchManager;
-use crate::thread_status::resolve_thread_status;
 use chrono::Duration as ChronoDuration;
 use chrono::SecondsFormat;
 use codex_analytics::AnalyticsEventsClient;
@@ -212,7 +197,6 @@ use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadHistoryBuilder;
-#[cfg(test)]
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadIncrementElicitationParams;
 use codex_app_server_protocol::ThreadIncrementElicitationResponse;
@@ -318,7 +302,6 @@ use codex_core::CodexThreadSettingsOverrides;
 use codex_core::ForkSnapshot;
 use codex_core::McpManager;
 use codex_core::NewThread;
-#[cfg(test)]
 use codex_core::SessionMeta;
 use codex_core::StartThreadOptions;
 use codex_core::SteerInputError;
@@ -335,7 +318,6 @@ use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
 use codex_core::path_utils;
-#[cfg(test)]
 use codex_core::read_head_for_summary;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::truncate_rollout_after_turn_id;
@@ -409,11 +391,9 @@ use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
-#[cfg(test)]
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
-#[cfg(test)]
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ConversationAudioParams;
@@ -422,7 +402,6 @@ use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::EventMsg;
-#[cfg(test)]
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
@@ -434,7 +413,6 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
-#[cfg(test)]
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
@@ -449,7 +427,7 @@ use codex_rollout::state_db::reconcile_rollout;
 use codex_state::ThreadMetadata;
 use codex_state::log_db::LogDbLayer;
 use codex_thread_store::ArchiveThreadParams as StoreArchiveThreadParams;
-use codex_thread_store::DeleteThreadParams as StoreDeleteThreadParams;
+use codex_thread_store::DeleteThreadsParams as StoreDeleteThreadsParams;
 use codex_thread_store::GitInfoPatch as StoreGitInfoPatch;
 use codex_thread_store::ListItemsParams as StoreListItemsParams;
 use codex_thread_store::ListThreadsParams as StoreListThreadsParams;
@@ -466,6 +444,21 @@ use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
+use crate::bespoke_event_handling::apply_bespoke_event_handling;
+use crate::command_exec::CommandExecManager;
+use crate::command_exec::StartCommandExecParams;
+use crate::config_manager::ConfigManager;
+use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
+use crate::error_code::invalid_params;
+use crate::models::supported_models;
+use crate::outgoing_message::ConnectionId;
+use crate::outgoing_message::ConnectionRequestId;
+use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::RequestContext;
+use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
+use crate::skills_watcher::SkillsWatcher;
+use crate::thread_status::ThreadWatchManager;
+use crate::thread_status::resolve_thread_status;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -492,7 +485,6 @@ use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
 
-#[cfg(test)]
 use codex_app_server_protocol::ServerRequest;
 
 mod account_processor;
