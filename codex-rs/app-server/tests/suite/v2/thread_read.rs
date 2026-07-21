@@ -1,5 +1,6 @@
 use anyhow::Result;
 use app_test_support::TestAppServer;
+use app_test_support::create_fake_paginated_rollout;
 use app_test_support::create_fake_rollout_with_text_elements;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::rollout_path;
@@ -1155,7 +1156,8 @@ async fn paginated_thread_name_set_is_reflected_in_read_list_and_metadata_resume
         "thread/list must serialize `thread.ephemeral` on the wire"
     );
 
-    // Resume should also surface the name.
+    // This fork does not carry paginated resume support (#34085); resume of a
+    // paginated thread is expected to be rejected.
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: conversation_id.clone(),
@@ -1163,30 +1165,14 @@ async fn paginated_thread_name_set_is_reflected_in_read_list_and_metadata_resume
             ..Default::default()
         })
         .await?;
-    let resume_resp: JSONRPCResponse = timeout(
+    let resume_err = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(resume_id)),
     )
     .await??;
-    let resume_result = resume_resp.result.clone();
-    let ThreadResumeResponse {
-        thread: resumed, ..
-    } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    assert_eq!(resumed.id, conversation_id);
-    assert_eq!(resumed.name.as_deref(), Some(new_name));
-    let resumed_json = resume_result
-        .get("thread")
-        .and_then(Value::as_object)
-        .expect("thread/resume result.thread must be an object");
     assert_eq!(
-        resumed_json.get("name").and_then(Value::as_str),
-        Some(new_name),
-        "thread/resume must serialize `thread.name` on the wire"
-    );
-    assert_eq!(
-        resumed_json.get("ephemeral").and_then(Value::as_bool),
-        Some(false),
-        "thread/resume must serialize `thread.ephemeral` on the wire"
+        resume_err.error.message,
+        "paginated_threads is not supported yet"
     );
 
     Ok(())
