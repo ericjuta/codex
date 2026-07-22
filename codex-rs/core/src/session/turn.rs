@@ -1984,13 +1984,13 @@ fn assign_missing_streamed_response_item_id(
     item: &mut ResponseItem,
     active_item: Option<&TurnItem>,
 ) {
-    if item.id().is_some() {
+    if item.id().is_some_and(|id| !id.is_empty()) {
         return;
     }
 
-    let active_item_id = active_item
-        .map(TurnItem::id)
-        .filter(|item_id| !item_id.is_empty());
+    let active_item_id = active_item.map(TurnItem::id).filter(|item_id| {
+        super::response_item_id_prefix(item).is_some_and(|prefix| item_id.starts_with(prefix))
+    });
     item.set_id(active_item_id);
     Session::assign_missing_response_item_id(item);
 }
@@ -2113,9 +2113,8 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(mut item) => {
-                if turn_context.item_ids_enabled() {
-                    assign_missing_streamed_response_item_id(&mut item, active_item.as_ref());
-                }
+                let item_id_was_missing_or_empty = item.id().is_none_or(str::is_empty);
+                assign_missing_streamed_response_item_id(&mut item, active_item.as_ref());
                 let completes_active_tool_call = active_tool_argument_diff_consumer
                     .as_ref()
                     .is_some_and(|(active_call_id, _)| {
@@ -2150,6 +2149,13 @@ async fn try_run_sampling_request(
                 let previously_streamed_item = completed_item_id
                     .as_deref()
                     .and_then(|item_id| streamed_items.remove(item_id));
+                if item_id_was_missing_or_empty
+                    && previously_streamed_item.is_none()
+                    && !is_tool_call
+                {
+                    warn!("dropping unmatched non-tool output_item.done event without a usable ID");
+                    continue;
+                }
                 if completes_active_item {
                     active_item = None;
                     active_item_is_streaming_to_client = false;
@@ -2237,9 +2243,7 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::OutputItemAdded(mut item) => {
-                if turn_context.item_ids_enabled() {
-                    assign_missing_streamed_response_item_id(&mut item, /*active_item*/ None);
-                }
+                assign_missing_streamed_response_item_id(&mut item, /*active_item*/ None);
                 if let ResponseItem::CustomToolCall {
                     call_id,
                     name,

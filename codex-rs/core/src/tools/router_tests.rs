@@ -33,6 +33,7 @@ use super::ToolCallSource;
 use super::ToolRouter;
 use super::ToolRouterParams;
 use super::extension_tool_executors;
+use core_test_support::responses::strip_response_item_ids_from_json;
 
 struct ExtensionEchoContributor;
 
@@ -442,13 +443,13 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
             let value: serde_json::Value =
                 serde_json::from_str(&text).expect("extension tool output should be json");
             assert_eq!(
-                value,
-                json!({
+                strip_response_item_ids_from_json(value),
+                strip_response_item_ids_from_json(json!({
                     "arguments": { "message": "hello" },
                     "callId": "call-extension",
                     "conversationHistory": [expected_history_item],
                     "ok": true,
-                })
+                }))
             );
         }
         other => panic!("expected function call output, got {other:?}"),

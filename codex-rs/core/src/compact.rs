@@ -361,7 +361,6 @@ async fn run_compact_task_inner_impl(
         window_id: Some(window_ids.window_id.to_string()),
     };
     sess.replace_compacted_history(
-        turn_context.as_ref(),
         new_history,
         reference_context_item,
         world_state_baseline,

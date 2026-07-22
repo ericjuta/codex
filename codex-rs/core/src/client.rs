@@ -210,7 +210,6 @@ struct ModelClientState {
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
-    item_ids_enabled: bool,
     concurrent_reasoning_summaries_enabled: bool,
     include_attestation: bool,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
@@ -425,7 +424,6 @@ impl ModelClient {
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
-        item_ids_enabled: bool,
         concurrent_reasoning_summaries_enabled: bool,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
         http_client_factory: HttpClientFactory,
@@ -449,7 +447,6 @@ impl ModelClient {
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
-                item_ids_enabled,
                 concurrent_reasoning_summaries_enabled,
                 include_attestation,
                 attestation_provider,
@@ -596,7 +593,7 @@ impl ModelClient {
             text,
             ..
         } = request;
-        self.prepare_response_items_for_request(&mut input, /*store*/ false);
+        self.prepare_response_items_for_request(&mut input);
         let payload = ApiCompactionInput {
             model: &model,
             input: &input,
@@ -921,26 +918,15 @@ impl ModelClient {
         Ok(request)
     }
 
-    fn prepare_response_items_for_request(&self, input: &mut [ResponseItem], store: bool) {
-        if self.state.item_ids_enabled || store {
-            // Ids stay in the request, but history can contain synthetic ids
-            // (e.g. review exit markers persisted by older builds). The
-            // Responses API rejects ids that lack the item type's expected
-            // prefix, so drop those instead of failing every turn.
-            for item in input {
-                let invalid = item.id().is_some_and(|id| {
-                    crate::session::response_item_id_prefix(item)
-                        .is_none_or(|prefix| !id.starts_with(prefix))
-                });
-                if invalid {
-                    item.set_id(/*new_id*/ None);
-                }
-            }
-            return;
-        }
-
+    fn prepare_response_items_for_request(&self, input: &mut [ResponseItem]) {
         for item in input {
-            item.set_id(/*new_id*/ None);
+            let invalid = item.id().is_some_and(|id| {
+                crate::session::response_item_id_prefix(item)
+                    .is_none_or(|prefix| !id.starts_with(prefix))
+            });
+            if invalid {
+                item.set_id(/*new_id*/ None);
+            }
         }
     }
 
@@ -1475,9 +1461,8 @@ impl ModelClientSession {
                 service_tier.clone(),
                 responses_metadata,
             )?;
-            let store = request.store;
             self.client
-                .prepare_response_items_for_request(&mut request.input, store);
+                .prepare_response_items_for_request(&mut request.input);
             let prompt_cache_observation = self
                 .client
                 .state
@@ -1679,14 +1664,11 @@ impl ModelClientSession {
             };
             stamp_ws_stream_request_start_ms(&mut ws_request);
             let ResponsesWsRequest::ResponseCreate(ws_payload) = &mut ws_request;
-            let store = ws_payload.store;
             self.client
-                .prepare_response_items_for_request(&mut ws_payload.input, store);
+                .prepare_response_items_for_request(&mut ws_payload.input);
             let mut prepared_request = request.clone();
-            self.client.prepare_response_items_for_request(
-                &mut prepared_request.input,
-                prepared_request.store,
-            );
+            self.client
+                .prepare_response_items_for_request(&mut prepared_request.input);
             let connection_reused = self.websocket_session.connection_reused();
             let transport = if warmup {
                 PromptCacheTransport::Warmup
