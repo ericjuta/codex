@@ -871,61 +871,6 @@ async fn blank_and_rejected_rollout_lines_do_not_poison_projection() {
     assert_eq!(start_byte_offset, Some(expected_start_byte_offset));
 }
 #[tokio::test]
-async fn blank_and_rejected_rollout_lines_do_not_poison_projection() {
-    let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
-    let thread_id = ThreadId::default();
-    create_paginated_thread(&store, thread_id).await;
-    store
-        .persist_thread(thread_id)
-        .await
-        .expect("persist session metadata");
-
-    let rollout_path = store
-        .live_rollout_path(thread_id)
-        .await
-        .expect("rollout path");
-    let mut file = fs::OpenOptions::new()
-        .append(true)
-        .open(rollout_path.as_path())
-        .expect("open rollout for rejected line");
-    file.write_all(b"\n \t\r\n{not json}\n\xff\n")
-        .expect("append blank and rejected lines");
-    file.flush().expect("flush rejected line");
-    let recorder = store
-        .live_recorders
-        .lock()
-        .await
-        .get(&thread_id)
-        .expect("live recorder")
-        .recorder
-        .clone();
-    recorder
-        .record_canonical_items(&[turn_started("turn-1")])
-        .await
-        .expect("queue valid retry");
-    recorder.flush().await.expect("flush valid retry");
-
-    super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
-        .await
-        .expect("project valid retry after rejected line");
-
-    let pool = codex_state::open_thread_history_db(home.path())
-        .await
-        .expect("open thread history db");
-    let (expected_start_byte_offset, _) =
-        rollout_line_byte_offsets(rollout_path.as_path(), /*ordinal*/ 1);
-    let start_byte_offset = sqlx::query_scalar::<_, Option<i64>>(
-        "SELECT rollout_byte_offset FROM thread_turns WHERE thread_id = ? AND turn_id = ?",
-    )
-    .bind(thread_id.to_string())
-    .bind("turn-1")
-    .fetch_one(&pool)
-    .await
-    .expect("read projected turn byte offset");
-    assert_eq!(start_byte_offset, Some(expected_start_byte_offset));
-}
-#[tokio::test]
 async fn shutdown_materializes_items_queued_without_a_flush() {
     let home = TempDir::new().expect("temp dir");
     let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
