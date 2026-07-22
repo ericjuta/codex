@@ -165,7 +165,7 @@ fn merge_persisted_resume_metadata(
 }
 
 fn merge_persisted_approvals_reviewer(
-    thread_history: &InitialHistory,
+    history: &[RolloutItem],
     request_overrides: Option<&HashMap<String, serde_json::Value>>,
     typesafe_overrides: &mut ConfigOverrides,
 ) {
@@ -175,21 +175,13 @@ fn merge_persisted_approvals_reviewer(
         return;
     }
 
-    let InitialHistory::Resumed(resumed_history) = thread_history else {
-        return;
-    };
-    typesafe_overrides.approvals_reviewer =
-        resumed_history
-            .history
-            .iter()
-            .rev()
-            .find_map(|item| match item {
-                RolloutItem::TurnContext(turn_context) => turn_context.approvals_reviewer,
-                RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
-                    Some(event.thread_settings.approvals_reviewer)
-                }
-                _ => None,
-            });
+    typesafe_overrides.approvals_reviewer = history.iter().rev().find_map(|item| match item {
+        RolloutItem::TurnContext(turn_context) => turn_context.approvals_reviewer,
+        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
+            Some(event.thread_settings.approvals_reviewer)
+        }
+        _ => None,
+    });
 }
 
 fn normalize_thread_list_cwd_filters(
@@ -2988,14 +2980,14 @@ impl ThreadRequestProcessor {
         request_overrides: &mut Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: &mut ConfigOverrides,
     ) -> Option<ThreadMetadata> {
-        merge_persisted_approvals_reviewer(
-            thread_history,
-            request_overrides.as_ref(),
-            typesafe_overrides,
-        );
         let InitialHistory::Resumed(resumed_history) = thread_history else {
             return None;
         };
+        merge_persisted_approvals_reviewer(
+            &resumed_history.history,
+            request_overrides.as_ref(),
+            typesafe_overrides,
+        );
         let state_db_ctx = self.state_db.clone()?;
         let persisted_metadata = state_db_ctx
             .get_thread(resumed_history.conversation_id)
@@ -3536,6 +3528,11 @@ impl ThreadRequestProcessor {
             /*personality*/ None,
         );
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
+        merge_persisted_approvals_reviewer(
+            &history_items,
+            request_overrides.as_ref(),
+            &mut typesafe_overrides,
+        );
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let config = self
             .config_manager
