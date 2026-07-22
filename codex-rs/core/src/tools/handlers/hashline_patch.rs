@@ -198,7 +198,7 @@ pub(super) fn validate_file_hash(
     let actual_hash = hash_hex(contents);
     if !expected_hash.eq_ignore_ascii_case(&actual_hash) {
         return Err(FunctionCallError::RespondToModel(format!(
-            "file hash mismatch for {path}: expected {expected_hash}, found {actual_hash}; the file changed since it was read, so reread it with hashline.read and rebuild the patch from the refreshed anchors before retrying"
+            "stale Hashline evidence: file hash mismatch for {path}: expected {expected_hash}, found {actual_hash}; the file changed since it was read, so reread it with hashline.read and rebuild the patch from the refreshed anchors before retrying"
         )));
     }
     Ok(())
@@ -492,7 +492,7 @@ fn validate_block_hash(
     let actual_hash = hash_hex(&lines[span.0 - 1..span.1].join("\n"));
     if actual_hash != expected_hash {
         return Err(FunctionCallError::RespondToModel(format!(
-            "block hash mismatch: expected {expected_hash}, found {actual_hash}; reread the block with hashline.find_block and rebuild the patch from the refreshed anchor"
+            "stale Hashline evidence: block hash mismatch: expected {expected_hash}, found {actual_hash}; reread the block with hashline.find_block and rebuild the patch from the refreshed anchor"
         )));
     }
     Ok(())
@@ -852,7 +852,7 @@ fn validate_line_hash(
     let actual_hash = line_hash(&lines[line_number - 1]);
     if actual_hash != expected_hash {
         return Err(FunctionCallError::RespondToModel(format!(
-            "line {line_number} hash mismatch: expected {expected_hash}, found {actual_hash}; the anchor is stale, so reread the file with hashline.read and rebuild the patch from the refreshed anchors before retrying"
+            "stale Hashline evidence: line {line_number} hash mismatch: expected {expected_hash}, found {actual_hash}; the anchor is stale, so reread the file with hashline.read and rebuild the patch from the refreshed anchors before retrying"
         )));
     }
     Ok(())

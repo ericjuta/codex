@@ -8,6 +8,7 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use codex_hashline_transaction::ExactBytesDigest;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -138,15 +139,68 @@ struct WriteArgs {
     environment_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug)]
 struct PatchArgs {
-    #[serde(alias = "file")]
     path: String,
     patch: String,
     dry_run: Option<bool>,
     create: Option<bool>,
     environment_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PatchArgsWire {
+    #[serde(alias = "file")]
+    path: Option<String>,
+    patch: Option<String>,
+    header: Option<String>,
+    operations: Option<String>,
+    dry_run: Option<bool>,
+    create: Option<bool>,
+    environment_id: Option<String>,
+}
+
+fn parse_patch_args(arguments: &str) -> Result<PatchArgs, FunctionCallError> {
+    let args: PatchArgsWire = parse_arguments(arguments)?;
+    let (path, patch) = match (args.path, args.patch, args.header, args.operations) {
+        (Some(path), Some(patch), None, None) => (path, patch),
+        (None, None, Some(header), Some(operations)) => {
+            if header.contains(['\r', '\n']) {
+                return Err(FunctionCallError::RespondToModel(
+                    "hashline.patch header must be one complete section header".to_string(),
+                ));
+            }
+            let patch = format!("{header}\n{operations}");
+            let sections = split_hashline_patch_sections("", &patch)?;
+            let [section] = sections.as_slice() else {
+                return Err(FunctionCallError::RespondToModel(
+                    "hashline.patch header and operations must describe exactly one file"
+                        .to_string(),
+                ));
+            };
+            (section.path.clone(), patch)
+        }
+        (Some(_), Some(_), _, _) => {
+            return Err(FunctionCallError::RespondToModel(
+                "hashline.patch path and patch cannot be combined with header or operations"
+                    .to_string(),
+            ));
+        }
+        _ => {
+            return Err(FunctionCallError::RespondToModel(
+                "hashline.patch requires either path and patch, or header and operations"
+                    .to_string(),
+            ));
+        }
+    };
+    Ok(PatchArgs {
+        path,
+        patch,
+        dry_run: args.dry_run,
+        create: args.create,
+        environment_id: args.environment_id,
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -259,7 +313,8 @@ impl CoreToolRuntime for HashlineHandler {}
 fn read_tool_spec(multi_environment: bool) -> ResponsesApiTool {
     ResponsesApiTool {
         name: READ_TOOL.to_string(),
-        description: "Read a bounded file range with Hashline file and line anchors.".to_string(),
+        description: "Read a bounded file range with Hashline file and line anchors, a copy-ready patchHeader, and an exact-byte SHA-256 digest."
+            .to_string(),
         strict: false,
         defer_loading: None,
         parameters: schema_with_common_path(
@@ -287,7 +342,9 @@ fn read_tool_spec(multi_environment: bool) -> ResponsesApiTool {
             "properties": {
                 "path": { "type": "string" },
                 "hash": { "type": "string" },
+                "exactDigest": { "type": "string" },
                 "header": { "type": "string" },
+                "patchHeader": { "type": "string" },
                 "start_line": { "type": ["integer", "null"] },
                 "end_line": { "type": ["integer", "null"] },
                 "total_lines": { "type": "integer" },
@@ -308,7 +365,7 @@ fn read_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                     }
                 }
             },
-            "required": ["path", "hash", "header", "start_line", "end_line", "total_lines", "truncated", "next_start_line", "content", "lines"],
+            "required": ["path", "hash", "exactDigest", "header", "patchHeader", "start_line", "end_line", "total_lines", "truncated", "next_start_line", "content", "lines"],
             "additionalProperties": false
         })),
     }
@@ -352,14 +409,20 @@ fn write_tool_spec(multi_environment: bool) -> ResponsesApiTool {
 }
 
 fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
+    let dry_run = JsonSchema::boolean(Some(
+        "Validate the patch and report the resulting file hash without writing. Changed-line previews and multi-file details are byte-bounded."
+            .to_string(),
+    ));
     ResponsesApiTool {
         name: PATCH_TOOL.to_string(),
         description: "Apply a Hashline line operation patch. Supports one target file by default, multiple existing files when split into [path]#HASH sections, or multiple missing files with create=true and [path] sections. Supported operations: SWAP, DEL, INS.PRE, INS.POST, INS.HEAD, INS.TAIL, SWAP.BLK, DEL.BLK, INS.BLK.POST, INS.BLK.PRE, INS.BLK, sectioned REM file ops, and MV file ops that may also include line edits, using README-style + payload bodies or compact |text forms where supported."
             .to_string(),
         strict: false,
         defer_loading: None,
-        parameters: schema_with_common_path(
-            BTreeMap::from([
+        parameters: JsonSchema::one_of(
+            vec![
+                schema_with_common_path(
+                    BTreeMap::from([
                 (
                     "patch".to_string(),
                     JsonSchema::string(Some(
@@ -369,10 +432,7 @@ fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                 ),
                 (
                     "dry_run".to_string(),
-                    JsonSchema::boolean(Some(
-                        "Validate the patch and report the resulting file hash without writing. Changed-line previews and multi-file details are byte-bounded."
-                            .to_string(),
-                    )),
+                    dry_run.clone(),
                 ),
                 (
                     "create".to_string(),
@@ -381,9 +441,36 @@ fn patch_tool_spec(multi_environment: bool) -> ResponsesApiTool {
                             .to_string(),
                     )),
                 ),
-            ]),
-            multi_environment,
-            vec!["path".to_string(), "patch".to_string()],
+                    ]),
+                    multi_environment,
+                    vec!["path".to_string(), "patch".to_string()],
+                ),
+                schema_with_common_fields(
+                    BTreeMap::from([
+                        (
+                            "header".to_string(),
+                            JsonSchema::string(Some(
+                                "Copy-ready single-file section header from hashline.read patchHeader."
+                                    .to_string(),
+                            )),
+                        ),
+                        (
+                            "operations".to_string(),
+                            JsonSchema::string(Some(
+                                "Single-file Hashline operations placed after header."
+                                    .to_string(),
+                            )),
+                        ),
+                        ("dry_run".to_string(), dry_run),
+                    ]),
+                    multi_environment,
+                    vec!["header".to_string(), "operations".to_string()],
+                ),
+            ],
+            Some(
+                "Use path plus patch for the existing form, or header plus operations for a copy-ready single-file edit."
+                    .to_string(),
+            ),
         ),
         output_schema: None,
     }
@@ -502,6 +589,14 @@ fn schema_with_common_path(
         )),
     )]);
     properties.extend(extra_properties);
+    schema_with_common_fields(properties, multi_environment, required)
+}
+
+fn schema_with_common_fields(
+    mut properties: BTreeMap<String, JsonSchema>,
+    multi_environment: bool,
+    required: Vec<String>,
+) -> JsonSchema {
     if multi_environment {
         properties.insert(
             "environment_id".to_string(),
@@ -613,10 +708,13 @@ fn build_hashline_read_body(
             excerpt.lines,
         )
     };
+    let patch_header = format!("[{path}]#{path_hash}");
     Ok(json!({
         "path": path,
         "hash": path_hash,
-        "header": format!("[{path}]#{path_hash}"),
+        "exactDigest": ExactBytesDigest::new(contents.as_bytes()).to_string(),
+        "header": patch_header,
+        "patchHeader": patch_header,
         "start_line": start_line,
         "end_line": end_line,
         "total_lines": total_lines,
@@ -836,7 +934,7 @@ async fn handle_patch(
             "hashline.patch handler received unsupported payload".to_string(),
         ));
     };
-    let args: PatchArgs = parse_arguments(arguments)?;
+    let args = parse_patch_args(arguments)?;
     if hashline_patch_is_aborted(&args.patch) {
         return Ok(build_hashline_patch_aborted_output(
             &args.path,

@@ -706,9 +706,6 @@ async fn hashline_tools_follow_enablement_config() {
             "find_block".to_string(),
             "patch".to_string(),
             "read".to_string(),
-            "remove_file".to_string(),
-            "rename_file".to_string(),
-            "write".to_string(),
         ]
     );
 }

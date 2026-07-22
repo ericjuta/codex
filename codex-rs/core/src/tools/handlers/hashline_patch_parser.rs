@@ -1,4 +1,5 @@
 use crate::function_tool::FunctionCallError;
+use codex_utils_string::take_bytes_at_char_boundary;
 
 use super::hashline_hash::FILE_HASH_WIDTH;
 use super::hashline_hash::LINE_HASH_WIDTH;
@@ -130,7 +131,15 @@ pub(super) fn parse_hashline_patch(
         if let Some(message) = apply_patch_contamination_message(line) {
             return Err(FunctionCallError::RespondToModel(message));
         }
-        let (op, rest) = split_hashline_operation(line)?;
+        let (op, rest) = split_hashline_operation(line).map_err(|error| match error {
+            FunctionCallError::RespondToModel(message) => {
+                FunctionCallError::RespondToModel(format!(
+                    "invalid Hashline patch program line {}: {message}",
+                    index + 1
+                ))
+            }
+            error => error,
+        })?;
         let op = op.to_ascii_uppercase();
         index += 1;
 
@@ -224,8 +233,9 @@ pub(super) fn parse_hashline_patch(
                 new_path: parse_move_target(rest)?,
             },
             _ => {
+                let op = take_bytes_at_char_boundary(&op, 1024);
                 return Err(FunctionCallError::RespondToModel(format!(
-                    "unsupported Hashline operation {op}"
+                    "invalid Hashline patch program line {index}: unsupported Hashline operation {op}"
                 )));
             }
         };
@@ -591,6 +601,7 @@ fn split_hashline_operation(input: &str) -> Result<(&str, &str), FunctionCallErr
 }
 
 fn invalid_operation_error(line: &str) -> FunctionCallError {
+    let line = take_bytes_at_char_boundary(line, 1024);
     FunctionCallError::RespondToModel(format!(
         "invalid Hashline operation {line}; expected forms like SWAP 12:abcd:\n+text, SWAP 12:abcd|text, DEL 12:abcd, INS.POST 12:abcd:\n+text, or INS.TAIL:\n+text"
     ))

@@ -27,6 +27,7 @@ use super::hashline_patch::split_hashline_patch_sections;
 use super::hashline_patch::split_hashline_patch_sections_for_create;
 use super::hashline_patch::validate_file_hash;
 use super::resolve_find_block_anchor;
+use codex_hashline_transaction::ExactBytesDigest;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -184,6 +185,7 @@ fn rejects_stale_line_hash() {
         error.to_string().contains("hash mismatch"),
         "unexpected error: {error}"
     );
+    assert!(error.to_string().starts_with("stale Hashline evidence:"));
     assert!(
         error
             .to_string()
@@ -318,7 +320,9 @@ fn read_body_without_end_line_only_truncates_when_capped() {
         json!({
             "path": "notes.txt",
             "hash": hash_hex(contents),
+            "exactDigest": ExactBytesDigest::new(contents.as_bytes()).to_string(),
             "header": format!("[notes.txt]#{}", hash_hex(contents)),
+            "patchHeader": format!("[notes.txt]#{}", hash_hex(contents)),
             "start_line": 1,
             "end_line": 2,
             "total_lines": 2,
@@ -356,7 +360,9 @@ fn read_body_normalizes_model_visible_rows() {
         json!({
             "path": "notes.txt",
             "hash": hash_hex(contents),
+            "exactDigest": ExactBytesDigest::new(contents.as_bytes()).to_string(),
             "header": format!("[notes.txt]#{}", hash_hex(contents)),
+            "patchHeader": format!("[notes.txt]#{}", hash_hex(contents)),
             "start_line": 1,
             "end_line": 2,
             "total_lines": 2,
@@ -394,7 +400,9 @@ fn read_body_reports_empty_file_without_line_range() {
         json!({
             "path": "empty.txt",
             "hash": empty_hash,
+            "exactDigest": ExactBytesDigest::new(b"").to_string(),
             "header": format!("[empty.txt]#{empty_hash}"),
+            "patchHeader": format!("[empty.txt]#{empty_hash}"),
             "start_line": null,
             "end_line": null,
             "total_lines": 0,
@@ -423,7 +431,9 @@ fn read_body_only_reports_truncation_when_the_requested_range_is_capped() {
         json!({
             "path": "notes.txt",
             "hash": hash_hex(contents),
+            "exactDigest": ExactBytesDigest::new(contents.as_bytes()).to_string(),
             "header": format!("[notes.txt]#{}", hash_hex(contents)),
+            "patchHeader": format!("[notes.txt]#{}", hash_hex(contents)),
             "start_line": 2,
             "end_line": 2,
             "total_lines": 3,
@@ -559,10 +569,13 @@ fn tool_args_accept_reference_path_aliases() {
         "content": "hello",
     }))
     .expect("write args should accept file alias");
-    let patch: super::PatchArgs = serde_json::from_value(json!({
-        "file": "notes.txt",
-        "patch": "DEL 1:93c8",
-    }))
+    let patch = super::parse_patch_args(
+        &json!({
+            "file": "notes.txt",
+            "patch": "DEL 1:93c8",
+        })
+        .to_string(),
+    )
     .expect("patch args should accept file alias");
     let find_block: super::FindBlockArgs = serde_json::from_value(json!({
         "file": "notes.txt",
@@ -604,6 +617,23 @@ fn tool_args_accept_reference_path_aliases() {
 }
 
 #[test]
+fn patch_args_accept_copy_ready_header_and_operations() {
+    let args = super::parse_patch_args(
+        &json!({
+            "header": "[notes.txt]#0123abcd",
+            "operations": "SWAP 2:f589|bravo",
+            "dry_run": true,
+        })
+        .to_string(),
+    )
+    .expect("copy-ready patch args should parse");
+
+    assert_eq!(args.path, "notes.txt");
+    assert_eq!(args.patch, "[notes.txt]#0123abcd\nSWAP 2:f589|bravo");
+    assert_eq!(args.dry_run, Some(true));
+}
+
+#[test]
 fn patch_tool_spec_advertises_mv_with_line_ops() {
     let spec = super::patch_tool_spec(/*multi_environment*/ false);
     assert!(
@@ -613,8 +643,10 @@ fn patch_tool_spec_advertises_mv_with_line_ops() {
 
     let patch_description = spec
         .parameters
-        .properties
+        .one_of
         .as_ref()
+        .and_then(|variants| variants.first())
+        .and_then(|schema| schema.properties.as_ref())
         .and_then(|properties| properties.get("patch"))
         .and_then(|schema| schema.description.as_deref())
         .expect("patch parameter should have a description");
@@ -627,8 +659,10 @@ fn patch_tool_spec_exposes_hash_guardrails() {
     let spec = super::patch_tool_spec(/*multi_environment*/ false);
     let patch_description = spec
         .parameters
-        .properties
+        .one_of
         .as_ref()
+        .and_then(|variants| variants.first())
+        .and_then(|schema| schema.properties.as_ref())
         .and_then(|properties| properties.get("patch"))
         .and_then(|schema| schema.description.as_deref())
         .expect("patch parameter should have a description");
@@ -642,6 +676,39 @@ fn patch_tool_spec_exposes_hash_guardrails() {
         patch_description
             .contains("reread the file and rebuild the patch from the refreshed anchors")
     );
+}
+
+#[test]
+fn patch_tool_spec_requires_one_complete_request_form() {
+    let spec = super::patch_tool_spec(/*multi_environment*/ false);
+    let variants = spec
+        .parameters
+        .one_of
+        .expect("patch schema should expose request alternatives");
+
+    assert_eq!(variants.len(), 2);
+    assert_eq!(
+        variants[0].required.as_deref(),
+        Some(["path".to_string(), "patch".to_string()].as_slice())
+    );
+    assert_eq!(
+        variants[1].required.as_deref(),
+        Some(["header".to_string(), "operations".to_string()].as_slice())
+    );
+}
+
+#[test]
+fn invalid_patch_operation_diagnostic_is_bounded_and_line_specific() {
+    let invalid = "x".repeat(8 * 1024);
+    let error = apply_hashline_patch("notes.txt", "alpha\n", &invalid)
+        .expect_err("invalid operation should fail");
+    let message = error.to_string();
+
+    assert!(
+        message.starts_with("invalid Hashline patch program line 1:"),
+        "{message}"
+    );
+    assert!(message.len() < 1400);
 }
 
 #[test]

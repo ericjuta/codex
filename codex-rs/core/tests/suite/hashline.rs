@@ -1,3 +1,4 @@
+use codex_hashline_transaction::ExactBytesDigest;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::protocol::AskForApproval;
@@ -242,7 +243,9 @@ async fn hashline_read_and_patch_tools_execute() -> anyhow::Result<()> {
         json!({
             "path": file_name,
             "hash": file_hash,
+            "exactDigest": ExactBytesDigest::new(b"alpha\r\nbeta\r\ngamma\r\n").to_string(),
             "header": format!("[{file_name}]#{file_hash}"),
+            "patchHeader": format!("[{file_name}]#{file_hash}"),
             "start_line": 1,
             "end_line": 2,
             "total_lines": 3,
@@ -2311,9 +2314,9 @@ async fn hashline_only_hides_apply_patch_from_model_visible_tools() -> anyhow::R
     assert!(namespace_child_tool(&body, "hashline", "read").is_some());
     assert!(namespace_child_tool(&body, "hashline", "patch").is_some());
     assert!(namespace_child_tool(&body, "hashline", "find_block").is_some());
-    assert!(namespace_child_tool(&body, "hashline", "remove_file").is_some());
-    assert!(namespace_child_tool(&body, "hashline", "rename_file").is_some());
-    assert!(namespace_child_tool(&body, "hashline", "write").is_some());
+    assert!(namespace_child_tool(&body, "hashline", "remove_file").is_none());
+    assert!(namespace_child_tool(&body, "hashline", "rename_file").is_none());
+    assert!(namespace_child_tool(&body, "hashline", "write").is_none());
     assert!(!request_tools_include(&body, "apply_patch"));
 
     Ok(())

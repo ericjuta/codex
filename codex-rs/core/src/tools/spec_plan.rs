@@ -781,10 +781,6 @@ fn add_file_edit_tools(
             include_environment_id,
         ));
         planned_tools.add(HashlineHandler::new(
-            HashlineToolKind::Write,
-            include_environment_id,
-        ));
-        planned_tools.add(HashlineHandler::new(
             HashlineToolKind::Patch,
             include_environment_id,
         ));
@@ -792,14 +788,20 @@ fn add_file_edit_tools(
             HashlineToolKind::FindBlock,
             include_environment_id,
         ));
-        planned_tools.add(HashlineHandler::new(
-            HashlineToolKind::RemoveFile,
-            include_environment_id,
-        ));
-        planned_tools.add(HashlineHandler::new(
-            HashlineToolKind::RenameFile,
-            include_environment_id,
-        ));
+        if !turn_context.config.hashline.only {
+            planned_tools.add(HashlineHandler::new(
+                HashlineToolKind::Write,
+                include_environment_id,
+            ));
+            planned_tools.add(HashlineHandler::new(
+                HashlineToolKind::RemoveFile,
+                include_environment_id,
+            ));
+            planned_tools.add(HashlineHandler::new(
+                HashlineToolKind::RenameFile,
+                include_environment_id,
+            ));
+        }
     }
 
     if turn_context
