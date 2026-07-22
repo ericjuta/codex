@@ -9,10 +9,10 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncSeekExt;
 use tracing::warn;
 
-use crate::ThreadStoreError;
-use crate::ThreadStoreResult;
 use super::LocalThreadStore;
 use super::thread_history::ProjectedRolloutLine;
+use crate::ThreadStoreError;
+use crate::ThreadStoreResult;
 
 pub(super) async fn materialize_to_sqlite(
     store: &LocalThreadStore,
